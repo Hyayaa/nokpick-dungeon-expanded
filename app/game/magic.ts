@@ -1,0 +1,98 @@
+import { ItemCategory, StatusEffectId } from "./types";
+
+export const WAND_IDS = new Set([
+  "wand_blast_wave",
+  "wand_corruption",
+  "wand_corrosion",
+  "wand_disintegration",
+  "wand_fireblast",
+  "wand_frost",
+  "wand_lightning",
+  "wand_living_earth",
+  "wand_magic_missile",
+  "wand_prismatic_light",
+  "wand_regrowth",
+  "wand_transfusion",
+  "wand_warding",
+]);
+
+export const AUTO_SLOT_CATEGORIES = new Set<ItemCategory>([
+  "wand",
+  "missile",
+  "potion",
+  "scroll",
+  "food",
+  "brew",
+  "elixir",
+  "bomb",
+  "seed",
+  "stone",
+]);
+
+export const STATUS_LABELS: Record<StatusEffectId, string> = {
+  burning: "연소",
+  chilled: "한기",
+  frozen: "빙결",
+  paralyzed: "마비",
+  poisoned: "중독",
+  corroded: "부식",
+  blinded: "실명",
+  terrified: "공포",
+  charmed: "매혹",
+  corrupted: "타락",
+  rooted: "속박",
+  haste: "신속",
+  levitating: "부유",
+  mindVision: "심안",
+  magicSight: "마법 시야",
+  shielded: "보호막",
+  earthenArmor: "대지 갑옷",
+  recharging: "충전",
+  antimagic: "항마",
+  foresight: "예지",
+  challenge: "결투",
+  stamina: "지구력",
+};
+
+export const STATUS_DESCRIPTIONS: Record<StatusEffectId, string> = {
+  burning: "최소 8턴 동안 화염 피해를 받습니다. 물에서 즉시 꺼지며, 지나간 수풀과 문에는 불이 붙습니다.",
+  chilled: "이동과 행동이 느려지며, 한기가 누적되면 빙결될 수 있습니다.",
+  frozen: "얼어붙어 행동할 수 없습니다. 피해를 받으면 더 빨리 풀립니다.",
+  paralyzed: "몸이 굳어 남은 지속시간 동안 행동할 수 없습니다.",
+  poisoned: "남은 지속시간에 따라 매 턴 독 피해를 받습니다.",
+  corroded: "부식성 기운이 방어를 무시하는 지속 피해를 줍니다.",
+  blinded: "시야 범위가 크게 줄어 멀리 있는 대상과 지형을 보기 어렵습니다.",
+  terrified: "공포의 대상에게 다가가거나 정상적으로 공격하기 어렵습니다.",
+  charmed: "매혹한 대상에게 직접 공격할 수 없습니다.",
+  corrupted: "잠시 플레이어 편이 되어 다른 적을 공격합니다.",
+  rooted: "뿌리에 붙잡혀 이동할 수 없지만 다른 행동은 할 수 있습니다.",
+  haste: "이동 속도가 증가해 같은 턴에 더 멀리 움직일 수 있습니다.",
+  levitating: "지면 위를 떠서 일부 바닥 효과와 함정의 영향을 피합니다.",
+  mindVision: "벽 너머를 포함해 층에 있는 생명체의 위치를 감지합니다.",
+  magicSight: "마법으로 시야가 확장되어 어둠 속 지형과 대상을 더 잘 봅니다.",
+  shielded: "보호막이 생명력보다 먼저 피해를 흡수합니다.",
+  earthenArmor: "대지의 힘이 몸을 감싸 받는 피해를 줄입니다.",
+  recharging: "지팡이의 충전이 평소보다 빠르게 회복됩니다.",
+  antimagic: "해로운 마법과 마법 피해에 대한 저항력이 증가합니다.",
+  foresight: "주변의 숨겨진 위험과 지형을 미리 감지합니다.",
+  challenge: "결투 대상으로 지정된 적과의 전투에 집중합니다.",
+  stamina: "지구력이 올라 이동과 공격 속도가 함께 증가합니다.",
+};
+
+export const WAND_CODEX: Record<string, string> = {
+  wand_blast_wave: "충격파로 피해를 주고 대상을 뒤로 밀어냅니다.",
+  wand_corruption: "대상을 잠시 타락시켜 플레이어의 편으로 만들고 다른 적을 공격하게 합니다.",
+  wand_corrosion: "지속 피해를 주는 부식성 가스 구름을 만듭니다.",
+  wand_disintegration: "벽을 제외한 직선상의 적을 모두 관통합니다.",
+  wand_fireblast: "부채꼴 화염으로 적과 풀을 태웁니다.",
+  wand_frost: "냉기로 피해를 주고 한기 또는 빙결을 부여합니다.",
+  wand_lightning: "첫 대상에서 가까운 적에게 연쇄됩니다. 물 위의 적을 맞히면 같은 물웅덩이의 모든 개체가 감전됩니다.",
+  wand_living_earth: "대지의 힘으로 피해를 주고 시전자에게 보호막을 줍니다.",
+  wand_magic_missile: "안정적인 마력탄으로 한 대상에게 피해를 줍니다.",
+  wand_prismatic_light: "찬란한 빛으로 피해를 주고 실명시키며 주변을 밝힙니다.",
+  wand_regrowth: "대상 지점에 높은 풀을 만들고 적을 속박합니다.",
+  wand_transfusion: "적의 생명력을 흡수해 회복하고 잠시 매혹시킵니다.",
+  wand_warding: "접근한 적을 자동 공격하는 마법의 감시진을 설치합니다.",
+};
+
+export const isWand = (itemId: string) => WAND_IDS.has(itemId);

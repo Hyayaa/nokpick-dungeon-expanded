@@ -1,0 +1,10 @@
+LIBRARY WS2_32.dll
+EXPORTS
+WSACleanup
+WSAStartup
+bind
+closesocket
+connect
+htonl
+htons
+socket
