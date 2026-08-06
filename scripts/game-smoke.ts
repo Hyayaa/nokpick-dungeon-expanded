@@ -809,7 +809,34 @@ assert.match(
   "the initial render must be the expedition hub",
 );
 assert.match(campaignHtml, />창고</, "the hub must expose the warehouse");
+assert.match(campaignHtml, /원정대 상점/, "the hub must expose the shop");
+assert.match(campaignHtml, /불꽃 대장간/, "the hub must expose the blacksmith");
 assert.match(campaignHtml, /보유 골드[\s\S]*0/, "the hub must expose saved guild gold");
+assert.match(
+  dungeonUiSource,
+  /source\.zone === "warehouse" && target\.zone === "shopSellTarget"[\s\S]*handleShopSell\(source\.index\)/,
+  "dropping a warehouse slot on the shop tab must execute a sale",
+);
+assert.match(
+  dungeonUiSource,
+  /source\.zone === "shopStock" \|\| source\.zone === "shopBuyback"[\s\S]*target\.zone === "shopWarehouseTarget"[\s\S]*handleShopBuy/,
+  "dragging shop or buyback stock to the warehouse tab must execute a purchase",
+);
+assert.match(
+  dungeonUiSource,
+  /shop: createShopState\(nextOfferSeed, current\.expeditions\)/,
+  "every expedition return must replace stock and clear the old buyback cycle",
+);
+assert.match(
+  dungeonUiSource,
+  /version: 6[\s\S]*shop: normalizeShopState\(parsed\.shop, offerSeed, expeditions\)/,
+  "campaign restore must migrate older saves into the persisted shop schema",
+);
+assert.match(
+  globalStyleSource,
+  /\.commerce-tabs[\s\S]*\.shop-listing-grid[\s\S]*\.blacksmith-layout/,
+  "shop tabs, listings, and the blacksmith must have responsive presentation rules",
+);
 assert.equal(
   DUNGEON_DEFINITIONS.length,
   6,

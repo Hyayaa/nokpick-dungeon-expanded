@@ -136,6 +136,19 @@ import {
   warehouseItemCount,
 } from "../game/campaign";
 import {
+  buyShopListing,
+  createShopState,
+  listSmithyCandidates,
+  normalizeShopState,
+  sellWarehouseItem,
+  shopSalePrice,
+  smithyNextGrade,
+  smithyUpgradeCost,
+  upgradeCampaignEquipmentGrade,
+  type ShopListingSource,
+  type SmithyTarget,
+} from "../game/commerce";
+import {
   WAREHOUSE_SLOT_COUNT,
   normalizeFixedSlots,
   normalizePlayerInventorySlots,
@@ -272,6 +285,7 @@ import {
   GameState,
   GameSoundId,
   ItemCategory,
+  ItemGrade,
   InventoryInstance,
   ItemPickup,
   ItemThrow,
@@ -383,6 +397,10 @@ type ItemSlotAddress =
       target: LoadoutTarget;
     }
   | { zone: "warehouse"; index: number }
+  | { zone: "shopSellTarget" }
+  | { zone: "shopWarehouseTarget" }
+  | { zone: "shopStock"; listingId: string }
+  | { zone: "shopBuyback"; listingId: string }
   | { zone: "preparationInventory"; index: number }
   | {
       zone: "preparationCompanionEquipment";
@@ -394,6 +412,7 @@ type DragSlotItem = {
   itemRef: string;
   itemId: string;
   quantity: number;
+  grade?: ItemGrade;
   upgradeLevel?: number;
   charges?: number;
   maxCharges?: number;
@@ -830,6 +849,7 @@ function HeldItemCursor({ held }: { held: HeldSlotItem | null }) {
         instance={{
           id: held.item.itemRef,
           defId: held.item.itemId,
+          grade: held.item.grade,
           upgradeLevel: held.item.upgradeLevel,
           charges: held.item.charges,
           maxCharges: held.item.maxCharges,
@@ -4191,8 +4211,9 @@ function EquipmentComparisonModal({
 
 const createDefaultCampaign = (): CampaignSave => {
   return {
-    version: 5,
+    version: 6,
     warehouse: createInitialWarehouse(),
+    shop: createShopState(INITIAL_DUNGEON_OFFER_SEED),
     companions: createStarterCompanionRoster(COMPANION_CLASS_IDS),
     expeditions: 0,
     completedExpeditions: 0,
@@ -4213,9 +4234,10 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
       completedExpeditions?: number;
       gold?: number;
       offerSeed?: number;
+      shop?: CampaignSave["shop"];
     };
     if (
-      ![1, 2, 3, 4, 5].includes(parsed.version ?? 0) ||
+      ![1, 2, 3, 4, 5, 6].includes(parsed.version ?? 0) ||
       !parsed.warehouse ||
       !Array.isArray(parsed.companions) ||
       (parsed.version === 1 && !parsed.hero)
@@ -4283,21 +4305,23 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
     const companions = restoredCompanions.length > 0
       ? restoredCompanions
       : createStarterCompanionRoster(COMPANION_CLASS_IDS);
+    const expeditions = Math.max(0, parsed.expeditions ?? 0);
+    const offerSeed =
+      typeof parsed.offerSeed === "number" && Number.isFinite(parsed.offerSeed)
+        ? parsed.offerSeed >>> 0
+        : randomDungeonSeed();
     return {
-      version: 5,
+      version: 6,
       warehouse: restoredWarehouse,
+      shop: normalizeShopState(parsed.shop, offerSeed, expeditions),
       companions,
-      expeditions: Math.max(0, parsed.expeditions ?? 0),
+      expeditions,
       completedExpeditions: Math.max(0, parsed.completedExpeditions ?? 0),
       gold:
         typeof parsed.gold === "number" && Number.isFinite(parsed.gold)
           ? Math.max(0, Math.floor(parsed.gold))
           : 0,
-      offerSeed:
-        typeof parsed.offerSeed === "number" &&
-        Number.isFinite(parsed.offerSeed)
-          ? parsed.offerSeed >>> 0
-          : randomDungeonSeed(),
+      offerSeed,
     };
   } catch {
     return null;
@@ -4322,6 +4346,8 @@ function CampaignHeader({
   expeditions,
   gold,
   onOpenWarehouse,
+  onOpenShop,
+  onOpenBlacksmith,
   onOpenCompendium,
   onOpenSettings,
   onOpenHelp,
@@ -4330,6 +4356,8 @@ function CampaignHeader({
   expeditions: number;
   gold: number;
   onOpenWarehouse: () => void;
+  onOpenShop: () => void;
+  onOpenBlacksmith: () => void;
   onOpenCompendium: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
@@ -4356,6 +4384,14 @@ function CampaignHeader({
         <button type="button" onClick={onOpenCompendium}>도감</button>
         <button type="button" onClick={onOpenSettings}>설정</button>
         <button type="button" onClick={onOpenHelp}>탐사 안내</button>
+        <button type="button" className="facility-button" onClick={onOpenShop}>
+          <span aria-hidden="true">◇</span>
+          상점
+        </button>
+        <button type="button" className="facility-button" onClick={onOpenBlacksmith}>
+          <span aria-hidden="true">♨</span>
+          대장간
+        </button>
         <button
           type="button"
           className="warehouse-button"
@@ -4497,6 +4533,8 @@ function HubScreen({
   developerMode,
   onSelectDungeon,
   onOpenWarehouse,
+  onOpenShop,
+  onOpenBlacksmith,
   onOpenCompendium,
   onOpenSettings,
   onOpenHelp,
@@ -4506,6 +4544,8 @@ function HubScreen({
   developerMode: boolean;
   onSelectDungeon: (dungeon: DungeonDefinition) => void;
   onOpenWarehouse: () => void;
+  onOpenShop: () => void;
+  onOpenBlacksmith: () => void;
   onOpenCompendium: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
@@ -4526,6 +4566,8 @@ function HubScreen({
         expeditions={campaign.completedExpeditions}
         gold={campaign.gold}
         onOpenWarehouse={onOpenWarehouse}
+        onOpenShop={onOpenShop}
+        onOpenBlacksmith={onOpenBlacksmith}
         onOpenCompendium={onOpenCompendium}
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
@@ -4669,6 +4711,28 @@ function HubScreen({
         </div>
         <button type="button" onClick={onOpenWarehouse}>전체 창고 열기</button>
       </section>
+      <section className="hub-facilities" aria-label="원정대 거점 시설">
+        <article className="hub-facility-card is-shop">
+          <span className="hub-facility-symbol" aria-hidden="true">◇</span>
+          <div>
+            <p className="eyebrow">MARKET</p>
+            <h2>원정대 상점</h2>
+            <p>오늘의 상품 {campaign.shop.stock.length}종 · 되사기 {campaign.shop.buyback.length}종</p>
+            <small>상점과 되사기 목록은 다음 원정 귀환 때 갱신됩니다.</small>
+          </div>
+          <button type="button" onClick={onOpenShop}>상점 열기</button>
+        </article>
+        <article className="hub-facility-card is-blacksmith">
+          <span className="hub-facility-symbol" aria-hidden="true">♨</span>
+          <div>
+            <p className="eyebrow">BLACKSMITH</p>
+            <h2>불꽃 대장간</h2>
+            <p>장비의 기본 등급을 F에서 S까지 한 단계씩 올립니다.</p>
+            <small>강화·추가 인챈트 유지 · 첫 인챈트는 등급과 함께 상승 · F→E 1,600 G부터</small>
+          </div>
+          <button type="button" onClick={onOpenBlacksmith}>대장간 열기</button>
+        </article>
+      </section>
       {itemPreview && (
         <ItemDetailModal
           game={null}
@@ -4685,14 +4749,28 @@ function HubScreen({
   );
 }
 
-function WarehouseModal({
-  warehouse,
+type CommerceTab = "warehouse" | "shop";
+
+function CommerceModal({
+  campaign,
+  tab,
+  notice,
+  onTabChange,
+  onSell,
+  onBuy,
   onClose,
 }: {
-  warehouse: WarehouseState;
+  campaign: CampaignSave;
+  tab: CommerceTab;
+  notice: string | null;
+  onTabChange: (tab: CommerceTab) => void;
+  onSell: (slotIndex: number) => boolean;
+  onBuy: (source: ShopListingSource, listingId: string) => boolean;
   onClose: () => void;
 }) {
   const slotDrag = useActiveItemSlotDrag();
+  const [selectedWarehouseIndex, setSelectedWarehouseIndex] = useState<number | null>(null);
+  const warehouse = campaign.warehouse;
   const stackEntries = Object.entries(warehouse.stacks)
     .filter(([, quantity]) => quantity > 0)
     .sort(([a], [b]) => (ITEM_DEFS[a]?.name ?? a).localeCompare(ITEM_DEFS[b]?.name ?? b));
@@ -4700,16 +4778,68 @@ function WarehouseModal({
   const instancesById = new Map(
     warehouse.instances.map((instance) => [instance.id, instance]),
   );
+  const selectedRef = selectedWarehouseIndex === null
+    ? null
+    : slots[selectedWarehouseIndex] ?? null;
+  const selectedInstance = selectedRef
+    ? instancesById.get(selectedRef) ?? warehouse.throwableProfiles[selectedRef] ?? null
+    : null;
+  const selectedItemId = selectedRef
+    ? selectedInstance?.defId ?? (warehouse.stacks[selectedRef] > 0 ? selectedRef : null)
+    : null;
+  const listingSections = [
+    {
+      source: "stock" as const,
+      eyebrow: "TODAY'S STOCK",
+      title: "오늘의 상품",
+      listings: campaign.shop.stock,
+      empty: "오늘 준비된 상품이 없습니다.",
+    },
+    {
+      source: "buyback" as const,
+      eyebrow: "BUYBACK",
+      title: "되사기",
+      listings: campaign.shop.buyback,
+      empty: "이번 갱신 주기에 판매한 물품이 없습니다.",
+    },
+  ];
   return (
-    <div className="modal-backdrop warehouse-backdrop">
-      <section className="warehouse-modal" role="dialog" aria-modal="true" aria-labelledby="warehouse-title">
+    <div className="modal-backdrop warehouse-backdrop commerce-backdrop">
+      <section className="warehouse-modal commerce-modal" role="dialog" aria-modal="true" aria-labelledby="commerce-title">
         <header>
           <div>
-            <p className="eyebrow">STORAGE</p>
-            <h2 id="warehouse-title">원정대 창고</h2>
+            <p className="eyebrow">GUILD COMMERCE</p>
+            <h2 id="commerce-title">창고 · 원정대 상점</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="창고 닫기">×</button>
+          <div className="commerce-wallet"><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></div>
+          <button type="button" onClick={onClose} aria-label="상점과 창고 닫기">×</button>
         </header>
+        <nav className="commerce-tabs" aria-label="창고와 상점" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "warehouse"}
+            className={tab === "warehouse" ? "is-active" : ""}
+            onClick={() => onTabChange("warehouse")}
+            {...(slotDrag?.addressAttributes({ zone: "shopWarehouseTarget" }, null) ?? {})}
+          >
+            창고 <b>{warehouseItemCount(warehouse)}</b>
+            <small>상점 물품을 여기에 놓아 구매</small>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "shop"}
+            className={tab === "shop" ? "is-active" : ""}
+            onClick={() => onTabChange("shop")}
+            {...(slotDrag?.addressAttributes({ zone: "shopSellTarget" }, null) ?? {})}
+          >
+            상점 <b>{campaign.shop.stock.length + campaign.shop.buyback.length}</b>
+            <small>창고 물품을 여기에 놓아 판매</small>
+          </button>
+        </nav>
+        {notice && <p className="commerce-notice" role="status">{notice}</p>}
+        {tab === "warehouse" ? <div className="commerce-warehouse-panel" role="tabpanel">
         <div className="warehouse-summary">
           <span>총 보관 수량 <b>{warehouseItemCount(warehouse)}</b></span>
           <span>종류 <b>{stackEntries.length + warehouse.instances.length}</b></span>
@@ -4749,16 +4879,19 @@ function WarehouseModal({
                 className={[
                   "fixed-item-slot",
                   "is-filled",
+                  selectedWarehouseIndex === index ? "is-selected" : "",
                   slotDrag?.heldAddressKey === itemSlotAddressKey(address)
                     ? "is-drag-source"
                     : "",
                 ].filter(Boolean).join(" ")}
                 key={`warehouse-slot-${index}`}
                 title={`${ITEM_DEFS[itemId]?.name ?? itemId} ×${quantity}`}
+                onClick={() => setSelectedWarehouseIndex(index)}
                 {...(slotDrag?.addressAttributes(address, {
                   itemRef: itemRef!,
                   itemId,
                   quantity,
+                  grade: instance?.grade,
                   upgradeLevel: instance?.upgradeLevel,
                   charges: instance?.charges,
                   maxCharges: instance?.maxCharges,
@@ -4783,6 +4916,166 @@ function WarehouseModal({
           {stackEntries.length === 0 && warehouse.instances.length === 0 && (
             <div className="warehouse-empty"><span>□</span><strong>보관된 아이템이 없습니다.</strong><p>원정을 마치고 전리품을 회수하면 이곳에 표시됩니다.</p></div>
           )}
+        </div>
+        {selectedItemId && selectedWarehouseIndex !== null && (
+          <aside className="commerce-selection-bar">
+            <div>
+              <small>{selectedInstance ? "고유 장비 1개" : "스택 1개"}</small>
+              <strong>{ITEM_DEFS[selectedItemId]?.name}</strong>
+            </div>
+            <b>{formatGold(shopSalePrice(ITEM_DEFS[selectedItemId], selectedInstance))} G</b>
+            <button type="button" onClick={() => onSell(selectedWarehouseIndex)}>
+              {selectedInstance ? "장비 판매" : "1개 판매"}
+            </button>
+          </aside>
+        )}
+        </div> : <div className="commerce-shop-panel" role="tabpanel">
+          <p className="shop-refresh-note">상점 목록과 되사기 목록은 던전에서 귀환할 때 함께 갱신됩니다. 되사기는 판매 당시 받은 금액과 정확히 같은 가격입니다.</p>
+          {listingSections.map((section) => (
+            <section className="shop-listing-section" key={section.source}>
+              <header>
+                <div><p className="eyebrow">{section.eyebrow}</p><h3>{section.title}</h3></div>
+                <span>{section.listings.length}종</span>
+              </header>
+              <div className="shop-listing-grid">
+                {section.listings.map((listing) => {
+                  const address: ItemSlotAddress = section.source === "stock"
+                    ? { zone: "shopStock", listingId: listing.id }
+                    : { zone: "shopBuyback", listingId: listing.id };
+                  const affordable = campaign.gold >= listing.unitPrice;
+                  return (
+                    <article className="shop-listing-card" key={listing.id}>
+                      <button
+                        type="button"
+                        className={[
+                          "fixed-item-slot",
+                          "is-filled",
+                          slotDrag?.heldAddressKey === itemSlotAddressKey(address) ? "is-drag-source" : "",
+                        ].filter(Boolean).join(" ")}
+                        title="길게 눌러 창고 탭에 놓으면 구매합니다."
+                        aria-label={`${ITEM_DEFS[listing.itemId]?.name ?? listing.itemId} 구매품 끌기`}
+                        {...(slotDrag?.addressAttributes(address, {
+                          itemRef: listing.instance?.id ?? listing.id,
+                          itemId: listing.itemId,
+                          quantity: listing.quantity,
+                          grade: listing.instance?.grade,
+                          upgradeLevel: listing.instance?.upgradeLevel,
+                          charges: listing.instance?.charges,
+                          maxCharges: listing.instance?.maxCharges,
+                        }) ?? {})}
+                      >
+                        <ItemSlotContents itemId={listing.itemId} size={40} instance={listing.instance} quantity={listing.quantity} showQuantity={listing.quantity > 1} />
+                      </button>
+                      <div>
+                        <small>{section.source === "buyback" ? "판매가 그대로" : ITEM_CATEGORY_NAMES[ITEM_DEFS[listing.itemId].category]}</small>
+                        <strong>{ITEM_DEFS[listing.itemId]?.name}</strong>
+                        <span>{listing.instance ? "고유 장비" : `재고 ${listing.quantity}개`}</span>
+                      </div>
+                      <b>{formatGold(listing.unitPrice)} G</b>
+                      <button type="button" disabled={!affordable} onClick={() => onBuy(section.source, listing.id)}>
+                        {affordable ? "구매" : "골드 부족"}
+                      </button>
+                    </article>
+                  );
+                })}
+                {section.listings.length === 0 && <p className="shop-empty">{section.empty}</p>}
+              </div>
+            </section>
+          ))}
+        </div>}
+        <footer><button type="button" onClick={onClose}>닫기</button></footer>
+      </section>
+    </div>
+  );
+}
+
+const smithyTargetKey = (target: SmithyTarget) => JSON.stringify(target);
+
+function BlacksmithModal({
+  campaign,
+  notice,
+  onUpgrade,
+  onClose,
+}: {
+  campaign: CampaignSave;
+  notice: string | null;
+  onUpgrade: (target: SmithyTarget) => void;
+  onClose: () => void;
+}) {
+  const candidates = listSmithyCandidates(campaign);
+  const [selectedKey, setSelectedKey] = useState<string | null>(
+    candidates[0] ? smithyTargetKey(candidates[0].target) : null,
+  );
+  const selected = candidates.find(
+    (candidate) => smithyTargetKey(candidate.target) === selectedKey,
+  ) ?? candidates[0] ?? null;
+  const currentGrade = selected
+    ? resolveItemGrade(ITEM_DEFS[selected.itemId], selected.instance)
+    : null;
+  const nextGrade = currentGrade ? smithyNextGrade(currentGrade) : null;
+  const cost = currentGrade ? smithyUpgradeCost(currentGrade) : null;
+  const canAfford = cost !== null && campaign.gold >= cost;
+
+  return (
+    <div className="modal-backdrop blacksmith-backdrop">
+      <section className="blacksmith-modal" role="dialog" aria-modal="true" aria-labelledby="blacksmith-title">
+        <header>
+          <div><p className="eyebrow">BLACKSMITH</p><h2 id="blacksmith-title">불꽃 대장간</h2></div>
+          <div className="commerce-wallet"><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></div>
+          <button type="button" onClick={onClose} aria-label="대장간 닫기">×</button>
+        </header>
+        <p className="blacksmith-lead">골드를 지불해 장비의 기본 등급을 한 단계 올립니다. 강화 수치와 추가 인챈트는 유지되며, 첫 고유 인챈트는 장비 등급과 함께 상승합니다.</p>
+        {notice && <p className="commerce-notice" role="status">{notice}</p>}
+        <div className="blacksmith-layout">
+          <div className="blacksmith-item-list" aria-label="강화할 장비 목록">
+            {candidates.map((candidate) => {
+              const key = smithyTargetKey(candidate.target);
+              const grade = resolveItemGrade(ITEM_DEFS[candidate.itemId], candidate.instance);
+              return (
+                <button
+                  type="button"
+                  className={key === smithyTargetKey(selected?.target ?? candidate.target) ? "is-selected" : ""}
+                  onClick={() => setSelectedKey(key)}
+                  key={key}
+                >
+                  <span className="blacksmith-item-icon"><ItemSlotContents itemId={candidate.itemId} size={38} instance={candidate.instance} quantity={1} /></span>
+                  <span><small>{candidate.ownerLabel}</small><strong>{ITEM_DEFS[candidate.itemId]?.name}</strong></span>
+                  <b data-item-grade={grade}>{grade}</b>
+                </button>
+              );
+            })}
+            {candidates.length === 0 && <p className="blacksmith-empty">강화할 수 있는 장비가 없습니다.</p>}
+          </div>
+          <aside className="blacksmith-workbench">
+            {selected && currentGrade ? (
+              <>
+                <div className="blacksmith-selected-item">
+                  <span className="blacksmith-item-icon is-large"><ItemSlotContents itemId={selected.itemId} size={52} instance={selected.instance} quantity={1} /></span>
+                  <div><small>{selected.ownerLabel}</small><h3>{ITEM_DEFS[selected.itemId]?.name}</h3><span>{ITEM_CATEGORY_NAMES[ITEM_DEFS[selected.itemId].category]}</span></div>
+                </div>
+                <div className="blacksmith-grade-step">
+                  <span data-item-grade={currentGrade}><small>현재</small><b>{currentGrade}</b></span>
+                  <i aria-hidden="true">→</i>
+                  <span data-item-grade={nextGrade ?? currentGrade}><small>{nextGrade ? "강화 후" : "최고 등급"}</small><b>{nextGrade ?? currentGrade}</b></span>
+                </div>
+                {nextGrade && cost !== null ? (
+                  <>
+                    <dl>
+                      <div><dt>강화 비용</dt><dd>{formatGold(cost)} G</dd></div>
+                      <div><dt>보유 골드</dt><dd>{formatGold(campaign.gold)} G</dd></div>
+                    </dl>
+                    <button type="button" className="blacksmith-upgrade-button" disabled={!canAfford} onClick={() => onUpgrade(selected.target)}>
+                      {canAfford ? `${currentGrade} → ${nextGrade} 등급 강화` : `${formatGold(cost - campaign.gold)} G 부족`}
+                    </button>
+                  </>
+                ) : (
+                  <p className="blacksmith-max-grade">S급은 더 이상 올릴 수 없습니다.</p>
+                )}
+              </>
+            ) : (
+              <p className="blacksmith-empty">왼쪽에서 장비를 선택하세요.</p>
+            )}
+          </aside>
         </div>
         <footer><button type="button" onClick={onClose}>닫기</button></footer>
       </section>
@@ -9704,7 +9997,10 @@ export default function DungeonGame() {
   );
   const [campaignHydrated, setCampaignHydrated] = useState(false);
   const [screen, setScreen] = useState<CampaignScreen>("hub");
-  const [warehouseOpen, setWarehouseOpen] = useState(false);
+  const [commerceOpen, setCommerceOpen] = useState(false);
+  const [commerceTab, setCommerceTab] = useState<CommerceTab>("warehouse");
+  const [blacksmithOpen, setBlacksmithOpen] = useState(false);
+  const [facilityNotice, setFacilityNotice] = useState<string | null>(null);
   const [hubHelpOpen, setHubHelpOpen] = useState(false);
   const [hubSettingsOpen, setHubSettingsOpen] = useState(false);
   const [hubCompendiumOpen, setHubCompendiumOpen] = useState(false);
@@ -9744,6 +10040,7 @@ export default function DungeonGame() {
         setCampaign((current) => ({
           ...current,
           offerSeed: firstOfferSeed,
+          shop: createShopState(firstOfferSeed, current.expeditions),
         }));
       }
       const savedScale = Number(
@@ -9833,7 +10130,9 @@ export default function DungeonGame() {
   const openPreparation = useCallback(
     (dungeon: DungeonDefinition) => {
       setSelectedDungeon(dungeon);
-      setWarehouseOpen(false);
+      setCommerceOpen(false);
+      setBlacksmithOpen(false);
+      setFacilityNotice(null);
       setHubHelpOpen(false);
       setHubSettingsOpen(false);
       setHubCompendiumOpen(false);
@@ -9860,9 +10159,65 @@ export default function DungeonGame() {
     });
   }, []);
 
+  const handleShopSell = useCallback((slotIndex: number) => {
+    const result = sellWarehouseItem(campaign, slotIndex);
+    if (result.changed) {
+      setCampaign(result.campaign);
+      setFacilityNotice(`${ITEM_DEFS[result.itemId]?.name ?? result.itemId}을(를) ${formatGold(result.goldDelta)} G에 판매했습니다. 같은 가격으로 되살 수 있습니다.`);
+      return true;
+    }
+    setFacilityNotice("판매할 물품을 찾지 못했습니다.");
+    return false;
+  }, [campaign]);
+
+  const handleShopBuy = useCallback((source: ShopListingSource, listingId: string) => {
+    const result = buyShopListing(campaign, source, listingId);
+    if (result.changed) {
+      setCampaign(result.campaign);
+      setFacilityNotice(`${ITEM_DEFS[result.itemId]?.name ?? result.itemId}을(를) ${formatGold(-result.goldDelta)} G에 구매해 창고로 옮겼습니다.`);
+      return true;
+    }
+    const message = result.reason === "not-enough-gold"
+      ? "구매에 필요한 골드가 부족합니다."
+      : result.reason === "warehouse-full"
+        ? "창고가 가득 차 새 물품을 보관할 수 없습니다."
+        : "구매할 상품을 찾지 못했습니다.";
+    setFacilityNotice(message);
+    return false;
+  }, [campaign]);
+
+  const handleBlacksmithUpgrade = useCallback((target: SmithyTarget) => {
+    const result = upgradeCampaignEquipmentGrade(campaign, target);
+    if (result.changed) {
+      setCampaign(result.campaign);
+      setFacilityNotice(`${ITEM_DEFS[result.itemId]?.name ?? result.itemId}: ${result.fromGrade} → ${result.toGrade} 등급 강화 완료 · ${formatGold(result.cost)} G 사용`);
+      return;
+    }
+    const message = result.reason === "not-enough-gold"
+      ? `등급 강화에 필요한 골드가 ${formatGold(result.cost - campaign.gold)} G 부족합니다.`
+      : result.reason === "maximum-grade"
+        ? "이미 최고 등급인 S급 장비입니다."
+        : "강화할 장비를 찾지 못했습니다.";
+    setFacilityNotice(message);
+  }, [campaign]);
+
   const handleCampaignSlotDrop = useCallback(
     (held: HeldSlotItem, target: ItemSlotAddress) => {
       const source = held.source;
+      if (source.zone === "warehouse" && target.zone === "shopSellTarget") {
+        if (handleShopSell(source.index)) setCommerceTab("shop");
+        return;
+      }
+      if (
+        (source.zone === "shopStock" || source.zone === "shopBuyback") &&
+        target.zone === "shopWarehouseTarget"
+      ) {
+        const listingSource = source.zone === "shopStock" ? "stock" : "buyback";
+        if (handleShopBuy(listingSource, source.listingId)) {
+          setCommerceTab("warehouse");
+        }
+        return;
+      }
       if (
         !isPreparationSlotAddress(source) ||
         !isPreparationSlotAddress(target)
@@ -9879,7 +10234,7 @@ export default function DungeonGame() {
       setCampaign(result.campaign);
       setPreparationLoadout(result.loadout);
     },
-    [campaign, preparationLoadout],
+    [campaign, handleShopBuy, handleShopSell, preparationLoadout],
   );
   const campaignSlotDrag = useItemSlotDrag(handleCampaignSlotDrop);
 
@@ -9907,10 +10262,32 @@ export default function DungeonGame() {
               <button type="button" onClick={() => setHubHelpOpen(true)}>탐사 안내</button>
             </nav>
           )}
-          {warehouseOpen && (
-            <WarehouseModal
-              warehouse={campaign.warehouse}
-              onClose={() => setWarehouseOpen(false)}
+          {commerceOpen && (
+            <CommerceModal
+              campaign={campaign}
+              tab={commerceTab}
+              notice={facilityNotice}
+              onTabChange={(nextTab) => {
+                setCommerceTab(nextTab);
+                setFacilityNotice(null);
+              }}
+              onSell={handleShopSell}
+              onBuy={handleShopBuy}
+              onClose={() => {
+                setCommerceOpen(false);
+                setFacilityNotice(null);
+              }}
+            />
+          )}
+          {blacksmithOpen && (
+            <BlacksmithModal
+              campaign={campaign}
+              notice={facilityNotice}
+              onUpgrade={handleBlacksmithUpgrade}
+              onClose={() => {
+                setBlacksmithOpen(false);
+                setFacilityNotice(null);
+              }}
             />
           )}
           {hubHelpOpen && <HelpModal onClose={() => setHubHelpOpen(false)} />}
@@ -10025,6 +10402,7 @@ export default function DungeonGame() {
             current.completedExpeditions + (outcome === "completed" ? 1 : 0),
           gold: current.gold + goldFound + completionGold,
           offerSeed: nextOfferSeed,
+          shop: createShopState(nextOfferSeed, current.expeditions),
         };
         setExpeditionResult({
           dungeon: finishedDungeon,
@@ -10103,7 +10481,23 @@ export default function DungeonGame() {
       dungeons={dungeonOffers}
       developerMode={developerMode}
       onSelectDungeon={openPreparation}
-      onOpenWarehouse={() => setWarehouseOpen(true)}
+      onOpenWarehouse={() => {
+        setCommerceTab("warehouse");
+        setCommerceOpen(true);
+        setBlacksmithOpen(false);
+        setFacilityNotice(null);
+      }}
+      onOpenShop={() => {
+        setCommerceTab("shop");
+        setCommerceOpen(true);
+        setBlacksmithOpen(false);
+        setFacilityNotice(null);
+      }}
+      onOpenBlacksmith={() => {
+        setBlacksmithOpen(true);
+        setCommerceOpen(false);
+        setFacilityNotice(null);
+      }}
       onOpenCompendium={() => setHubCompendiumOpen(true)}
       onOpenSettings={() => setHubSettingsOpen(true)}
       onOpenHelp={() => setHubHelpOpen(true)}
