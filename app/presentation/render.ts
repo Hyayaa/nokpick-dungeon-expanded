@@ -1,4 +1,4 @@
-import { GameState, Terrain, Tile } from "./types";
+import { GameState, Terrain, Tile } from "../game/types";
 
 export const SOURCE_TILE_SIZE = 16;
 export const TILE_SCALE = 3;

@@ -3781,6 +3781,25 @@ kbd {
   font-size: calc(10px * var(--font-scale, 1));
 }
 
+.item-trait-panel li strong em {
+  color: var(--trait-accent);
+  font-style: normal;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--trait-accent) 45%, transparent);
+}
+
+.item-trait-panel li[data-enchantment-grade="S"],
+.item-trait-panel li[data-enchantment-grade="S"] strong em,
+.item-detail-grade[data-item-grade="S"] {
+  animation: item-grade-rainbow 1800ms linear infinite;
+}
+
+.item-detail-grade[data-item-grade="F"] { color: #8b5a2b; }
+.item-detail-grade[data-item-grade="E"] { color: #ffffff; }
+.item-detail-grade[data-item-grade="D"] { color: #ffffff; }
+.item-detail-grade[data-item-grade="C"] { color: #3b82f6; }
+.item-detail-grade[data-item-grade="B"] { color: #22c55e; }
+.item-detail-grade[data-item-grade="A"] { color: #ef4444; }
+
 .item-trait-panel li span {
   color: #89928b;
   font-size: calc(8px * var(--font-scale, 1));
@@ -4937,6 +4956,18 @@ kbd {
   box-shadow: 0 0 7px color-mix(in srgb, var(--dungeon-accent) 40%, transparent);
 }
 
+.difficulty-grade {
+  display: inline-grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--dungeon-accent) 65%, #465048);
+  color: color-mix(in srgb, var(--dungeon-accent) 76%, #fff0bd);
+  font-family: var(--pixel);
+  font-size: 10px;
+  line-height: 1;
+}
+
 .main-drops {
   margin-top: auto;
   padding: 0 20px 18px;
@@ -4963,7 +4994,7 @@ kbd {
 
 .dungeon-drop-grid {
   display: grid;
-  grid-template-columns: repeat(3, 46px);
+  grid-template-columns: repeat(2, 46px);
   gap: 6px;
 }
 
@@ -4987,6 +5018,76 @@ kbd {
 .dungeon-contract > button:hover {
   background: color-mix(in srgb, var(--dungeon-accent) 22%, #101512);
   color: #fff5cf;
+}
+
+.developer-loot-preview {
+  margin: 0 20px 16px;
+  border: 1px solid color-mix(in srgb, var(--dungeon-accent) 42%, #303832);
+  background: #080d0a;
+}
+
+.preparation-page > .developer-loot-preview {
+  margin: 8px 0 12px;
+}
+
+.developer-loot-preview > summary {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  color: #a9d8b7;
+  cursor: pointer;
+  font-family: var(--pixel);
+  font-size: 9px;
+  list-style: none;
+}
+
+.developer-loot-preview > summary::-webkit-details-marker {
+  display: none;
+}
+
+.developer-loot-preview > summary::before {
+  color: var(--dungeon-accent);
+  content: "+";
+}
+
+.developer-loot-preview[open] > summary::before {
+  content: "−";
+}
+
+.developer-loot-preview > summary > span {
+  margin-right: auto;
+}
+
+.developer-loot-preview > summary > b {
+  color: #e4d7a8;
+}
+
+.developer-loot-preview > p {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: #68736b;
+  font-size: 8px;
+}
+
+.developer-loot-grid {
+  display: grid;
+  max-height: 230px;
+  grid-template-columns: repeat(auto-fill, 42px);
+  gap: 5px;
+  overflow-y: auto;
+  padding: 9px;
+  border-top: 1px solid #202923;
+}
+
+.developer-loot-grid .fixed-item-slot {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  min-height: 42px;
+  cursor: pointer;
 }
 
 .warehouse-strip {
@@ -5806,8 +5907,8 @@ button.fixed-item-slot.is-filled:focus-visible {
     0 0 14px rgba(216, 182, 107, 0.24);
   opacity: 0.96;
   pointer-events: none;
-  transform: rotate(2deg) scale(1.04);
-  transform-origin: top left;
+  transform: translate(-50%, -50%) rotate(2deg) scale(1.04);
+  transform-origin: center;
 }
 
 .campaign-drag-surface:has(.held-item-cursor),
@@ -6989,8 +7090,8 @@ button.fixed-item-slot.is-filled:focus-visible {
   50% { filter: brightness(1.32); }
 }
 
-/* Item rarity changes only the border of the existing interface slots. */
-.item-rarity-marker {
+/* Item grade changes only the border of the existing interface slots. */
+.item-grade-marker {
   display: none;
 }
 
@@ -7001,8 +7102,8 @@ button.fixed-item-slot.is-filled:focus-visible {
   .alchemy-inventory > button,
   .alchemy-selection > button,
   .warehouse-strip__items > span
-):has(> .item-rarity-marker[data-item-rarity]) {
-  border-color: var(--item-rarity-border);
+):has(> .item-grade-marker[data-item-grade]) {
+  border-color: var(--item-grade-border);
 }
 
 :is(
@@ -7012,8 +7113,8 @@ button.fixed-item-slot.is-filled:focus-visible {
   .alchemy-inventory > button,
   .alchemy-selection > button,
   .warehouse-strip__items > span
-):has(> .item-rarity-marker[data-item-rarity="1"]) {
-  --item-rarity-border: #778179;
+):has(> .item-grade-marker[data-item-grade="F"]) {
+  --item-grade-border: #8b5a2b;
 }
 
 :is(
@@ -7023,8 +7124,8 @@ button.fixed-item-slot.is-filled:focus-visible {
   .alchemy-inventory > button,
   .alchemy-selection > button,
   .warehouse-strip__items > span
-):has(> .item-rarity-marker[data-item-rarity="2"]) {
-  --item-rarity-border: #69b96f;
+):has(> .item-grade-marker[data-item-grade="E"]) {
+  --item-grade-border: #ffffff;
 }
 
 :is(
@@ -7034,8 +7135,8 @@ button.fixed-item-slot.is-filled:focus-visible {
   .alchemy-inventory > button,
   .alchemy-selection > button,
   .warehouse-strip__items > span
-):has(> .item-rarity-marker[data-item-rarity="3"]) {
-  --item-rarity-border: #5b9fe2;
+):has(> .item-grade-marker[data-item-grade="D"]) {
+  --item-grade-border: #ffffff;
 }
 
 :is(
@@ -7045,8 +7146,8 @@ button.fixed-item-slot.is-filled:focus-visible {
   .alchemy-inventory > button,
   .alchemy-selection > button,
   .warehouse-strip__items > span
-):has(> .item-rarity-marker[data-item-rarity="4"]) {
-  --item-rarity-border: #b574dd;
+):has(> .item-grade-marker[data-item-grade="C"]) {
+  --item-grade-border: #3b82f6;
 }
 
 :is(
@@ -7056,8 +7157,8 @@ button.fixed-item-slot.is-filled:focus-visible {
   .alchemy-inventory > button,
   .alchemy-selection > button,
   .warehouse-strip__items > span
-):has(> .item-rarity-marker[data-item-rarity="5"]) {
-  --item-rarity-border: #ff5b63;
+):has(> .item-grade-marker[data-item-grade="B"]) {
+  --item-grade-border: #22c55e;
 }
 
 :is(
@@ -7067,23 +7168,45 @@ button.fixed-item-slot.is-filled:focus-visible {
   .alchemy-inventory > button,
   .alchemy-selection > button,
   .warehouse-strip__items > span
-) > .item-rarity-marker[data-item-rarity="5"] {
+):has(> .item-grade-marker[data-item-grade="A"]) {
+  --item-grade-border: #ef4444;
+}
+
+:is(
+  .fixed-item-slot.is-filled,
+  .inventory-item-icon,
+  .companion-slot.is-filled,
+  .alchemy-inventory > button,
+  .alchemy-selection > button,
+  .warehouse-strip__items > span
+):has(> .item-grade-marker[data-item-grade="S"]) {
+  --item-grade-border: #ffffff;
+}
+
+:is(
+  .fixed-item-slot.is-filled,
+  .inventory-item-icon,
+  .companion-slot.is-filled,
+  .alchemy-inventory > button,
+  .alchemy-selection > button,
+  .warehouse-strip__items > span
+) > .item-grade-marker[data-item-grade="S"] {
   position: absolute;
   z-index: 8;
   inset: 0;
   display: block;
-  border: 1px solid #ff5b63;
+  border: 1px solid #ef4444;
   pointer-events: none;
-  animation: item-rarity-rainbow 1800ms linear infinite;
+  animation: item-grade-rainbow 1800ms linear infinite;
 }
 
-@keyframes item-rarity-rainbow {
-  0%, 100% { border-color: #ff5b63; }
-  17% { border-color: #ffad4a; }
-  33% { border-color: #ffe45c; }
-  50% { border-color: #66d982; }
-  67% { border-color: #55b9ff; }
-  83% { border-color: #c579ff; }
+@keyframes item-grade-rainbow {
+  0%, 100% { color: #ef4444; border-color: #ef4444; }
+  17% { color: #f97316; border-color: #f97316; }
+  33% { color: #facc15; border-color: #facc15; }
+  50% { color: #22c55e; border-color: #22c55e; }
+  67% { color: #3b82f6; border-color: #3b82f6; }
+  83% { color: #a855f7; border-color: #a855f7; }
 }
 
 @media (prefers-reduced-motion: reduce) {

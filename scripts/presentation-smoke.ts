@@ -1,0 +1,308 @@
+import assert from "node:assert/strict";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import {
+  dungeonMusicPath,
+  GAME_SOUND_PATHS,
+  GameAudioRuntime,
+  ORIGINAL_DUNGEON_MUSIC_PATHS,
+} from "../app/presentation/audio-runtime";
+import { placeDescriptionWindow } from "../app/presentation/description-placement";
+import {
+  hasProjectileLineOfFire,
+  skillTargetableTiles,
+} from "../app/game/targeting";
+import type { DungeonObject, Terrain, Tile } from "../app/game/types";
+import { targetingOutlineSegments } from "../app/presentation/targeting-overlay";
+
+const targetingTile = (terrain: Terrain = "floor"): Tile => ({
+  terrain,
+  discovered: true,
+  visible: true,
+  discoveredMask: 15,
+  visibleMask: 15,
+  variant: 0,
+});
+const targetingState = (width: number, height: number) => ({
+  width,
+  height,
+  tiles: Array.from({ length: height }, () =>
+    Array.from({ length: width }, () => targetingTile())),
+  objects: [] as DungeonObject[],
+});
+
+const circularState = targetingState(17, 17);
+const circularOrigin = { x: 8, y: 8 };
+assert.deepEqual(
+  skillTargetableTiles(circularState, circularOrigin, 0, true),
+  [circularOrigin],
+  "a zero-range skill overlay must contain only its caster tile",
+);
+const centeredSkillRange = skillTargetableTiles(
+  circularState,
+  circularOrigin,
+  8,
+  true,
+);
+assert.equal(
+  centeredSkillRange.length,
+  197,
+  "a range-eight skill must use the integer tiles inside a radius-eight circle",
+);
+assert.equal(
+  centeredSkillRange.some(({ x, y }) => x === 16 && y === 16),
+  false,
+  "the former square corner must stay outside the circular skill range",
+);
+assert.equal(
+  centeredSkillRange.some(({ x, y }) => x === 16 && y === 8),
+  true,
+  "the radius-eight axis endpoint must remain targetable",
+);
+
+const lineState = targetingState(9, 5);
+const lineOrigin = { x: 1, y: 2 };
+const lineTarget = { x: 7, y: 2 };
+lineState.tiles[2][4].terrain = "highGrass";
+assert.equal(
+  hasProjectileLineOfFire(lineState, lineOrigin, lineTarget),
+  true,
+  "dense grass may hide a tile but must not block a skill projectile",
+);
+lineState.tiles[2][4].terrain = "wall";
+assert.equal(
+  hasProjectileLineOfFire(lineState, lineOrigin, lineTarget),
+  false,
+  "a wall must remove every target tile behind it from line of fire",
+);
+lineState.tiles[2][4].terrain = "door";
+assert.equal(
+  hasProjectileLineOfFire(lineState, lineOrigin, lineTarget),
+  false,
+  "a closed door must block the same targeting line as a wall",
+);
+lineState.tiles[2][4].terrain = "floor";
+lineState.objects.push({
+  id: "targeting-chest",
+  kind: "chest",
+  looted: false,
+  loot: [],
+  x: 4,
+  y: 2,
+});
+assert.equal(
+  hasProjectileLineOfFire(lineState, lineOrigin, lineTarget),
+  false,
+  "an unopened dungeon object must block the skill tiles behind it",
+);
+lineState.objects[0].looted = true;
+assert.equal(
+  hasProjectileLineOfFire(lineState, lineOrigin, lineTarget),
+  true,
+  "a cleared object tile must stop acting as a projectile obstacle",
+);
+
+assert.equal(
+  targetingOutlineSegments([{ x: 0, y: 0 }, { x: 1, y: 0 }]).length,
+  6,
+  "adjacent range tiles must omit their shared edge instead of drawing a grid",
+);
+const targetingOverlaySource = readFileSync(
+  "app/presentation/targeting-overlay.ts",
+  "utf8",
+);
+const rangeDrawingSource = targetingOverlaySource.slice(
+  targetingOverlaySource.indexOf("if (rangeTiles.length)"),
+  targetingOverlaySource.indexOf("const targetCandidate"),
+);
+assert.doesNotMatch(
+  rangeDrawingSource,
+  /fillRect|strokeRect/,
+  "skill range rendering must draw only its exposed outline, never filled cells or a tile grid",
+);
+
+assert.equal(
+  dungeonMusicPath({ themeId: "prison_ruins" }, 2),
+  "/assets/music/prison_2.ogg",
+  "dungeon music must select the original region and rotate by floor",
+);
+assert.equal(
+  dungeonMusicPath({ themeId: "unknown_theme" }, 4),
+  "/assets/music/sewers_1.ogg",
+  "unknown themes must fall back to the original sewer soundtrack",
+);
+assert.equal(
+  ORIGINAL_DUNGEON_MUSIC_PATHS.length,
+  15,
+  "all three regular tracks from five original dungeon regions must ship",
+);
+for (const path of ORIGINAL_DUNGEON_MUSIC_PATHS) {
+  const publicPath = `public${path}`;
+  assert.equal(
+    existsSync(publicPath) && statSync(publicPath).size > 0,
+    true,
+    `${path} must contain an original Shattered Pixel Dungeon music asset`,
+  );
+}
+for (const [soundId, path] of Object.entries(GAME_SOUND_PATHS)) {
+  const publicPath = `public${path}`;
+  assert.equal(
+    existsSync(publicPath) && statSync(publicPath).size > 0,
+    true,
+    `${soundId} must resolve to a packaged sound asset`,
+  );
+}
+assert.equal(
+  GAME_SOUND_PATHS.uiClick,
+  "/assets/sounds/click.mp3",
+  "interface controls must use the original click sound",
+);
+const dungeonGameSource = readFileSync(
+  "app/components/DungeonGame.tsx",
+  "utf8",
+);
+assert.equal(
+  (dungeonGameSource.match(/new GameAudioRuntime\(\)/g) ?? []).length,
+  1,
+  "hub UI, dungeon effects, skills, and music must share one audio runtime",
+);
+
+const panel = { width: 240, height: 180 };
+const viewport = { width: 1000, height: 700 };
+assert.deepEqual(
+  placeDescriptionWindow(
+    { left: 120, right: 160, top: 90, bottom: 130 },
+    panel,
+    viewport,
+  ),
+  { left: 170, top: 90, side: "right" },
+  "description windows should open beside the selected element",
+);
+assert.deepEqual(
+  placeDescriptionWindow(
+    { left: 920, right: 960, top: 650, bottom: 690 },
+    panel,
+    viewport,
+  ),
+  { left: 670, top: 510, side: "left" },
+  "description windows should flip and remain inside viewport margins",
+);
+assert.deepEqual(
+  placeDescriptionWindow(
+    { left: -20, right: 0, top: -10, bottom: 10 },
+    panel,
+    viewport,
+  ),
+  { left: 10, top: 10, side: "right" },
+  "description windows should clamp to the top-left viewport margin",
+);
+
+type FakeAudioAttempt = {
+  src: string;
+  audible: boolean;
+};
+
+class FakeAudioElement {
+  static allowAudiblePlayback = false;
+  static attempts: FakeAudioAttempt[] = [];
+
+  src: string;
+  preload = "";
+  loop = false;
+  volume = 1;
+  muted = false;
+  playbackRate = 1;
+  currentTime = 0;
+  paused = true;
+
+  constructor(src = "") {
+    this.src = src;
+  }
+
+  load() {}
+
+  pause() {
+    this.paused = true;
+  }
+
+  addEventListener() {}
+
+  cloneNode() {
+    const clone = new FakeAudioElement(this.src);
+    clone.preload = this.preload;
+    clone.loop = this.loop;
+    clone.volume = this.volume;
+    clone.muted = this.muted;
+    clone.playbackRate = this.playbackRate;
+    return clone;
+  }
+
+  play() {
+    const audible = !this.muted && this.volume > 0;
+    FakeAudioElement.attempts.push({ src: this.src, audible });
+    if (audible && !FakeAudioElement.allowAudiblePlayback) {
+      this.paused = true;
+      return Promise.reject(new Error("NotAllowedError"));
+    }
+    this.paused = false;
+    return Promise.resolve();
+  }
+}
+
+const audioDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Audio");
+try {
+  Object.defineProperty(globalThis, "Audio", {
+    configurable: true,
+    value: FakeAudioElement,
+  });
+  const runtime = new GameAudioRuntime();
+  runtime.preload();
+
+  await runtime.unlock();
+  assert.equal(
+    FakeAudioElement.attempts.length,
+    0,
+    "a muted primer must never claim that audible browser media is unlocked",
+  );
+
+  runtime.setMusic("/assets/music/sewers_1.ogg");
+  await Promise.resolve();
+  assert.equal(
+    FakeAudioElement.attempts.length,
+    0,
+    "music must wait for a trusted audible unlock instead of a muted primer",
+  );
+
+  runtime.play("step", 0.62);
+  assert.deepEqual(
+    FakeAudioElement.attempts.at(-1),
+    { src: GAME_SOUND_PATHS.step, audible: true },
+    "sound playback must still attempt the known-working direct HTML media path",
+  );
+  await Promise.resolve();
+
+  FakeAudioElement.allowAudiblePlayback = true;
+  const attemptsBeforeGesture = FakeAudioElement.attempts.length;
+  const trustedPlayback = runtime.unlockAndPlay("uiClick", 0.5, 1.04);
+  assert.deepEqual(
+    FakeAudioElement.attempts[attemptsBeforeGesture],
+    { src: GAME_SOUND_PATHS.uiClick, audible: true },
+    "the first audible UI cue must start synchronously inside the trusted gesture",
+  );
+  await trustedPlayback;
+  assert.equal(
+    FakeAudioElement.attempts.some(
+      ({ src, audible }) => src.endsWith("/assets/music/sewers_1.ogg") && audible,
+    ),
+    true,
+    "the same trusted gesture must start the selected dungeon music",
+  );
+  runtime.destroy();
+} finally {
+  if (audioDescriptor) {
+    Object.defineProperty(globalThis, "Audio", audioDescriptor);
+  } else {
+    Reflect.deleteProperty(globalThis, "Audio");
+  }
+}
+
+console.log("presentation smoke checks passed");

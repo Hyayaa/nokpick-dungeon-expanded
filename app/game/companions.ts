@@ -1,8 +1,9 @@
 import { ITEM_DEFS } from "./data";
-import { equipmentStatProfile } from "./equipment";
+import { equipmentStatProfile, normalizeEquipmentInstance } from "./equipment";
 import { experienceForNextLevel } from "./progression";
 import {
   createCompanionSkills,
+  normalizeCompanionProfession,
   normalizeCompanionSkills,
   normalizeSkillCooldowns,
 } from "./companion-skills";
@@ -16,27 +17,12 @@ import {
   Point,
 } from "./types";
 
-export const COMPANION_FRAME_WIDTH = 12;
-export const COMPANION_FRAME_HEIGHT = 15;
-
-export const COMPANION_IDLE_FRAMES = [0, 0, 0, 1, 0, 0, 1, 1] as const;
-export const COMPANION_MOVE_FRAMES = [2, 3, 4, 5, 6, 7] as const;
-export const COMPANION_DEFEAT_FRAMES = [8, 9, 10, 11, 12, 11] as const;
-export const COMPANION_ATTACK_FRAMES = [13, 14, 15, 0] as const;
-export const COMPANION_INTERACT_FRAMES = [16, 17, 16, 17] as const;
-
 export type CompanionClassDefinition = {
   id: CompanionClassId;
   nameKo: string;
   nameEn: string;
   defaultNameKo: string;
   defaultNameEn: string;
-  sprite: string;
-  sheetWidth: number;
-  sheetHeight: number;
-  frameWidth: number;
-  frameHeight: number;
-  animationSet: "companion" | "adventurer";
   maxHp: number;
   attack: number;
   defense: number;
@@ -55,12 +41,6 @@ export const COMPANION_CLASSES: Record<
     nameEn: "Adventurer",
     defaultNameKo: "모험가",
     defaultNameEn: "Adventurer",
-    sprite: "/assets/sprites/player.png",
-    sheetWidth: 128,
-    sheetHeight: 72,
-    frameWidth: 16,
-    frameHeight: 24,
-    animationSet: "adventurer",
     maxHp: 42,
     attack: 4,
     defense: 0,
@@ -74,12 +54,6 @@ export const COMPANION_CLASSES: Record<
     nameEn: "Warrior",
     defaultNameKo: "로완",
     defaultNameEn: "Rowan",
-    sprite: "/assets/sprites/companions/warrior.png",
-    sheetWidth: 256,
-    sheetHeight: 128,
-    frameWidth: COMPANION_FRAME_WIDTH,
-    frameHeight: COMPANION_FRAME_HEIGHT,
-    animationSet: "companion",
     maxHp: 36,
     attack: 5,
     defense: 2,
@@ -93,12 +67,6 @@ export const COMPANION_CLASSES: Record<
     nameEn: "Huntress",
     defaultNameKo: "미라",
     defaultNameEn: "Mira",
-    sprite: "/assets/sprites/companions/huntress.png",
-    sheetWidth: 256,
-    sheetHeight: 128,
-    frameWidth: COMPANION_FRAME_WIDTH,
-    frameHeight: COMPANION_FRAME_HEIGHT,
-    animationSet: "companion",
     maxHp: 29,
     attack: 4,
     defense: 1,
@@ -112,12 +80,6 @@ export const COMPANION_CLASSES: Record<
     nameEn: "Mage",
     defaultNameKo: "오린",
     defaultNameEn: "Orin",
-    sprite: "/assets/sprites/companions/mage.png",
-    sheetWidth: 256,
-    sheetHeight: 128,
-    frameWidth: COMPANION_FRAME_WIDTH,
-    frameHeight: COMPANION_FRAME_HEIGHT,
-    animationSet: "companion",
     maxHp: 27,
     attack: 3,
     defense: 1,
@@ -131,12 +93,6 @@ export const COMPANION_CLASSES: Record<
     nameEn: "Rogue",
     defaultNameKo: "베일",
     defaultNameEn: "Vale",
-    sprite: "/assets/sprites/companions/rogue.png",
-    sheetWidth: 256,
-    sheetHeight: 128,
-    frameWidth: COMPANION_FRAME_WIDTH,
-    frameHeight: COMPANION_FRAME_HEIGHT,
-    animationSet: "companion",
     maxHp: 27,
     attack: 4,
     defense: 1,
@@ -150,12 +106,6 @@ export const COMPANION_CLASSES: Record<
     nameEn: "Duelist",
     defaultNameKo: "세라",
     defaultNameEn: "Sera",
-    sprite: "/assets/sprites/companions/duelist.png",
-    sheetWidth: 256,
-    sheetHeight: 128,
-    frameWidth: COMPANION_FRAME_WIDTH,
-    frameHeight: COMPANION_FRAME_HEIGHT,
-    animationSet: "companion",
     maxHp: 32,
     attack: 5,
     defense: 1,
@@ -169,12 +119,6 @@ export const COMPANION_CLASSES: Record<
     nameEn: "Cleric",
     defaultNameKo: "엘리",
     defaultNameEn: "Eli",
-    sprite: "/assets/sprites/companions/cleric.png",
-    sheetWidth: 256,
-    sheetHeight: 128,
-    frameWidth: COMPANION_FRAME_WIDTH,
-    frameHeight: COMPANION_FRAME_HEIGHT,
-    animationSet: "companion",
     maxHp: 33,
     attack: 3,
     defense: 2,
@@ -354,8 +298,9 @@ export const createCompanion = (
 ): Companion => {
   const definition = COMPANION_CLASSES[classId];
   const id = `companion-${classId}-${index}`;
+  const professionId = normalizeCompanionProfession(classId, undefined);
   const traits = createCompanionTraits(id);
-  const skills = createCompanionSkills(id);
+  const skills = createCompanionSkills(professionId, id);
   const maxHp = Math.round(
     definition.maxHp * characterMaxHpMultiplier({ traits }),
   );
@@ -363,6 +308,7 @@ export const createCompanion = (
     id,
     name: definition.defaultNameKo,
     classId,
+    professionId,
     command: "follow",
     ...point,
     hp: maxHp,
@@ -419,6 +365,15 @@ const equipmentEntries = (companion: Companion) =>
     },
   );
 
+const equipmentSpeedMultiplier = (
+  companion: Companion,
+  field: "moveSpeed" | "attackSpeed",
+) => equipmentEntries(companion).reduce(
+  (multiplier, { definition, instance }) =>
+    multiplier * equipmentStatProfile(definition, instance)[field],
+  1,
+);
+
 export const getCompanionAttack = (companion: Companion) =>
   Math.max(
     1,
@@ -429,7 +384,11 @@ export const getCompanionAttack = (companion: Companion) =>
           (total, { definition, instance }) =>
             total + equipmentStatProfile(definition, instance).attack,
           0,
-        )) * characterAttackMultiplier(companion),
+        ) +
+        (companion.statuses ?? [])
+          .filter((status) => status.id === "stamina")
+          .reduce((total, status) => total + status.power, 0)) *
+        characterAttackMultiplier(companion),
     ),
   );
 
@@ -440,16 +399,49 @@ export const getCompanionDefense = (companion: Companion) =>
     (total, { definition, instance }) =>
       total + equipmentStatProfile(definition, instance).defense,
     0,
-  );
+  ) +
+  (companion.statuses ?? [])
+    .filter(
+      (status) =>
+        status.id === "earthenArmor" || status.id === "challenge",
+    )
+    .reduce((total, status) => total + status.power, 0);
 
 export const getCompanionAccuracy = (companion: Companion) =>
   companion.accuracy + characterAccuracyBonus(companion);
 
 export const getCompanionEvasion = (companion: Companion) =>
-  companion.evasion + characterEvasionBonus(companion);
+  companion.evasion +
+  characterEvasionBonus(companion) +
+  ((companion.statuses ?? []).some((status) => status.id === "haste") ? 3 : 0);
 
 export const getCompanionViewDistance = (companion: Companion) =>
   companion.viewDistance + characterViewBonus(companion);
+
+export const getCompanionMoveSpeed = (companion: Companion) => {
+  const statusMultiplier =
+    ((companion.statuses ?? []).some((status) => status.id === "haste") ? 1.5 : 1) *
+    ((companion.statuses ?? []).some((status) => status.id === "stamina") ? 1.15 : 1) *
+    ((companion.statuses ?? []).some((status) => status.id === "chilled") ? 0.75 : 1);
+  return Math.max(
+    0.25,
+    Math.round(
+      equipmentSpeedMultiplier(companion, "moveSpeed") * statusMultiplier * 100,
+    ) / 100,
+  );
+};
+
+export const getCompanionAttackSpeed = (companion: Companion) => {
+  const statusMultiplier =
+    ((companion.statuses ?? []).some((status) => status.id === "stamina") ? 1.15 : 1) *
+    ((companion.statuses ?? []).some((status) => status.id === "chilled") ? 0.75 : 1);
+  return Math.max(
+    0.25,
+    Math.round(
+      equipmentSpeedMultiplier(companion, "attackSpeed") * statusMultiplier * 100,
+    ) / 100,
+  );
+};
 
 export const reduceCharacterDamage = (
   carrier: TraitCarrier,
@@ -459,6 +451,10 @@ export const reduceCharacterDamage = (
 export const normalizeCompanionProgression = (
   companion: Companion,
 ): Companion => {
+  const professionId = normalizeCompanionProfession(
+    companion.classId,
+    companion.professionId,
+  );
   const traits = (companion.traits ?? []).filter(
     (id): id is CompanionTraitId => id in COMPANION_TRAITS,
   );
@@ -482,30 +478,16 @@ export const normalizeCompanionProgression = (
       level >= 50
         ? 0
         : Math.max(1, companion.nextXp ?? experienceForNextLevel(level)),
+    professionId,
     traits: normalizedTraits,
-    skills: normalizeCompanionSkills(companion.id, companion.skills),
+    skills: normalizeCompanionSkills(
+      professionId,
+      companion.id,
+      companion.skills,
+    ),
     skillCooldowns: normalizeSkillCooldowns(companion.skillCooldowns),
     statuses: (companion.statuses ?? []).map((status) => ({ ...status })),
   };
-};
-
-export const companionArmorTier = (
-  companion: Pick<Companion, "equipment">,
-) => {
-  const armor = companion.equipment.armor;
-  if (!armor || armor === "cloth_armor") return 0;
-  if (armor === "leather_armor") return 1;
-  if (armor === "mail_armor") return 2;
-  const minimumFloor = ITEM_DEFS[armor]?.minFloor ?? 1;
-  return Math.max(0, Math.min(5, Math.floor((minimumFloor + 1) / 2)));
-};
-
-export const companionFrameIndex = (
-  armorTier: number,
-  frameWithinTier: number,
-) => {
-  const framesPerRow = Math.floor(256 / COMPANION_FRAME_WIDTH);
-  return Math.max(0, armorTier) * framesPerRow + frameWithinTier;
 };
 
 export const companionDirection = (from: Point, to: Point): Direction => {
@@ -519,9 +501,12 @@ export const cloneCompanionInstance = (
   instance: InventoryInstance | null,
 ) =>
   instance
-    ? {
-        ...instance,
-        statRoll: instance.statRoll ? { ...instance.statRoll } : undefined,
-        traits: (instance.traits ?? []).map((trait) => ({ ...trait })),
-      }
+    ? normalizeEquipmentInstance(
+        {
+          ...instance,
+          statRoll: instance.statRoll ? { ...instance.statRoll } : undefined,
+          traits: (instance.traits ?? []).map((trait) => ({ ...trait })),
+        },
+        ITEM_DEFS[instance.defId],
+      )
     : null;

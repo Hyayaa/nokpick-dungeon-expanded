@@ -28,10 +28,11 @@ Extract the full source ZIP and double-click
 Node.js, serves the prebuilt `local-dist/` bundle without installing npm
 dependencies, selects an unused local-only port, and opens it without a console
 window. Each run starts its own server instead of reusing a previous package,
-and local assets are never retained across extractions. Closing its status
-dialog stops the server. The game directory therefore does not grow by hundreds
-of megabytes after launch. See `LOCAL_TESTING_KO.md` for Korean instructions and
-cleanup guidance for older packages.
+and local assets are never retained across extractions. The game tab keeps its
+server alive with a heartbeat and closes that server when the tab is closed.
+The game directory therefore does not grow by hundreds of megabytes after
+launch. See `LOCAL_TESTING_KO.md` for Korean instructions and cleanup guidance
+for older packages.
 
 ## Prerequisites
 
@@ -127,7 +128,9 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 - `npm run install:ci`: reuse a matching install or perform one bounded install
 - `npm run dev`: start the Vite/Vinext development server
-- `npm run test:quick`: run lint, game regressions, and performance contracts
+- `npm run test:architecture`: enforce the game/presentation dependency boundary
+- `npm run test:quick`: run lint, architecture, game regressions, and performance contracts
+- `npm run test:artifact`: verify an already-built local bundle and Windows launcher
 - `npm run verify:local`: run the complete local release gate exactly once
 - `npm run build`: build and validate the deployable Sites artifact
 - `npm run start`: start the built Vinext application
@@ -142,6 +145,10 @@ Use `scripts/restore-source-overlay.sh <archive.zip>` to update a warm checkout
 without discarding Git metadata, installed dependencies, or the project npm
 cache. The rendering/state-sharing design is documented in
 `PERFORMANCE_AND_ARCHITECTURE_KO.md`.
+
+게임 규칙은 `app/game/`, Canvas·애니메이션·스프라이트·설명창은
+`app/presentation/`에 둡니다. 화면은 `game/session.ts`가 반환한 상태 전이와
+의미 기반 전투 피드백을 표시하며, 번역 문구를 규칙 신호로 판독하지 않습니다.
 
 GitHub 작업은 안정 브랜치 `main`과 목적별 `feature/...`, `fix/...` 브랜치를
 사용합니다. Pull Request마다 린트, 게임 회귀, 성능 계약, 프로덕션 빌드가 자동

@@ -2,6 +2,7 @@
 
 import {
   CSSProperties,
+  MutableRefObject,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
@@ -10,12 +11,10 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import {
   CATEGORY_LABELS,
   ENEMY_DESCRIPTIONS,
@@ -30,14 +29,11 @@ import {
   acceptEquipmentOffer,
   activateCompanionSkill,
   advanceManualPartyRound,
-  advanceExpeditionFloor,
   assignCompanionItem,
   assignPlayerItem,
   autoEquipBetterOffers,
   canAssignCompanionItem,
   canAssignPlayerItem,
-  COMPANION_PASSIVE_SLOT_INDEXES,
-  COMPANION_QUICKSLOT_INDEXES,
   createExpeditionGame,
   developerGrantItem,
   developerRecruitCompanion,
@@ -70,7 +66,6 @@ import {
   pickupGroundItems,
   playerStep,
   previewAlchemy,
-  runEnemyTurn,
   setCompanionCommand,
   setCompanionPriorityTarget,
   shouldAutoPickup,
@@ -83,7 +78,35 @@ import {
   waitTurn,
   zapWand,
 } from "../game/engine";
-import { hasLineOfSight } from "../game/map";
+import { completeFloorExit, resolveGameSession } from "../game/session";
+import {
+  COMPANION_PASSIVE_SLOT_INDEXES,
+  COMPANION_QUICKSLOT_INDEXES,
+  FLEX_EQUIPMENT_KEYS as FLEX_RING_KEYS,
+  isPartyQuickslotTarget,
+} from "../game/loadout";
+import {
+  placeReturnedItemInInventorySlot,
+  reorderDungeonInventory,
+  swapPartyLoadout,
+} from "../game/loadout-transactions";
+import {
+  applyPreparationSlotTransfer,
+  isPreparationSlotAddress,
+} from "../game/preparation-transactions";
+import {
+  PLAYER_ACTOR_ID as PLAYER_ID,
+  livingPartyIds,
+  nearestVisibleEnemy,
+  partyActor,
+  suggestedSkillTarget,
+} from "../game/party";
+import {
+  isTileClickReachable,
+  pointEquals,
+  pointInBounds,
+} from "../game/spatial";
+import { skillTargetableTiles } from "../game/targeting";
 import {
   CampaignSave,
   DungeonDefinition,
@@ -104,7 +127,9 @@ import {
   normalizeCompanionForHub,
   normalizeCompanionForHubWithReleasedItems,
   normalizeHeroForHub,
+  newExpeditionPickups,
   playerToCompanion,
+  selectMainLootEntries,
   selectedLoadoutSlotCount,
   takeLoadoutFromWarehouse,
   warehouseItemCount,
@@ -114,40 +139,40 @@ import {
   normalizeFixedSlots,
   normalizePlayerInventorySlots,
   normalizeStorageSlots,
-  swapFixedSlots,
 } from "../game/inventory-slots";
 import {
-  COMPANION_ATTACK_FRAMES,
-  COMPANION_CLASSES,
   COMPANION_CLASS_IDS,
-  COMPANION_DEFEAT_FRAMES,
-  COMPANION_IDLE_FRAMES,
-  COMPANION_INTERACT_FRAMES,
-  COMPANION_MOVE_FRAMES,
   COMPANION_TRAITS,
   COMPANION_TRAIT_IDS,
-  companionArmorTier,
-  companionFrameIndex,
   getCompanionAttack,
   getCompanionAccuracy,
   getCompanionDefense,
   getCompanionEvasion,
+  getCompanionAttackSpeed,
+  getCompanionMoveSpeed,
   getCompanionViewDistance,
 } from "../game/companions";
-import { COMPANION_SKILLS } from "../game/companion-skills";
+import {
+  COMPANION_IDLE_FRAMES,
+  COMPANION_PRESENTATIONS,
+  companionArmorTier,
+  companionFrameIndex,
+} from "../presentation/companion-visuals";
+import {
+  COMPANION_PROFESSIONS,
+  COMPANION_SKILLS,
+} from "../game/companion-skills";
 import {
   ALCHEMY_ENCHANT_CATALYST_IDS,
   ALCHEMY_ENCHANT_RECIPES,
   SIMPLE_ALCHEMY_RECIPES,
 } from "../game/alchemy";
 import {
-  createPlainEquipmentInstance,
   equipmentStatProfile,
   equipmentTraitSummary,
   isUpgradeableEquipment,
 } from "../game/equipment";
 import {
-  AUTO_SLOT_CATEGORIES,
   STATUS_DESCRIPTIONS,
   STATUS_LABELS,
   WAND_CODEX,
@@ -155,12 +180,9 @@ import {
 } from "../game/magic";
 import {
   createEffectTrajectories,
-  EffectTrajectory,
   releaseHeldSignalsAtTurnStart,
-} from "../game/effects";
+} from "../presentation/effects";
 import {
-  burningStatusPixels,
-  cameraShakeOffset,
   connectedWaterTiles,
   createCompanionSkillEffects,
   createDustEffects,
@@ -168,54 +190,77 @@ import {
   createHitEffects,
   createLevelUpEffects,
   createWaterRippleEffects,
-  drawPixelEffects,
-  fieldTilePixels,
-  LogicalGridPixel,
   PixelCameraShake,
   PixelEffect,
-  pruneCameraShakes,
-  prunePixelEffects,
-} from "../game/pixel-effects";
+} from "../presentation/pixel-effects";
 import {
-  FOG_PIXELS_PER_TILE,
   createPixelFogRuntime,
-  drawPixelFogTexture,
   resetPixelFogRuntime,
-} from "../game/fog-frontier";
+} from "../presentation/fog-frontier";
+import { createDungeonRenderCache } from "../presentation/render-cache";
+import type { TargetingOverlay } from "../presentation/targeting-overlay";
+import { resolveItemGrade } from "../game/item-grade";
+import { itemSpriteOffset } from "../presentation/item-visuals";
+import { runtimeImageSource } from "../presentation/runtime-assets";
 import {
-  createDungeonRenderCache,
-  fogMaskBitAt,
-  overlayFrameAt,
-  syncDungeonRenderCache,
-  terrainFrameAt,
-} from "../game/render-cache";
-import { resolveItemRarity } from "../game/item-rarity";
-import { runtimeImageSource } from "../game/runtime-assets";
+  dungeonMusicPath,
+  GameAudioRuntime,
+} from "../presentation/audio-runtime";
 import {
-  drawSheetFrame,
-  terrainUnderlayForPixelFog,
   TILE_SIZE,
   VIEW_HEIGHT,
   VIEW_WIDTH,
   waterSurfaceMaskRows,
-  waterTextureSlices,
-} from "../game/render";
-import {
-  PLAYER_ATTACK_FRAMES,
-  PLAYER_IDLE_FRAMES,
-  PLAYER_INTERACT_FRAMES,
-  PLAYER_MOVE_FRAMES,
-} from "../game/player-animation";
+} from "../presentation/render";
+import { PLAYER_IDLE_FRAMES } from "../presentation/player-animation";
 import {
   createTurnMotionTimeline,
+  durationForInteraction,
   durationForMotion,
+  impactDelayForMotion,
   MIN_ACTION_DURATION,
   PLAYER_INTERACTION_DURATION,
-  PLAYER_MOVE_DURATION,
-} from "../game/timing";
+} from "../presentation/timing";
+import {
+  canvasPointFromClient,
+  clampCamera,
+  companionScreenBounds,
+  tileAtCanvasPoint,
+} from "../presentation/viewport";
+import {
+  startDungeonRenderer,
+  type CameraDrag,
+  type CompanionMapDrag,
+  type DefeatedCompanionVisual,
+  type DefeatedEnemyVisual,
+  type EntityFlashVisual,
+  type FloatingEffect,
+  type GameAssets,
+  type MagicVisualRuntime,
+  type PickupVisual,
+  type PlayerActionAnimation,
+  type StatusSignalVisual,
+  type ThrowVisual,
+  type VisualMotion,
+} from "../presentation/dungeon-renderer";
+import {
+  DescriptionWindow,
+  descriptionAnchorFromElement,
+  descriptionAnchorFromPoint,
+  type DescriptionAnchor,
+} from "../presentation/description-window";
+import {
+  CLOUD_DETAILS,
+  OBJECT_DETAILS,
+  TERRAIN_DETAILS,
+} from "../presentation/inspection-catalog";
+import {
+  isDamageEffect,
+  isDefeatEffect,
+  isImpactEffect,
+} from "../presentation/combat-feedback";
 import {
   ActionResult,
-  CloudKind,
   CombatEffect,
   Companion,
   CompanionClassId,
@@ -236,69 +281,8 @@ import {
   Point,
   StatusEffectId,
   StatusSignal,
-  Terrain,
   UpgradeTarget,
 } from "../game/types";
-
-type VisualMotion = Motion & {
-  startedAt: number;
-  duration: number;
-};
-
-type FloatingEffect = CombatEffect & EffectTrajectory & {
-  id: string;
-  startedAt: number;
-};
-
-type PickupVisual = ItemPickup & {
-  startedAt: number;
-};
-
-type ThrowVisual = ItemThrow & {
-  startedAt: number;
-  duration: number;
-};
-
-type StatusSignalVisual = StatusSignal & {
-  id: string;
-  startedAt: number;
-  duration: number;
-  releasedAt?: number;
-};
-
-type MagicVisualRuntime = MagicVisual & {
-  startedAt: number;
-  duration: number;
-};
-
-type PlayerActionAnimation = {
-  kind: "interact";
-  startedAt: number;
-  duration: number;
-};
-
-type EntityFlashVisual = {
-  id: string;
-  startedAt: number;
-  duration: number;
-};
-
-type DefeatedEnemyVisual = {
-  enemy: Enemy;
-  removeAt: number;
-};
-
-type DefeatedCompanionVisual = {
-  companion: Companion;
-  revealAt: number;
-};
-
-type DescriptionAnchor = {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-};
 
 type InspectedEffect =
   | { kind: "invisible"; anchor: DescriptionAnchor }
@@ -321,37 +305,6 @@ type InspectedEntity =
   | { kind: "ward"; id: string; anchor: DescriptionAnchor }
   | { kind: "terrain"; x: number; y: number; anchor: DescriptionAnchor }
   | { kind: "unknown"; x: number; y: number; anchor: DescriptionAnchor };
-
-type GameAssets = {
-  tiles: HTMLImageElement;
-  water: HTMLImageElement;
-  items: HTMLImageElement;
-  player: HTMLImageElement;
-  enemies: Record<EnemyKind, HTMLImageElement>;
-  companions: Record<CompanionClassId, HTMLImageElement>;
-};
-
-type SoundName = GameSoundId;
-
-type CameraDrag = {
-  pointerId: number;
-  startClientX: number;
-  startClientY: number;
-  startCameraX: number;
-  startCameraY: number;
-  moved: boolean;
-};
-
-type CompanionMapDrag = {
-  pointerId: number;
-  companionId: string;
-  startClientX: number;
-  startClientY: number;
-  cursor: Point;
-  grabOffset: Point;
-  target: Point | null;
-  moved: boolean;
-};
 
 type CanvasPointer = {
   clientX: number;
@@ -472,14 +425,7 @@ const randomDungeonSeed = () => {
     (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
   return seed || INITIAL_DUNGEON_OFFER_SEED;
 };
-const PLAYER_ID = "player";
-const ENTITY_SPRITE_SCALE = 3;
-const PLAYER_IDLE_FRAME_DURATION = 150;
-// The walk cycle is deliberately independent from one-tile travel time.
-// Otherwise every step lands on the same frame boundary and looks restarted.
-const PLAYER_MOVE_FRAME_DURATION = 64;
 const PLAYER_MOVE_CONTINUITY_GRACE = 48;
-const PICKUP_DURATION = 620;
 const THROW_DURATION = 300;
 const throwVisualDuration = (itemThrow: ItemThrow) => {
   void itemThrow;
@@ -488,30 +434,7 @@ const throwVisualDuration = (itemThrow: ItemThrow) => {
 const throwImpactDelay = (itemThrow: ItemThrow) =>
   throwVisualDuration(itemThrow) * 0.9;
 
-const drawLogicalGridPixels = (
-  context: CanvasRenderingContext2D,
-  pixels: readonly LogicalGridPixel[],
-  originX: number,
-  originY: number,
-  pixelSize: number,
-  opacity = 1,
-) => {
-  context.save();
-  context.imageSmoothingEnabled = false;
-  pixels.forEach((pixel) => {
-    context.globalAlpha = opacity * pixel.alpha;
-    context.fillStyle = pixel.color;
-    context.fillRect(
-      Math.round(originX + pixel.x * pixelSize),
-      Math.round(originY + pixel.y * pixelSize),
-      Math.max(1, Math.ceil(pixel.size * pixelSize)),
-      Math.max(1, Math.ceil(pixel.size * pixelSize)),
-    );
-  });
-  context.restore();
-};
 const LEVEL_UP_EFFECT_HOLD = 420;
-const RING_SPRITE_OFFSET = { x: 4, y: 3 };
 const UI_SCALE_STORAGE_KEY = "shattered-web-ui-scale";
 const UI_SCALE_OPTIONS = [0.8, 0.9, 1, 1.1, 1.2] as const;
 const FONT_SCALE_STORAGE_KEY = "shattered-web-font-scale";
@@ -527,167 +450,6 @@ const uiText = (
   english: string,
 ) => (language === "ko" ? korean : english);
 
-const descriptionAnchorFromElement = (
-  element: Element,
-): DescriptionAnchor => {
-  const bounds = element.getBoundingClientRect();
-  return {
-    left: bounds.left,
-    top: bounds.top,
-    right: bounds.right,
-    bottom: bounds.bottom,
-  };
-};
-
-const descriptionAnchorFromPoint = (
-  clientX: number,
-  clientY: number,
-): DescriptionAnchor => ({
-  left: clientX - 4,
-  top: clientY - 4,
-  right: clientX + 4,
-  bottom: clientY + 4,
-});
-
-const fallbackDescriptionAnchor = (): DescriptionAnchor => {
-  const active =
-    typeof document !== "undefined" && document.activeElement instanceof Element
-      ? document.activeElement
-      : null;
-  if (active) return descriptionAnchorFromElement(active);
-  const width = typeof window === "undefined" ? 1280 : window.innerWidth;
-  const height = typeof window === "undefined" ? 720 : window.innerHeight;
-  return descriptionAnchorFromPoint(width * 0.5, height * 0.42);
-};
-
-function DescriptionWindow({
-  anchor,
-  className = "",
-  ariaLabel,
-  labelledBy,
-  onClose,
-  style,
-  children,
-}: {
-  anchor?: DescriptionAnchor | null;
-  className?: string;
-  ariaLabel?: string;
-  labelledBy?: string;
-  onClose: () => void;
-  style?: CSSProperties;
-  children: ReactNode;
-}) {
-  const panelRef = useRef<HTMLElement>(null);
-  const resolvedAnchor = anchor ?? fallbackDescriptionAnchor();
-  const [placement, setPlacement] = useState({
-    left: resolvedAnchor.right + 10,
-    top: resolvedAnchor.top,
-    side: "right" as "left" | "right",
-    ready: false,
-    fontScale: "1",
-  });
-
-  useLayoutEffect(() => {
-    const panel = panelRef.current;
-    if (!panel) return;
-    const updatePlacement = () => {
-      const bounds = panel.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      const margin = 10;
-      const gap = 10;
-      const roomOnRight = viewportWidth - resolvedAnchor.right;
-      const roomOnLeft = resolvedAnchor.left;
-      const side =
-        roomOnRight >= bounds.width + gap || roomOnRight >= roomOnLeft
-          ? "right"
-          : "left";
-      const preferredLeft =
-        side === "right"
-          ? resolvedAnchor.right + gap
-          : resolvedAnchor.left - bounds.width - gap;
-      const preferredTop = resolvedAnchor.top;
-      const centerX = Math.max(
-        0,
-        Math.min(
-          viewportWidth - 1,
-          (resolvedAnchor.left + resolvedAnchor.right) / 2,
-        ),
-      );
-      const centerY = Math.max(
-        0,
-        Math.min(
-          viewportHeight - 1,
-          (resolvedAnchor.top + resolvedAnchor.bottom) / 2,
-        ),
-      );
-      const sourceElement = document.elementFromPoint(centerX, centerY);
-      const sourceScale = sourceElement
-        ? window
-            .getComputedStyle(sourceElement)
-            .getPropertyValue("--font-scale")
-            .trim()
-        : "";
-      setPlacement({
-        left: Math.max(
-          margin,
-          Math.min(viewportWidth - bounds.width - margin, preferredLeft),
-        ),
-        top: Math.max(
-          margin,
-          Math.min(viewportHeight - bounds.height - margin, preferredTop),
-        ),
-        side,
-        ready: true,
-        fontScale: sourceScale || "1",
-      });
-    };
-    updatePlacement();
-    window.addEventListener("resize", updatePlacement);
-    return () => window.removeEventListener("resize", updatePlacement);
-  }, [
-    resolvedAnchor.bottom,
-    resolvedAnchor.left,
-    resolvedAnchor.right,
-    resolvedAnchor.top,
-  ]);
-
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
-  if (typeof document === "undefined") return null;
-  return createPortal(
-    <div className="description-window-layer" role="presentation">
-      <section
-        ref={panelRef}
-        className={`description-window ${className}`.trim()}
-        data-anchor-side={placement.side}
-        role="dialog"
-        aria-modal="false"
-        aria-label={ariaLabel}
-        aria-labelledby={labelledBy}
-        style={
-          {
-            ...style,
-            left: placement.left,
-            top: placement.top,
-            visibility: placement.ready ? "visible" : "hidden",
-            "--font-scale": placement.fontScale,
-          } as CSSProperties
-        }
-        onPointerDown={(event) => event.stopPropagation()}
-      >
-        {children}
-      </section>
-    </div>,
-    document.body,
-  );
-}
 const ZOOM_LEVELS = [
   0.09,
   0.125,
@@ -728,27 +490,6 @@ const BENEFICIAL_STATUS_IDS = new Set<StatusEffectId>([
   "challenge",
   "stamina",
 ]);
-const SOUND_PATHS: Record<SoundName, string> = {
-  step: "/assets/sounds/step.mp3",
-  water: "/assets/sounds/water.mp3",
-  hit: "/assets/sounds/hit.mp3",
-  hitSlash: "/assets/sounds/hit_slash.mp3",
-  death: "/assets/sounds/death.mp3",
-  levelUp: "/assets/sounds/levelup.mp3",
-  item: "/assets/sounds/item.mp3",
-  drink: "/assets/sounds/drink.mp3",
-  read: "/assets/sounds/read.mp3",
-  eat: "/assets/sounds/eat.mp3",
-  doorOpen: "/assets/sounds/door_open.mp3",
-  unlock: "/assets/sounds/unlock.mp3",
-  trample: "/assets/sounds/trample.mp3",
-  teleport: "/assets/sounds/teleport.mp3",
-  shatter: "/assets/sounds/shatter.mp3",
-  descend: "/assets/sounds/descend.mp3",
-  healthWarn: "/assets/sounds/health_warn.mp3",
-  equip: "/assets/sounds/equip.mp3",
-};
-
 const wait = (milliseconds: number) =>
   new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
@@ -774,74 +515,6 @@ const loadImage = (src: string, retryKey = 0) =>
       : embeddedSource;
   });
 
-const pointEquals = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
-const partyDistance = (a: Point, b: Point) =>
-  Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-const livingPartyIds = (state: GameState) => [
-  ...(state.player.hp > 0 ? [PLAYER_ID] : []),
-  ...(state.companions ?? [])
-    .filter((companion) => companion.hp > 0)
-    .map((companion) => companion.id),
-];
-const partyActor = (state: GameState, actorId: string) =>
-  actorId === PLAYER_ID
-    ? state.player
-    : (state.companions ?? []).find(
-        (companion) => companion.id === actorId,
-      ) ?? state.player;
-const nearestVisibleEnemy = (
-  state: GameState,
-  actorId: string,
-  maximumRange: number,
-) => {
-  const actor = partyActor(state, actorId);
-  return state.enemies
-    .filter(
-      (enemy) =>
-        enemy.hp > 0 &&
-        state.tiles[enemy.y]?.[enemy.x]?.visible &&
-        partyDistance(actor, enemy) <= maximumRange &&
-        hasLineOfSight(state.tiles, actor, enemy),
-    )
-    .sort(
-      (a, b) =>
-        partyDistance(actor, a) - partyDistance(actor, b) ||
-        a.hp - b.hp,
-    )[0] ?? null;
-};
-const suggestedSkillTarget = (
-  state: GameState,
-  casterId: string,
-  skillId: CompanionSkillId,
-): Point | null => {
-  const definition = COMPANION_SKILLS[skillId];
-  const caster = partyActor(state, casterId);
-  if (definition.range === 0) return { x: caster.x, y: caster.y };
-  if (definition.target === "ally") {
-    return [state.player, ...(state.companions ?? [])]
-      .filter(
-        (actor) =>
-          actor.hp > 0 &&
-          actor.hp < actor.maxHp &&
-          partyDistance(caster, actor) <= definition.range &&
-          (!definition.requiresLineOfSight ||
-            hasLineOfSight(state.tiles, caster, actor)),
-      )
-      .sort(
-        (a, b) =>
-          a.hp / Math.max(1, a.maxHp) -
-            b.hp / Math.max(1, b.maxHp) ||
-          partyDistance(caster, a) - partyDistance(caster, b),
-      )
-      .map((actor) => ({ x: actor.x, y: actor.y }))[0] ?? null;
-  }
-  const enemy = nearestVisibleEnemy(
-    state,
-    casterId,
-    definition.range,
-  );
-  return enemy ? { x: enemy.x, y: enemy.y } : null;
-};
 const chanceLabel = (chance: number) =>
   `${Math.round(chance * 1000) / 10}%`;
 
@@ -949,136 +622,6 @@ const localizedStatusDescription = (
     ? STATUS_DESCRIPTIONS[id]
     : `${humanizeId(id)} is currently affecting the player. The number beside it shows the remaining turns.`;
 
-const TERRAIN_DETAILS: Record<
-  Terrain,
-  { nameKo: string; nameEn: string; descriptionKo: string; descriptionEn: string }
-> = {
-  wall: {
-    nameKo: "하수도 벽",
-    nameEn: "Sewer Wall",
-    descriptionKo: "이동과 시야를 막는 단단한 벽입니다.",
-    descriptionEn: "A solid wall that blocks movement and sight.",
-  },
-  floor: {
-    nameKo: "석재 바닥",
-    nameEn: "Stone Floor",
-    descriptionKo: "특별한 효과 없이 걸을 수 있는 바닥입니다.",
-    descriptionEn: "Ordinary walkable dungeon floor.",
-  },
-  grass: {
-    nameKo: "짧은 풀",
-    nameEn: "Short Grass",
-    descriptionKo: "이미 밟혀 낮아진 풀입니다. 이동과 시야를 막지 않습니다.",
-    descriptionEn: "Trampled grass that no longer blocks movement or sight.",
-  },
-  highGrass: {
-    nameKo: "높은 풀",
-    nameEn: "High Grass",
-    descriptionKo: "시야를 가리는 수풀입니다. 밟으면 낮아지며 불이 빠르게 번집니다.",
-    descriptionEn: "Dense grass that blocks sight, flattens when crossed, and readily catches fire.",
-  },
-  water: {
-    nameKo: "얕은 물",
-    nameEn: "Shallow Water",
-    descriptionKo: "걸어서 건널 수 있습니다. 불을 끄며 전기가 연결된 물웅덩이를 따라 전도됩니다.",
-    descriptionEn: "Walkable water that extinguishes fire and conducts electricity through connected pools.",
-  },
-  entrance: {
-    nameKo: "층 입구",
-    nameEn: "Floor Entrance",
-    descriptionKo: "원정대가 이번 층에 들어온 지점입니다.",
-    descriptionEn: "The point where the party entered this floor.",
-  },
-  exit: {
-    nameKo: "하강 계단",
-    nameEn: "Down Stairway",
-    descriptionKo: "현재 층의 잠금을 해결한 뒤 다음 층으로 내려가는 출구입니다.",
-    descriptionEn: "The way down after the floor's locked route has been opened.",
-  },
-  door: {
-    nameKo: "닫힌 문",
-    nameEn: "Closed Door",
-    descriptionKo: "열 때 1턴을 소비하며, 닫힌 동안 이동과 시야를 막습니다.",
-    descriptionEn: "Opening it costs a turn; while closed it blocks movement and sight.",
-  },
-  openDoor: {
-    nameKo: "열린 문",
-    nameEn: "Open Door",
-    descriptionKo: "현재 열려 있어 이동과 시야가 통하는 문입니다.",
-    descriptionEn: "An open doorway that currently allows movement and sight.",
-  },
-  lockedDoor: {
-    nameKo: "잠긴 문",
-    nameEn: "Locked Door",
-    descriptionKo: "이 층의 쇠 열쇠가 있어야 열 수 있습니다. 상호작용에는 1턴이 듭니다.",
-    descriptionEn: "Requires this floor's iron key and costs one turn to unlock.",
-  },
-};
-
-const OBJECT_DETAILS: Record<
-  keyof typeof OBJECT_SPRITES,
-  { descriptionKo: string; descriptionEn: string }
-> = {
-  chest: {
-    descriptionKo: "일반 장비 한 점을 보관한 나무 상자입니다. 가까이에서 조사하면 열 수 있습니다.",
-    descriptionEn: "A wooden chest holding one equipment reward. Interact nearby to open it.",
-  },
-  crystalChest: {
-    descriptionKo: "희귀한 장비가 담긴 수정 상자입니다. 가까이에서 조사하면 열 수 있습니다.",
-    descriptionEn: "A crystal chest containing rare equipment. Interact nearby to open it.",
-  },
-  tomb: {
-    descriptionKo: "오래된 장비가 묻힌 무덤입니다. 가까이에서 조사하면 내용물을 꺼낼 수 있습니다.",
-    descriptionEn: "An old tomb concealing equipment. Interact nearby to recover it.",
-  },
-  alchemy: {
-    descriptionKo: "가까이에서 조사하면 연금술 창을 열 수 있는 재사용 작업대입니다.",
-    descriptionEn: "A reusable workbench that opens the alchemy interface when investigated nearby.",
-  },
-};
-
-const CLOUD_DETAILS: Record<
-  CloudKind,
-  { nameKo: string; nameEn: string; descriptionKo: string; descriptionEn: string }
-> = {
-  fire: {
-    nameKo: "화염 장판",
-    nameEn: "Burning Ground",
-    descriptionKo: "머무는 대상을 태우며 수풀과 문을 따라 빠르게 번집니다. 물 위에는 유지되지 않습니다.",
-    descriptionEn: "Burns occupants and spreads quickly through grass and doors, but cannot persist on water.",
-  },
-  frost: {
-    nameKo: "냉기 장판",
-    nameEn: "Frost Field",
-    descriptionKo: "대상에게 한기를 누적시키고 심해지면 빙결시킵니다.",
-    descriptionEn: "Builds chill on occupants and can eventually freeze them.",
-  },
-  paralytic: {
-    nameKo: "마비 가스",
-    nameEn: "Paralytic Gas",
-    descriptionKo: "들이마신 대상을 일정 시간 행동할 수 없게 만듭니다.",
-    descriptionEn: "Prevents affected targets from acting for a time.",
-  },
-  toxic: {
-    nameKo: "맹독 가스",
-    nameEn: "Toxic Gas",
-    descriptionKo: "범위 안의 대상에게 지속적인 독 피해를 줍니다.",
-    descriptionEn: "Poisons targets within the affected area over time.",
-  },
-  corrosive: {
-    nameKo: "부식 가스",
-    nameEn: "Corrosive Gas",
-    descriptionKo: "방어를 무시하는 부식 피해를 지속적으로 줍니다.",
-    descriptionEn: "Deals ongoing corrosive damage that bypasses defense.",
-  },
-  storm: {
-    nameKo: "폭풍 구름",
-    nameEn: "Storm Cloud",
-    descriptionKo: "범위 안을 물로 적시고 번개가 전도되기 쉬운 환경을 만듭니다.",
-    descriptionEn: "Soaks its area and creates favorable conditions for conducting lightning.",
-  },
-};
-
 const itemStatSummary = (
   itemId: string,
   language: UiLanguage = "ko",
@@ -1119,7 +662,6 @@ const itemStatSummary = (
 };
 
 const FLEX_SLOT_INDEXES = [0, 1, 2, 3] as const;
-const FLEX_RING_KEYS = ["ring", "ring2", "ring3", "ring4"] as const;
 const PARTY_GEAR_TARGETS: LoadoutTarget[] = [
   { kind: "equipment", slot: "weapon" },
   { kind: "equipment", slot: "armor" },
@@ -1137,50 +679,13 @@ const PARTY_LOADOUT_TARGETS: LoadoutTarget[] = [
   ...PARTY_GEAR_TARGETS,
   ...PARTY_QUICKSLOT_TARGETS,
 ];
-const isPartyQuickslotTarget = (target: LoadoutTarget) =>
-  target.kind === "flex" &&
-  COMPANION_QUICKSLOT_INDEXES.includes(
-    target.index as (typeof COMPANION_QUICKSLOT_INDEXES)[number],
-  );
 const equipmentKeyForSelection = (target: PlayerLoadoutSelection) =>
   target.kind === "equipment"
     ? target.slot
     : FLEX_RING_KEYS[target.index];
 
-const itemSpriteOffset = (itemId: string) =>
-  ITEM_DEFS[itemId]?.category === "ring" ? RING_SPRITE_OFFSET : { x: 0, y: 0 };
-
 const clamp = (value: number, minimum: number, maximum: number) =>
   Math.max(minimum, Math.min(maximum, value));
-
-const clampCamera = (
-  camera: Point,
-  zoom: number,
-  state: Pick<GameState, "width" | "height">,
-) => {
-  const clampAxis = (value: number, worldSize: number, viewSize: number) => {
-    const visibleWorldSize = viewSize / zoom;
-    // Allow most of the map to move beyond an edge. This keeps overview zoom
-    // useful and lets players deliberately frame rooms away from the centre.
-    const overscroll = Math.max(
-      TILE_SIZE * 6,
-      Math.min(visibleWorldSize * 0.75, worldSize * 0.75),
-    );
-    if (worldSize <= visibleWorldSize) {
-      const centered = (worldSize - visibleWorldSize) / 2;
-      return clamp(value, centered - overscroll, centered + overscroll);
-    }
-    return clamp(
-      value,
-      -overscroll,
-      worldSize - visibleWorldSize + overscroll,
-    );
-  };
-  return {
-    x: clampAxis(camera.x, state.width * TILE_SIZE, VIEW_WIDTH),
-    y: clampAxis(camera.y, state.height * TILE_SIZE, VIEW_HEIGHT),
-  };
-};
 
 function ItemIcon({
   itemId,
@@ -1224,19 +729,19 @@ function ItemIcon({
   );
 }
 
-function ItemRarityMarker({
+function ItemGradeMarker({
   itemId,
   instance,
 }: {
   itemId: string;
   instance?: InventoryInstance | null;
 }) {
-  const rarity = resolveItemRarity(ITEM_DEFS[itemId], instance);
+  const grade = resolveItemGrade(ITEM_DEFS[itemId], instance);
   return (
     <span
       aria-hidden="true"
-      className="item-rarity-marker"
-      data-item-rarity={rarity}
+      className="item-grade-marker"
+      data-item-grade={grade}
     />
   );
 }
@@ -1264,7 +769,7 @@ function ItemSlotContents({
   const maxCharges = instance?.maxCharges ?? fallbackCharges;
   return (
     <>
-      <ItemRarityMarker itemId={itemId} instance={instance} />
+      <ItemGradeMarker itemId={itemId} instance={instance} />
       <ItemIcon itemId={itemId} size={size} />
       {upgradeLevel > 0 && (
         <span className="item-upgrade-badge">+{upgradeLevel}</span>
@@ -1315,7 +820,7 @@ function HeldItemCursor({ held }: { held: HeldSlotItem | null }) {
   return (
     <div
       className="held-item-cursor"
-      style={{ left: held.clientX + 14, top: held.clientY + 14 }}
+      style={{ left: held.clientX, top: held.clientY }}
       aria-hidden="true"
     >
       <ItemSlotContents
@@ -1692,7 +1197,9 @@ function CompanionPanel({
     },
     [clearPendingSlotActivation],
   );
-  const controlledDefinition = COMPANION_CLASSES[game.player.classId];
+  const controlledDefinition = COMPANION_PRESENTATIONS[game.player.classId];
+  const controlledProfession =
+    COMPANION_PROFESSIONS[game.player.professionId];
   const targets = PARTY_LOADOUT_TARGETS;
   const slotLabel = (target: LoadoutTarget) =>
     target.kind === "flex"
@@ -1814,7 +1321,7 @@ function CompanionPanel({
             />
             <div>
               <strong>{game.player.name}</strong>
-              <small>{language === "ko" ? controlledDefinition.nameKo : controlledDefinition.nameEn} · Lv.{game.player.level}</small>
+              <small>{language === "ko" ? controlledProfession.nameKo : controlledProfession.nameEn} · Lv.{game.player.level}</small>
               <small>HP {game.player.hp}/{game.player.maxHp}</small>
             </div>
           </button>
@@ -1931,7 +1438,8 @@ function CompanionPanel({
         </article>
 
         {companions.map((companion) => {
-          const classDefinition = COMPANION_CLASSES[companion.classId];
+          const classDefinition = COMPANION_PRESENTATIONS[companion.classId];
+          const profession = COMPANION_PROFESSIONS[companion.professionId];
           const displayName = language === "en" && companion.name === classDefinition.defaultNameKo
             ? classDefinition.defaultNameEn
             : companion.name;
@@ -1965,7 +1473,7 @@ function CompanionPanel({
                 />
                 <div>
                   <strong>{displayName}</strong>
-                  <small>{language === "ko" ? classDefinition.nameKo : classDefinition.nameEn} · Lv.{companion.level}</small>
+                  <small>{language === "ko" ? profession.nameKo : profession.nameEn} · Lv.{companion.level}</small>
                   <small>HP {companion.hp}/{companion.maxHp}</small>
                 </div>
               </button>
@@ -2095,7 +1603,7 @@ function CompanionPanel({
           <div>
             {COMPANION_CLASS_IDS.map((classId) => (
               <button type="button" key={classId} disabled={busy} onClick={() => onRecruit(classId)}>
-                {language === "ko" ? COMPANION_CLASSES[classId].nameKo : COMPANION_CLASSES[classId].nameEn}
+                {language === "ko" ? COMPANION_PRESENTATIONS[classId].nameKo : COMPANION_PRESENTATIONS[classId].nameEn}
               </button>
             ))}
           </div>
@@ -2344,7 +1852,8 @@ function PlayerInspector({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const player = game.player;
-  const definition = COMPANION_CLASSES[player.classId];
+  const definition = COMPANION_PRESENTATIONS[player.classId];
+  const profession = COMPANION_PROFESSIONS[player.professionId];
   const equipment = PARTY_LOADOUT_TARGETS.map((target) => [
     target.kind === "equipment"
       ? target.slot === "weapon" ? text("무기", "Weapon") : text("갑옷", "Armor")
@@ -2379,7 +1888,7 @@ function PlayerInspector({
           />
           <div>
             <p>{text("조작 캐릭터", "Controlled Character")}</p>
-            <h3>{player.name} · {language === "ko" ? definition.nameKo : definition.nameEn} · Lv.{player.level}</h3>
+            <h3>{player.name} · {language === "ko" ? profession.nameKo : profession.nameEn} · Lv.{player.level}</h3>
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label={text("조사 닫기", "Close inspection")}>×</button>
@@ -2460,7 +1969,8 @@ function CompanionInspector({
   const language = useUiLanguage();
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
-  const definition = COMPANION_CLASSES[companion.classId];
+  const definition = COMPANION_PRESENTATIONS[companion.classId];
+  const profession = COMPANION_PROFESSIONS[companion.professionId];
   const displayName =
     language === "en" && companion.name === definition.defaultNameKo
       ? definition.defaultNameEn
@@ -2507,7 +2017,7 @@ function CompanionInspector({
           />
           <div>
             <p>{text("동료 조사", "Companion Scan")}</p>
-            <h3>{displayName} · {language === "ko" ? definition.nameKo : definition.nameEn}</h3>
+            <h3>{displayName} · {language === "ko" ? profession.nameKo : profession.nameEn}</h3>
           </div>
         </div>
         <button type="button" onClick={onClose} aria-label={text("조사 닫기", "Close inspection")}>×</button>
@@ -2518,10 +2028,13 @@ function CompanionInspector({
       </div>
       <div className="entity-stat-grid entity-stat-grid--wide">
         <span><small>{text("생명력", "Health")}</small><strong>{companion.hp}/{companion.maxHp}</strong></span>
+        <span><small>{text("경험치", "Experience")}</small><strong>{companion.level >= MAX_PLAYER_LEVEL ? "MAX" : `${companion.xp}/${companion.nextXp}`}</strong></span>
         <span><small>{text("공격력", "Attack")}</small><strong>{getCompanionAttack(companion)}</strong></span>
         <span><small>{text("방어력", "Defense")}</small><strong>{getCompanionDefense(companion)}</strong></span>
         <span><small>{text("명중", "Accuracy")}</small><strong>{getCompanionAccuracy(companion)}</strong></span>
         <span><small>{text("회피", "Evasion")}</small><strong>{getCompanionEvasion(companion)}</strong></span>
+        <span><small>{text("이동 속도", "Move Speed")}</small><strong>×{getCompanionMoveSpeed(companion).toFixed(2)}</strong></span>
+        <span><small>{text("공격 속도", "Attack Speed")}</small><strong>×{getCompanionAttackSpeed(companion).toFixed(2)}</strong></span>
         <span><small>{text("시야", "Vision")}</small><strong>{getCompanionViewDistance(companion)}</strong></span>
       </div>
       <div className="character-trait-list">
@@ -2882,12 +2395,6 @@ function ItemDetailModal({
           maximum: 8,
           color: "#78c990",
         },
-        {
-          label: text("품질", "Quality"),
-          value: profile.quality,
-          maximum: 5,
-          color: "#d8b66b",
-        },
       ]
     : [];
   const canEnchant =
@@ -2931,9 +2438,12 @@ function ItemDetailModal({
                 : ""}
             </h2>
             {instance && (
-              <span>
-                {text("개별 장비 · 품질", "Individual gear · Quality")}{" "}
-                {profile?.quality ?? 3}/5
+              <span
+                className="item-detail-grade"
+                data-item-grade={profile?.grade}
+              >
+                {text("개별 장비", "Individual gear")} · {profile?.grade ?? "C"}
+                {text("급", " grade")}
                 {instance.cursed
                   ? text(" · 저주받음", " · Cursed")
                   : ""}
@@ -2995,8 +2505,8 @@ function ItemDetailModal({
                 <span>{text("아이템 능력치", "Item Statistics")}</span>
                 <small>
                   {text(
-                    "같은 장비라도 품질과 특성에 따라 수치가 달라집니다.",
-                    "Stats vary with each item's quality and traits.",
+                    "기본 수치는 등급마다 20% 상승하며 강화와 인챈트는 별도로 적용됩니다.",
+                    "Base stats rise 20% per grade; upgrades and enchantments apply separately.",
                   )}
                 </small>
               </div>
@@ -3034,21 +2544,22 @@ function ItemDetailModal({
               </div>
               <ul>
                 {traits.length ? (
-                  traits.map((trait) => (
+                  traits.map((trait, index) => (
                     <li
-                      key={trait.id}
+                      key={`${trait.id}-${trait.grade}-${index}`}
+                      data-enchantment-grade={trait.grade}
                       style={
-                        { "--trait-accent": trait.accent } as CSSProperties
+                        { "--trait-accent": trait.gradeColor } as CSSProperties
                       }
                     >
                       <strong>
-                        {language === "ko" ? trait.name : humanizeId(trait.id)}{" "}
-                        {trait.rank > 1 ? `ⅹ${trait.rank}` : ""}
+                        <em>{trait.grade}</em>{" "}
+                        {language === "ko" ? trait.name : trait.nameEn}
                       </strong>
                       <span>
                         {language === "ko"
                           ? trait.description
-                          : `This equipment trait is active at rank ${trait.rank}.`}
+                          : trait.descriptionEn}
                       </span>
                     </li>
                   ))
@@ -3859,8 +3370,8 @@ function HelpModal({ onClose }: { onClose: () => void }) {
             <h3>{text("오픈소스 고지", "Open-source Notice")}</h3>
             <p>
               {text(
-                "이 비공식 웹 프로토타입은 Shattered Pixel Dungeon v3.3.8의 코드 구조와 그래픽·효과음 자산을 수정·재구성했습니다. 원작은 Evan Debenham, Pixel Dungeon은 Oleg Dolya의 저작물이며 GPL-3.0-or-later에 따라 제공됩니다.",
-                "This unofficial web prototype adapts code structures, graphics, and audio from Shattered Pixel Dungeon v3.3.8. The original is by Evan Debenham, Pixel Dungeon is by Oleg Dolya, and the work is provided under GPL-3.0-or-later.",
+                "이 비공식 웹 프로토타입은 Shattered Pixel Dungeon v3.3.8의 코드 구조와 그래픽·효과음·배경음악 자산을 수정·재구성했습니다. 원작은 Evan Debenham, Pixel Dungeon은 Oleg Dolya의 저작물이며 GPL-3.0-or-later에 따라 제공됩니다.",
+                "This unofficial web prototype adapts code structures, graphics, sound effects, and music from Shattered Pixel Dungeon v3.3.8. The original is by Evan Debenham, Pixel Dungeon is by Oleg Dolya, and the work is provided under GPL-3.0-or-later.",
               )}
             </p>
             <p>
@@ -3902,20 +3413,24 @@ function SettingsModal({
   uiScale,
   fontScale,
   language,
+  soundEnabled,
   developerMode,
   onScaleChange,
   onFontScaleChange,
   onLanguageChange,
+  onSoundEnabledChange,
   onDeveloperModeChange,
   onClose,
 }: {
   uiScale: number;
   fontScale: number;
   language: UiLanguage;
+  soundEnabled: boolean;
   developerMode: boolean;
   onScaleChange: (scale: number) => void;
   onFontScaleChange: (scale: number) => void;
   onLanguageChange: (language: UiLanguage) => void;
+  onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
   onClose: () => void;
 }) {
@@ -4052,6 +3567,27 @@ function SettingsModal({
               aria-pressed={language === "en"}
             >
               English
+            </button>
+          </div>
+          <div className="developer-setting">
+            <div>
+              <span>{text("게임 소리", "Game audio")}</span>
+              <p>
+                {text(
+                  "배경음악과 전투·스킬·인터페이스 효과음을 함께 켜거나 끕니다.",
+                  "Turns music, combat, skill, and interface sounds on or off together.",
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              className={soundEnabled ? "is-active" : ""}
+              onClick={() => onSoundEnabledChange(!soundEnabled)}
+              aria-pressed={soundEnabled}
+            >
+              {soundEnabled
+                ? text("켜짐", "On")
+                : text("꺼짐", "Off")}
             </button>
           </div>
           <div className="developer-setting">
@@ -4761,6 +4297,19 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
   }
 };
 
+const uiAudioControlAt = (target: EventTarget | null) => {
+  if (!(target instanceof Element)) return null;
+  const control = target.closest(
+    "button, a[href], select, summary, [role='button'], [role='tab'], [role='switch']",
+  );
+  if (
+    !control ||
+    control.matches(":disabled") ||
+    control.getAttribute("aria-disabled") === "true"
+  ) return null;
+  return control;
+};
+
 function CampaignHeader({
   warehouseCount,
   expeditions,
@@ -4810,9 +4359,131 @@ function CampaignHeader({
   );
 }
 
+function DeveloperDungeonLoot({
+  dungeon,
+  onInspect,
+}: {
+  dungeon: DungeonDefinition;
+  onInspect: (preview: ItemDetailPreview) => void;
+}) {
+  const stackGroups = new Map<
+    string,
+    {
+      key: string;
+      itemId: string;
+      quantity: number;
+      instance: InventoryInstance | null;
+      floors: Set<number>;
+      sources: Set<string>;
+    }
+  >();
+  const sourceLabel = {
+    ground: "바닥",
+    object: "오브젝트",
+    enemy: "적 드롭",
+  } as const;
+  const displayEntries: Array<{
+    key: string;
+    itemId: string;
+    quantity: number;
+    instance: InventoryInstance | null;
+    floors: Set<number>;
+    sources: Set<string>;
+  }> = [];
+  dungeon.lootPlan.forEach((entry) => {
+    const source = sourceLabel[entry.source];
+    if (entry.instance) {
+      displayEntries.push({
+        key: entry.id,
+        itemId: entry.defId,
+        quantity: entry.quantity,
+        instance: entry.instance,
+        floors: new Set([entry.floor]),
+        sources: new Set([source]),
+      });
+      return;
+    }
+    const existing = stackGroups.get(entry.defId);
+    if (existing) {
+      existing.quantity += entry.quantity;
+      existing.floors.add(entry.floor);
+      existing.sources.add(source);
+      return;
+    }
+    stackGroups.set(entry.defId, {
+      key: `stack-${entry.defId}`,
+      itemId: entry.defId,
+      quantity: entry.quantity,
+      instance: null,
+      floors: new Set([entry.floor]),
+      sources: new Set([source]),
+    });
+  });
+  displayEntries.push(...stackGroups.values());
+  displayEntries.sort(
+    (a, b) =>
+      Math.min(...a.floors) - Math.min(...b.floors) ||
+      (ITEM_DEFS[a.itemId]?.name ?? a.itemId).localeCompare(
+        ITEM_DEFS[b.itemId]?.name ?? b.itemId,
+      ),
+  );
+  const totalQuantity = dungeon.lootPlan.reduce(
+    (total, entry) => total + entry.quantity,
+    0,
+  );
+  return (
+    <details
+      className="developer-loot-preview"
+      style={{ "--dungeon-accent": dungeon.accent } as CSSProperties}
+      open
+    >
+      <summary>
+        <span>DEV · 전체 전리품</span>
+        <b>{totalQuantity}개</b>
+      </summary>
+      <p>맵 생성 전 확정된 목록 · 수풀의 확률 드롭 제외</p>
+      <div className="fixed-item-grid developer-loot-grid">
+        {displayEntries.map((entry) => {
+          const floors = [...entry.floors].sort((a, b) => a - b).join(", ");
+          const sources = [...entry.sources].join(" · ");
+          const itemName = ITEM_DEFS[entry.itemId]?.name ?? entry.itemId;
+          return (
+            <button
+              type="button"
+              className="fixed-item-slot is-filled"
+              key={entry.key}
+              title={`${itemName} · ${floors}층 · ${sources}`}
+              aria-label={`${itemName}, ${floors}층, ${sources}`}
+              onClick={(event) =>
+                onInspect({
+                  itemId: entry.itemId,
+                  itemRef: entry.instance?.id ?? entry.key,
+                  instance: entry.instance,
+                  quantity: entry.quantity,
+                  contextLabel: `${dungeon.nameKo} 전체 전리품 · ${floors}층 · ${sources}`,
+                  anchor: descriptionAnchorFromElement(event.currentTarget),
+                })
+              }
+            >
+              <ItemSlotContents
+                itemId={entry.itemId}
+                size={32}
+                instance={entry.instance}
+                quantity={entry.quantity}
+                showQuantity={entry.quantity > 1}
+              />
+            </button>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 function HubScreen({
   campaign,
   dungeons,
+  developerMode,
   onSelectDungeon,
   onOpenWarehouse,
   onOpenCompendium,
@@ -4821,6 +4492,7 @@ function HubScreen({
 }: {
   campaign: CampaignSave;
   dungeons: DungeonDefinition[];
+  developerMode: boolean;
   onSelectDungeon: (dungeon: DungeonDefinition) => void;
   onOpenWarehouse: () => void;
   onOpenCompendium: () => void;
@@ -4831,7 +4503,10 @@ function HubScreen({
   const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
   const rosterLeader = campaign.companions[0];
   const rosterLeaderDefinition = rosterLeader
-    ? COMPANION_CLASSES[rosterLeader.classId]
+    ? COMPANION_PRESENTATIONS[rosterLeader.classId]
+    : null;
+  const rosterLeaderProfession = rosterLeader
+    ? COMPANION_PROFESSIONS[rosterLeader.professionId]
     : null;
   return (
     <main className="campaign-page">
@@ -4871,13 +4546,14 @@ function HubScreen({
           )}
           <div>
             <small>첫 원정대원</small>
-            <strong>{rosterLeader?.name ?? "모험가"} · LV.{rosterLeader?.level ?? 1}</strong>
+            <strong>{rosterLeader?.name ?? "모험가"} · {rosterLeaderProfession?.nameKo ?? "전사"} · LV.{rosterLeader?.level ?? 1}</strong>
             <span>동료 {campaign.companions.length}명 대기</span>
           </div>
         </div>
       </section>
       <section className="dungeon-board" aria-label="탐험할 던전 선택">
         {dungeons.map((dungeon, index) => {
+          const mainLootEntries = selectMainLootEntries(dungeon.lootPlan);
           return (
             <article
               className="dungeon-contract"
@@ -4897,10 +4573,11 @@ function HubScreen({
                   <dt>난이도</dt>
                   <dd>
                     <span className="difficulty-pips" aria-hidden="true">
-                      {[1, 2, 3].map((pip) => (
+                      {[1, 2, 3, 4, 5, 6, 7].map((pip) => (
                         <i key={pip} className={pip <= dungeon.difficulty ? "is-on" : ""} />
                       ))}
                     </span>
+                    <b className="difficulty-grade">{dungeon.difficultyGrade}</b>
                     {dungeon.difficultyLabelKo}
                   </dd>
                 </div>
@@ -4915,29 +4592,43 @@ function HubScreen({
                   <em>아이템칸을 눌러 설명 보기</em>
                 </header>
                 <div className="fixed-item-grid dungeon-drop-grid">
-                  {dungeon.mainDropIds.map((itemId) => (
+                  {mainLootEntries.map((entry) => (
                     <button
                       type="button"
                       className="fixed-item-slot is-filled"
-                      key={itemId}
-                      title={ITEM_DEFS[itemId]?.name}
-                      aria-label={`${ITEM_DEFS[itemId]?.name ?? itemId} 설명 보기`}
+                      key={entry.id}
+                      title={ITEM_DEFS[entry.defId]?.name}
+                      aria-label={`${ITEM_DEFS[entry.defId]?.name ?? entry.defId} 설명 보기`}
                       onClick={(event) =>
                         setItemPreview({
-                          itemId,
-                          itemRef: `recommended-${dungeon.id}-${itemId}`,
-                          instance: null,
-                          quantity: 1,
+                          itemId: entry.defId,
+                          itemRef:
+                            entry.instance?.id ??
+                            `recommended-${dungeon.id}-${entry.id}`,
+                          instance: entry.instance ?? null,
+                          quantity: entry.quantity,
                           contextLabel: `${dungeon.nameKo} 주요 전리품`,
                           anchor: descriptionAnchorFromElement(event.currentTarget),
                         })
                       }
                     >
-                      <ItemSlotContents itemId={itemId} size={34} />
+                      <ItemSlotContents
+                        itemId={entry.defId}
+                        size={34}
+                        instance={entry.instance}
+                        quantity={entry.quantity}
+                        showQuantity={entry.quantity > 1}
+                      />
                     </button>
                   ))}
                 </div>
               </div>
+              {developerMode && (
+                <DeveloperDungeonLoot
+                  dungeon={dungeon}
+                  onInspect={setItemPreview}
+                />
+              )}
               <button type="button" onClick={() => onSelectDungeon(dungeon)}>
                 이 던전 준비하기 <span aria-hidden="true">→</span>
               </button>
@@ -4957,7 +4648,7 @@ function HubScreen({
             .slice(0, 5)
             .map(([itemId, quantity]) => (
               <span key={itemId} title={ITEM_DEFS[itemId]?.name}>
-                <ItemRarityMarker itemId={itemId} />
+                <ItemGradeMarker itemId={itemId} />
                 <ItemIcon itemId={itemId} size={28} />
                 <b>×{quantity}</b>
               </span>
@@ -5090,6 +4781,7 @@ function WarehouseModal({
 function PreparationScreen({
   dungeon,
   campaign,
+  developerMode,
   loadout,
   selectedCompanionIds,
   onCompanionToggle,
@@ -5098,6 +4790,7 @@ function PreparationScreen({
 }: {
   dungeon: DungeonDefinition;
   campaign: CampaignSave;
+  developerMode: boolean;
   loadout: ExpeditionLoadout;
   selectedCompanionIds: string[];
   onCompanionToggle: (id: string) => void;
@@ -5316,7 +5009,8 @@ function PreparationScreen({
     companion: Companion,
     placement: "party" | "reserve",
   ) => {
-    const definition = COMPANION_CLASSES[companion.classId];
+    const definition = COMPANION_PRESENTATIONS[companion.classId];
+    const profession = COMPANION_PROFESSIONS[companion.professionId];
     const selected = selectedCompanionIds.includes(companion.id);
     const disabled = !selected && selectedCompanionIds.length >= 3;
     const isControlled = placement === "party" && selectedCompanionIds[0] === companion.id;
@@ -5357,7 +5051,7 @@ function PreparationScreen({
             />
           </button>
           <div>
-            <small>{isControlled ? "조작 캐릭터 · " : ""}{definition.nameKo}</small>
+            <small>{isControlled ? "조작 캐릭터 · " : ""}{profession.nameKo}</small>
             <strong>{companion.name}</strong>
             <em>LV.{companion.level} · EXP {companion.xp}/{companion.nextXp || "MAX"}</em>
           </div>
@@ -5413,8 +5107,11 @@ function PreparationScreen({
       </header>
       <section className="selected-contract" style={{ "--dungeon-accent": dungeon.accent } as CSSProperties}>
         <div><small>선택한 던전</small><h2>{dungeon.nameKo}</h2><p>{dungeon.descriptionKo}</p></div>
-        <dl><div><dt>난이도</dt><dd>{dungeon.difficultyLabelKo}</dd></div><div><dt>깊이</dt><dd>{dungeon.floorCount}층</dd></div></dl>
+        <dl><div><dt>난이도</dt><dd><span className="difficulty-pips" aria-hidden="true">{[1, 2, 3, 4, 5, 6, 7].map((pip) => <i key={pip} className={pip <= dungeon.difficulty ? "is-on" : ""} />)}</span><b className="difficulty-grade">{dungeon.difficultyGrade}</b>{dungeon.difficultyLabelKo}</dd></div><div><dt>깊이</dt><dd>{dungeon.floorCount}층</dd></div></dl>
       </section>
+      {developerMode && (
+        <DeveloperDungeonLoot dungeon={dungeon} onInspect={setItemPreview} />
+      )}
       <div className="preparation-workspace">
         <div className="preparation-inventory-stack">
           <section className="preparation-panel preparation-bag-panel">
@@ -5575,13 +5272,16 @@ function ResultsScreen({
 type DungeonRunProps = {
   initialGame: GameState;
   dungeon: DungeonDefinition;
+  audioRuntimeRef: MutableRefObject<GameAudioRuntime | null>;
   uiScale: number;
   fontScale: number;
   language: UiLanguage;
+  soundEnabled: boolean;
   developerMode: boolean;
   onScaleChange: (scale: number) => void;
   onFontScaleChange: (scale: number) => void;
   onLanguageChange: (language: UiLanguage) => void;
+  onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
   onFinish: (
     outcome: ExpeditionOutcome,
@@ -5593,13 +5293,16 @@ type DungeonRunProps = {
 function DungeonRun({
   initialGame,
   dungeon,
+  audioRuntimeRef,
   uiScale,
   fontScale,
   language,
+  soundEnabled,
   developerMode,
   onScaleChange,
   onFontScaleChange,
   onLanguageChange,
+  onSoundEnabledChange,
   onDeveloperModeChange,
   onFinish,
 }: DungeonRunProps) {
@@ -5622,7 +5325,6 @@ function DungeonRun({
   const [inspectMode, setInspectMode] = useState(false);
   const [inspectedEntity, setInspectedEntity] =
     useState<InspectedEntity | null>(null);
-  const [soundEnabled, setSoundEnabled] = useState(true);
   const [throwingItemId, setThrowingItemId] = useState<string | null>(null);
   const [castingItemId, setCastingItemId] = useState<string | null>(null);
   const [pendingCompanionSkill, setPendingCompanionSkill] =
@@ -5697,10 +5399,8 @@ function DungeonRun({
   const manualPartyModeRef = useRef(false);
   const controlledActorIdRef = useRef(PLAYER_ID);
   const manualActedIdsRef = useRef(new Set<string>());
-  const suggestedAimTargetRef = useRef<Point | null>(null);
+  const targetingOverlayRef = useRef<TargetingOverlay | null>(null);
   const inspectModeRef = useRef(false);
-  const soundsRef = useRef<Record<SoundName, HTMLAudioElement> | null>(null);
-  const magicAudioContextRef = useRef<AudioContext | null>(null);
   const hoverRef = useRef<Point | null>(null);
   const pathRef = useRef<Point[]>([]);
   const autoTravelRef = useRef(false);
@@ -5760,9 +5460,9 @@ function DungeonRun({
         (total, enemy) => total + enemy.xp,
         0,
       );
-      runStatsRef.current.itemsFound += pickups.length;
-      pickups.forEach((pickup) => {
-        if (ITEM_DEFS[pickup.defId]?.category === "key") return;
+      const newlyFound = newExpeditionPickups(pickups);
+      runStatsRef.current.itemsFound += newlyFound.length;
+      newlyFound.forEach((pickup) => {
         runStatsRef.current.loot[pickup.defId] =
           (runStatsRef.current.loot[pickup.defId] ?? 0) +
           Math.max(1, pickup.quantity ?? 1);
@@ -5849,11 +5549,67 @@ function DungeonRun({
   }, [manualActedIds]);
 
   useEffect(() => {
-    suggestedAimTargetRef.current =
-      pendingQuickslotAim?.suggestedTarget ??
-      pendingCompanionSkill?.suggestedTarget ??
-      null;
-  }, [pendingCompanionSkill, pendingQuickslotAim]);
+    if (pendingCompanionSkill) {
+      const definition = COMPANION_SKILLS[pendingCompanionSkill.skillId];
+      const origin = partyActor(
+        gameRef.current,
+        pendingCompanionSkill.casterId,
+      );
+      targetingOverlayRef.current = {
+        mode: "skill",
+        originActorId: pendingCompanionSkill.casterId,
+        suggestedTarget: pendingCompanionSkill.suggestedTarget,
+        range: definition.range,
+        targetableTiles: skillTargetableTiles(
+          gameRef.current,
+          origin,
+          definition.range,
+          definition.requiresLineOfFire,
+        ),
+        accent: definition.accent,
+      };
+      return;
+    }
+    if (pendingQuickslotAim) {
+      targetingOverlayRef.current = {
+        mode: "quickslot",
+        originActorId: pendingQuickslotAim.ownerId,
+        suggestedTarget: pendingQuickslotAim.suggestedTarget,
+        range: null,
+        targetableTiles: null,
+        accent: "#8cecff",
+      };
+      return;
+    }
+    if (castingItemId) {
+      targetingOverlayRef.current = {
+        mode: "wand",
+        originActorId: PLAYER_ID,
+        suggestedTarget: null,
+        range: null,
+        targetableTiles: null,
+        accent: "#b8a8ff",
+      };
+      return;
+    }
+    if (throwingItemId) {
+      targetingOverlayRef.current = {
+        mode: "throw",
+        originActorId: PLAYER_ID,
+        suggestedTarget: null,
+        range: null,
+        targetableTiles: null,
+        accent: "#ffd486",
+      };
+      return;
+    }
+    targetingOverlayRef.current = null;
+  }, [
+    castingItemId,
+    pendingCompanionSkill,
+    pendingQuickslotAim,
+    throwingItemId,
+  ]);
 
   useEffect(() => {
     inspectModeRef.current = inspectMode;
@@ -5870,113 +5626,63 @@ function DungeonRun({
   }, []);
 
   useEffect(() => {
-    soundsRef.current = (
-      Object.entries(SOUND_PATHS) as Array<[SoundName, string]>
-    ).reduce(
-      (sounds, [name, path]) => {
-        const audio = new Audio(path);
-        audio.preload = "auto";
-        audio.load();
-        sounds[name] = audio;
-        return sounds;
-      },
-      {} as Record<SoundName, HTMLAudioElement>,
-    );
-    return () => {
-      soundsRef.current = null;
-    };
-  }, []);
+    const runtime = audioRuntimeRef.current;
+    if (!runtime) return;
+    runtime.setMusic(dungeonMusicPath(dungeon, game.floor));
+  }, [audioRuntimeRef, dungeon, game.floor]);
+
+  useEffect(
+    () => () => audioRuntimeRef.current?.setMusic(null),
+    [audioRuntimeRef],
+  );
 
   const playSound = useCallback(
     (
-      name: SoundName,
+      name: GameSoundId,
       volume = 0.62,
       delay = 0,
       playbackRate = 1,
     ) => {
       if (!soundEnabledRef.current) return;
       const play = () => {
-        const source = soundsRef.current?.[name];
-        if (!source || !soundEnabledRef.current) return;
-        const audio = source.cloneNode(true) as HTMLAudioElement;
-        audio.volume = volume;
-        audio.playbackRate = playbackRate;
-        void audio.play().catch(() => {
-          // Browsers can block sound until the first key, click, or touch input.
-        });
+        if (!soundEnabledRef.current) return;
+        audioRuntimeRef.current?.play(name, volume, playbackRate);
       };
       if (delay > 0) window.setTimeout(play, delay);
       else play();
     },
-    [],
+    [audioRuntimeRef],
   );
 
   const playWandSound = useCallback((wandId: string) => {
     if (!soundEnabledRef.current) return;
     const profiles: Record<
       string,
-      { start: number; end: number; wave: OscillatorType; duration: number; layer?: number }
+      { soundId: GameSoundId; volume: number; playbackRate?: number }
     > = {
-      wand_magic_missile: { start: 720, end: 1080, wave: "sine", duration: 0.24 },
-      wand_frost: { start: 980, end: 360, wave: "sine", duration: 0.48, layer: 1440 },
-      wand_fireblast: { start: 170, end: 68, wave: "sawtooth", duration: 0.52, layer: 260 },
-      wand_lightning: { start: 1420, end: 180, wave: "square", duration: 0.25, layer: 2100 },
-      wand_disintegration: { start: 520, end: 96, wave: "sawtooth", duration: 0.58 },
-      wand_prismatic_light: { start: 880, end: 1760, wave: "sine", duration: 0.46, layer: 1320 },
-      wand_corrosion: { start: 240, end: 92, wave: "triangle", duration: 0.6, layer: 135 },
-      wand_blast_wave: { start: 110, end: 52, wave: "square", duration: 0.34 },
-      wand_corruption: { start: 330, end: 82, wave: "sawtooth", duration: 0.7, layer: 247 },
-      wand_living_earth: { start: 120, end: 72, wave: "triangle", duration: 0.48, layer: 180 },
-      wand_regrowth: { start: 420, end: 760, wave: "sine", duration: 0.58, layer: 630 },
-      wand_transfusion: { start: 610, end: 240, wave: "sine", duration: 0.5, layer: 915 },
-      wand_warding: { start: 540, end: 940, wave: "triangle", duration: 0.42, layer: 1080 },
+      wand_magic_missile: { soundId: "skillMagic", volume: 0.52 },
+      wand_frost: { soundId: "shatter", volume: 0.5, playbackRate: 0.88 },
+      wand_fireblast: { soundId: "skillBlast", volume: 0.62 },
+      wand_lightning: { soundId: "skillLightning", volume: 0.58 },
+      wand_disintegration: { soundId: "skillMagic", volume: 0.58, playbackRate: 0.78 },
+      wand_prismatic_light: { soundId: "skillMagic", volume: 0.54, playbackRate: 1.18 },
+      wand_corrosion: { soundId: "skillGas", volume: 0.55 },
+      wand_blast_wave: { soundId: "skillBlast", volume: 0.6, playbackRate: 0.84 },
+      wand_corruption: { soundId: "skillShadow", volume: 0.57 },
+      wand_living_earth: { soundId: "skillImpact", volume: 0.58, playbackRate: 0.86 },
+      wand_regrowth: { soundId: "skillNature", volume: 0.55 },
+      wand_transfusion: { soundId: "skillHeal", volume: 0.54 },
+      wand_warding: { soundId: "skillMagic", volume: 0.5, playbackRate: 0.92 },
     };
     const profile =
       profiles[wandId] ??
-      { start: 560, end: 860, wave: "sine" as OscillatorType, duration: 0.35 };
-    try {
-      const AudioContextConstructor =
-        window.AudioContext ??
-        (window as typeof window & { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext;
-      if (!AudioContextConstructor) return;
-      const audioContext =
-        magicAudioContextRef.current ?? new AudioContextConstructor();
-      magicAudioContextRef.current = audioContext;
-      const now = audioContext.currentTime;
-      const playTone = (
-        frequency: number,
-        endFrequency: number,
-        volume: number,
-        offset = 0,
-      ) => {
-        const oscillator = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        oscillator.type = profile.wave;
-        oscillator.frequency.setValueAtTime(frequency, now + offset);
-        oscillator.frequency.exponentialRampToValueAtTime(
-          Math.max(24, endFrequency),
-          now + offset + profile.duration,
-        );
-        gain.gain.setValueAtTime(0.0001, now + offset);
-        gain.gain.exponentialRampToValueAtTime(volume, now + offset + 0.025);
-        gain.gain.exponentialRampToValueAtTime(
-          0.0001,
-          now + offset + profile.duration,
-        );
-        oscillator.connect(gain);
-        gain.connect(audioContext.destination);
-        oscillator.start(now + offset);
-        oscillator.stop(now + offset + profile.duration + 0.02);
-      };
-      playTone(profile.start, profile.end, 0.1);
-      if (profile.layer) {
-        playTone(profile.layer, Math.max(30, profile.end * 1.35), 0.045, 0.035);
-      }
-    } catch {
-      // Audio can be unavailable until the browser receives a direct gesture.
-    }
-  }, []);
+      { soundId: "skillMagic" as GameSoundId, volume: 0.52 };
+    audioRuntimeRef.current?.play(
+      profile.soundId,
+      profile.volume,
+      profile.playbackRate ?? 1,
+    );
+  }, [audioRuntimeRef]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5992,7 +5698,7 @@ function DungeonRun({
           "/assets/sprites/player.png",
           ...enemyKinds.map((kind) => ENEMY_SPRITES[kind].file),
           ...COMPANION_CLASS_IDS.map(
-            (classId) => COMPANION_CLASSES[classId].sprite,
+            (classId) => COMPANION_PRESENTATIONS[classId].sprite,
           ),
         ];
         const uniqueSources = [...new Set(sources)];
@@ -6024,7 +5730,7 @@ function DungeonRun({
         const companions = COMPANION_CLASS_IDS.reduce(
           (record, classId) => {
             const image = imagesBySource.get(
-              COMPANION_CLASSES[classId].sprite,
+              COMPANION_PRESENTATIONS[classId].sprite,
             );
             if (!image) throw new Error(`Missing companion image: ${classId}`);
             record[classId] = image;
@@ -6066,9 +5772,12 @@ function DungeonRun({
       motions.forEach((motion) => {
         const motionDuration =
           duration ?? durationForMotion(motion);
+        const isWalkingMotion =
+          motion.kind === "move" &&
+          (motion.travelStyle === undefined || motion.travelStyle === "walk");
         let motionStartedAt = now + delay;
         if (motion.id === PLAYER_ID) {
-          if (motion.kind === "move") {
+          if (isWalkingMotion) {
             const previousMoveEnd = playerMoveCycleEndsAtRef.current;
             const continuesPreviousMove =
               delay === 0 &&
@@ -6102,9 +5811,9 @@ function DungeonRun({
           duration: motionDuration,
         });
         const movingPlayer =
-          motion.id === PLAYER_ID && motion.kind === "move";
+          motion.id === PLAYER_ID && isWalkingMotion;
         const movingCompanion =
-          motion.kind === "move" &&
+          isWalkingMotion &&
           (gameRef.current.companions ?? []).some(
             (companion) => companion.id === motion.id,
           );
@@ -6359,7 +6068,7 @@ function DungeonRun({
       const soundCues = result.soundCues ?? [];
       const interactionEnd =
         result.interacted && !playerAttacked
-          ? result.interactionDuration ?? PLAYER_INTERACTION_DURATION
+          ? durationForInteraction(result.interactionKind)
           : 0;
       const throwEnd = throws.length
         ? Math.max(...throws.map(throwVisualDuration))
@@ -6368,6 +6077,10 @@ function DungeonRun({
       const deferResolution =
         Boolean(result.presentationState) &&
         (playerAttacked || result.interacted || throws.length > 0);
+      const sessionResolution = resolveGameSession(result, {
+        playerInvincible: developerModeRef.current,
+        manualParty: manualPartyModeRef.current,
+      });
       commitGame(
         withoutPendingAugmentModal(
           deferResolution
@@ -6391,7 +6104,7 @@ function DungeonRun({
                 effect.sourceId === itemThrow.id) &&
               effect.x === itemThrow.to.x &&
               effect.y === itemThrow.to.y &&
-              /^-\d+/.test(effect.text),
+              isDamageEffect(effect),
           );
           if (!hitEffect) return;
           const targetEnemy = visualStateBefore.enemies.find(
@@ -6407,7 +6120,7 @@ function DungeonRun({
           });
         });
         if (!result.itemBreak) {
-          const hardImpact = result.effects.length > 0;
+          const hardImpact = result.effects.some(isImpactEffect);
           playSound(
             hardImpact ? "hit" : "step",
             hardImpact ? 0.62 : 0.28,
@@ -6430,7 +6143,7 @@ function DungeonRun({
       soundCues
         .filter((cue) => !cue.atResolution)
         .forEach((cue) => playSound(cue.id, cue.volume ?? 0.62));
-      if (result.reachedExit && !result.state.gameOver) {
+      if (sessionResolution.kind === "floorExit") {
         recordRunProgress(visualStateBefore, result.state, pickups);
         const timeline = createTurnMotionTimeline(
           result.motions,
@@ -6455,7 +6168,7 @@ function DungeonRun({
           const hitEffect = result.effects.find(
             (effect) =>
               effect.sourceId === playerAttack.motion.id &&
-              /^-\d+/.test(effect.text),
+              isDamageEffect(effect),
           );
           if (hitEffect) {
             const targetEnemy = visualStateBefore.enemies.find(
@@ -6480,7 +6193,7 @@ function DungeonRun({
         }
         await wait(timeline.totalDuration);
         if (actionTokenRef.current !== token) return;
-        const floorAdvance = advanceExpeditionFloor(gameRef.current);
+        const floorAdvance = completeFloorExit(sessionResolution);
         if (floorAdvance.kind === "completed") {
           commitGame(result.state);
           finishCurrentExpedition("completed");
@@ -6525,22 +6238,11 @@ function DungeonRun({
         return;
       }
 
-      const enemyTurns: ActionResult[] = [];
-      const enemyTurnStarts: GameState[] = [];
-      let resolvedState = result.state;
-      for (
-        let index = 0;
-        index < elapsedTurns && !resolvedState.gameOver;
-        index += 1
-      ) {
-        enemyTurnStarts.push(resolvedState);
-        const enemyTurn = runEnemyTurn(resolvedState, {
-          playerInvincible: developerModeRef.current,
-          manualParty: manualPartyModeRef.current,
-        });
-        enemyTurns.push(enemyTurn);
-        resolvedState = enemyTurn.state;
-      }
+      const {
+        enemyTurns,
+        enemyTurnStarts,
+        state: resolvedState,
+      } = sessionResolution;
       recordRunProgress(visualStateBefore, resolvedState, pickups);
       if (enemyTurns.length && !deferResolution) {
         commitGame(withoutPendingAugmentModal(resolvedState));
@@ -6619,6 +6321,22 @@ function DungeonRun({
           .filter(({ motion }) => motion.kind === "attack")
           .map((scheduled) => [scheduled.motion.id, scheduled]),
       );
+      const skillTravelSchedule = new Map(
+        timeline.motions
+          .filter(
+            ({ motion }) =>
+              motion.kind === "move" &&
+              motion.travelStyle !== undefined &&
+              motion.travelStyle !== "walk",
+          )
+          .map((scheduled) => [scheduled.motion.id, scheduled]),
+      );
+      const skillTravelImpactDelay = (sourceId: string | undefined) => {
+        const travel = sourceId ? skillTravelSchedule.get(sourceId) : undefined;
+        return travel
+          ? travel.delay + impactDelayForMotion(travel.motion)
+          : actionLeadEnd;
+      };
       turnThrows.forEach((itemThrow) => {
         const attack = itemThrow.sourceId
           ? attackSchedule.get(itemThrow.sourceId)
@@ -6632,7 +6350,7 @@ function DungeonRun({
             effect.sourceId === itemThrow.sourceId &&
             effect.x === itemThrow.to.x &&
             effect.y === itemThrow.to.y &&
-            /^-\d+/.test(effect.text),
+            isDamageEffect(effect),
         );
         if (hitEffect) {
           addImpactVisual({
@@ -6676,7 +6394,7 @@ function DungeonRun({
             .reverse()
             .find(
               (effect) =>
-                effect.text === "처치!" &&
+                isDefeatEffect(effect) &&
                 effect.x === enemy.x &&
                 effect.y === enemy.y,
             );
@@ -6685,7 +6403,7 @@ function DungeonRun({
             : undefined;
           const removalDelay = attack
             ? attack.delay + attack.duration * 0.52
-            : actionLeadEnd;
+            : skillTravelImpactDelay(killEffect?.sourceId);
           deathSoundDelays.add(Math.max(0, Math.round(removalDelay)));
           if (removalDelay <= 0) return;
           defeatedEnemyVisualRef.current =
@@ -6717,7 +6435,7 @@ function DungeonRun({
               .reverse()
               .find(
                 (effect) =>
-                  effect.text === "전투 불능!" &&
+                  isDefeatEffect(effect) &&
                   effect.x === companion.x &&
                   effect.y === companion.y,
               );
@@ -6774,7 +6492,7 @@ function DungeonRun({
           ? throwImpactDelay(initialThrow)
           : attack
             ? attack.delay + attack.duration * 0.52
-            : actionLeadEnd;
+            : skillTravelImpactDelay(effect.sourceId);
         effectGroups.set(delay, [
           ...(effectGroups.get(delay) ?? []),
           effect,
@@ -6796,7 +6514,7 @@ function DungeonRun({
               effect.sourceId === motion.id &&
               effect.x === motion.to.x &&
               effect.y === motion.to.y &&
-              (/^-\d+/.test(effect.text) || effect.text === "무효"),
+              isImpactEffect(effect),
           );
           if (!hitEffect) return;
           const targetIsPlayer =
@@ -7128,6 +6846,7 @@ function DungeonRun({
       setSelectedInventoryItem(null);
       setPendingLoadoutItemRef(null);
       setPendingUpgradeScrollRef(null);
+      hoverRef.current = null;
       pathRef.current = [];
       autoTravelRef.current = false;
     },
@@ -7238,6 +6957,7 @@ function DungeonRun({
       setSelectedInventoryItem(null);
       setPendingLoadoutItemRef(null);
       setPendingUpgradeScrollRef(null);
+      hoverRef.current = null;
       pathRef.current = [];
       autoTravelRef.current = false;
     },
@@ -7607,15 +7327,13 @@ function DungeonRun({
         target.zone === "dungeonInventory"
       ) {
         const state = gameRef.current;
-        const slots = normalizePlayerInventorySlots(state.player);
-        if (slots[source.index] !== held.item.itemRef) return;
-        const next: GameState = {
-          ...state,
-          player: {
-            ...state.player,
-            inventorySlots: swapFixedSlots(slots, source.index, target.index),
-          },
-        };
+        const next = reorderDungeonInventory(
+          state,
+          source.index,
+          target.index,
+          held.item.itemRef,
+        );
+        if (next === state) return;
         commitGame(next);
         return;
       }
@@ -7634,14 +7352,14 @@ function DungeonRun({
             const before = gameRef.current;
             const beforeSlots = normalizePlayerInventorySlots(before.player);
             const beforeRefs = new Set(beforeSlots.filter(Boolean));
-            const result = target.zone === "playerEquipment"
+            let result = target.zone === "playerEquipment"
               ? assignPlayerItem(before, target.target, held.item.itemRef)
               : assignCompanionItem(
                   before,
                   target.companionId,
                   target.target,
                   held.item.itemRef,
-                );
+              );
             if (result.consumedTurn) {
               const afterSlots = normalizePlayerInventorySlots(result.state.player);
               const returnedRef = afterSlots.find(
@@ -7651,11 +7369,14 @@ function DungeonRun({
                   !beforeRefs.has(ref),
               );
               if (returnedRef) {
-                result.state.player.inventorySlots = swapFixedSlots(
-                  afterSlots,
-                  afterSlots.indexOf(returnedRef),
-                  source.index,
-                );
+                result = {
+                  ...result,
+                  state: placeReturnedItemInInventorySlot(
+                    result.state,
+                    returnedRef,
+                    source.index,
+                  ),
+                };
               }
             }
             await resolvePartyAction(
@@ -7676,7 +7397,7 @@ function DungeonRun({
             const before = gameRef.current;
             const beforeSlots = normalizePlayerInventorySlots(before.player);
             const targetRef = beforeSlots[target.index];
-            const result = targetRef
+            let result = targetRef
               ? source.zone === "playerEquipment"
                 ? assignPlayerItem(before, source.target, targetRef)
                 : assignCompanionItem(
@@ -7700,11 +7421,14 @@ function DungeonRun({
                   ? held.item.itemId
                   : null;
               if (returnedRef) {
-                result.state.player.inventorySlots = swapFixedSlots(
-                  afterSlots,
-                  afterSlots.indexOf(returnedRef),
-                  target.index,
-                );
+                result = {
+                  ...result,
+                  state: placeReturnedItemInInventorySlot(
+                    result.state,
+                    returnedRef,
+                    target.index,
+                  ),
+                };
               }
             }
             await resolvePartyAction(
@@ -7720,89 +7444,19 @@ function DungeonRun({
       }
 
       if (!isDungeonEquipment(source) || !isDungeonEquipment(target)) return;
-
       const state = gameRef.current;
-      const equipmentKey = (address: typeof source | typeof target) =>
-        address.target.kind === "equipment"
-          ? address.target.slot
-          : FLEX_RING_KEYS[address.target.index];
-      const readGear = (address: typeof source | typeof target) => {
-        const key = equipmentKey(address);
-        const owner = address.zone === "playerEquipment"
-          ? state.player
-          : state.companions.find(
-              (companion) => companion.id === address.companionId,
-            );
-        if (!owner) return null;
-        const defId = owner.equipment[key];
-        if (!defId) return null;
-        return {
-          key,
-          defId,
-          instance: owner.equipmentInstances[key] ?? null,
-        };
-      };
-      const sourceGear = readGear(source);
-      const targetGear = readGear(target);
-      if (!sourceGear) return;
-      if (sourceGear.instance?.cursed || targetGear?.instance?.cursed) {
-        commitGame({
-          ...state,
-          logs: [
-            ...state.logs,
-            "저주받은 장비는 위치를 바꾸거나 해제할 수 없습니다.",
-          ].slice(-80),
-        });
-        return;
-      }
-      const accepts = (defId: string, address: typeof source | typeof target) =>
-        address.target.kind === "equipment"
-          ? ITEM_DEFS[defId]?.slot === address.target.slot
-          : !isPartyQuickslotTarget(address.target) &&
-            ["ring", "artifact"].includes(
-              ITEM_DEFS[defId]?.category ?? "",
-            );
-      if (
-        !accepts(sourceGear.defId, target) ||
-        (targetGear && !accepts(targetGear.defId, source))
-      ) {
-        return;
-      }
-
-      const next: GameState = {
-        ...state,
-        player: {
-          ...state.player,
-          equipment: { ...state.player.equipment },
-          equipmentInstances: { ...state.player.equipmentInstances },
-        },
-        companions: state.companions.map((companion) => ({
-          ...companion,
-          equipment: { ...companion.equipment },
-          equipmentInstances: { ...companion.equipmentInstances },
-        })),
-      };
-      const writeGear = (
-        address: typeof source | typeof target,
-        gear: ReturnType<typeof readGear>,
-      ) => {
-        const key = equipmentKey(address);
-        const owner = address.zone === "playerEquipment"
-          ? next.player
-          : next.companions.find(
-              (companion) => companion.id === address.companionId,
-            );
-        if (!owner) return;
-        owner.equipment[key] = gear?.defId ?? null;
-        owner.equipmentInstances[key] = gear?.instance ?? null;
-      };
-      writeGear(source, targetGear);
-      writeGear(target, sourceGear);
-      next.logs = [
-        ...next.logs,
-        "드래그로 장비 위치를 교체했습니다.",
-      ].slice(-80);
-      commitGame(next);
+      const toPartyAddress = (address: typeof source | typeof target) => ({
+        ownerId: address.zone === "playerEquipment"
+          ? PLAYER_ID
+          : address.companionId,
+        target: address.target,
+      });
+      const transaction = swapPartyLoadout(
+        state,
+        toPartyAddress(source),
+        toPartyAddress(target),
+      );
+      if (transaction.state !== state) commitGame(transaction.state);
     },
     [
       commitGame,
@@ -8047,10 +7701,10 @@ function DungeonRun({
       const canvas = canvasRef.current;
       if (!canvas) return null;
       const bounds = canvas.getBoundingClientRect();
-      return {
-        x: ((event.clientX - bounds.left) / bounds.width) * VIEW_WIDTH,
-        y: ((event.clientY - bounds.top) / bounds.height) * VIEW_HEIGHT,
-      };
+      return canvasPointFromClient(
+        { x: event.clientX, y: event.clientY },
+        bounds,
+      );
     },
     [],
   );
@@ -8059,15 +7713,11 @@ function DungeonRun({
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
       const local = canvasLocalPoint(event);
       if (!local) return null;
-      const zoom = zoomRef.current;
-      return {
-        x: Math.floor(
-          (cameraRef.current.x + local.x / zoom) / TILE_SIZE,
-        ),
-        y: Math.floor(
-          (cameraRef.current.y + local.y / zoom) / TILE_SIZE,
-        ),
-      };
+      return tileAtCanvasPoint(
+        local,
+        cameraRef.current,
+        zoomRef.current,
+      );
     },
     [canvasLocalPoint],
   );
@@ -8091,20 +7741,18 @@ function DungeonRun({
       ) {
         continue;
       }
-      const definition = COMPANION_CLASSES[companion.classId];
-      const width =
-        definition.frameWidth * ENTITY_SPRITE_SCALE * zoom;
-      const height =
-        definition.frameHeight * ENTITY_SPRITE_SCALE * zoom;
-      const centerX =
-        (companion.x * TILE_SIZE + TILE_SIZE / 2 - camera.x) * zoom;
-      const bottom =
-        (companion.y * TILE_SIZE + TILE_SIZE - 3 - camera.y) * zoom;
+      const definition = COMPANION_PRESENTATIONS[companion.classId];
+      const bounds = companionScreenBounds(
+        companion,
+        definition,
+        camera,
+        zoom,
+      );
       if (
-        local.x >= centerX - width / 2 &&
-        local.x <= centerX + width / 2 &&
-        local.y >= bottom - height &&
-        local.y <= bottom
+        local.x >= bounds.left &&
+        local.x <= bounds.right &&
+        local.y >= bounds.top &&
+        local.y <= bounds.bottom
       ) {
         return companion;
       }
@@ -8117,12 +7765,11 @@ function DungeonRun({
       const point = canvasPoint(event);
       if (
         !point ||
-        point.x < 0 ||
-        point.y < 0 ||
-        point.x >= gameRef.current.width ||
-        point.y >= gameRef.current.height ||
-        (!developerModeRef.current &&
-          !gameRef.current.tiles[point.y][point.x].discovered)
+        !isTileClickReachable(
+          gameRef.current,
+          point,
+          developerModeRef.current,
+        )
       ) {
         return null;
       }
@@ -8136,12 +7783,11 @@ function DungeonRun({
       const state = gameRef.current;
       if (
         state.gameOver ||
-        target.x < 0 ||
-        target.y < 0 ||
-        target.x >= state.width ||
-        target.y >= state.height ||
-        (!developerModeRef.current &&
-          !state.tiles[target.y][target.x].discovered) ||
+        !isTileClickReachable(
+          state,
+          target,
+          developerModeRef.current,
+        ) ||
         (busyRef.current && !autoTravelRef.current)
       ) {
         return;
@@ -8514,14 +8160,16 @@ function DungeonRun({
       }
 
       const point = canvasPoint(event);
+      const targeting = targetingOverlayRef.current !== null;
       if (
         !point ||
-        point.x < 0 ||
-        point.y < 0 ||
-        point.x >= gameRef.current.width ||
-        point.y >= gameRef.current.height ||
-        (!developerModeRef.current &&
-          !gameRef.current.tiles[point.y][point.x].discovered)
+        !(targeting
+          ? pointInBounds(gameRef.current, point)
+          : isTileClickReachable(
+              gameRef.current,
+              point,
+              developerModeRef.current,
+            ))
       ) {
         hoverRef.current = null;
         setHoveredEnemy(null);
@@ -8998,1335 +8646,45 @@ function DungeonRun({
     cameraFollowRef.current = true;
   }, []);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !assetsReady) return;
-    const context = canvas.getContext("2d");
-    const assets = assetsRef.current;
-    if (!context || !assets) return;
-
-    let frame = 0;
-    let lastDrawAt = Number.NEGATIVE_INFINITY;
-    const vignette = context.createRadialGradient(
-      VIEW_WIDTH / 2,
-      VIEW_HEIGHT / 2,
-      VIEW_HEIGHT * 0.2,
-      VIEW_WIDTH / 2,
-      VIEW_HEIGHT / 2,
-      VIEW_WIDTH * 0.62,
-    );
-    vignette.addColorStop(0, "rgba(0,0,0,0)");
-    vignette.addColorStop(1, "rgba(0,0,0,.46)");
-    const interpolate = (
-      id: string,
-      fallback: Point,
-      now: number,
-    ): { point: Point; motion: VisualMotion | null; progress: number } => {
-      const motion = motionRef.current.get(id);
-      if (!motion) return { point: fallback, motion: null, progress: 1 };
-      if (now < motion.startedAt) {
-        return { point: motion.from, motion: null, progress: 0 };
-      }
-      const progress = Math.max(
-        0,
-        Math.min(1, (now - motion.startedAt) / motion.duration),
-      );
-      if (progress >= 1) {
-        const settledPoint =
-          motion.kind === "move" ? motion.to : motion.from;
-        if (pointEquals(fallback, settledPoint)) {
-          motionRef.current.delete(id);
-        }
-        return { point: settledPoint, motion: null, progress: 1 };
-      }
-      if (motion.kind === "attack") {
-        const amount = Math.sin(progress * Math.PI) * 0.36;
-        return {
-          point: {
-            x: motion.from.x + (motion.to.x - motion.from.x) * amount,
-            y: motion.from.y + (motion.to.y - motion.from.y) * amount,
-          },
-          motion,
-          progress,
-        };
-      }
-      const eased = progress;
-      return {
-        point: {
-          x: motion.from.x + (motion.to.x - motion.from.x) * eased,
-          y: motion.from.y + (motion.to.y - motion.from.y) * eased,
-        },
-        motion,
-        progress,
-      };
-    };
-
-    const render = (now: number) => {
-      defeatedEnemyVisualRef.current =
-        defeatedEnemyVisualRef.current.filter(
-          (visual) => visual.removeAt > now,
-        );
-      defeatedCompanionVisualRef.current =
-        defeatedCompanionVisualRef.current.filter(
-          (visual) => visual.revealAt > now,
-        );
-      const highMotion =
-        companionMapDragRef.current?.moved === true ||
-        motionRef.current.size > 0 ||
-        defeatedEnemyVisualRef.current.length > 0 ||
-        defeatedCompanionVisualRef.current.length > 0 ||
-        playerActionRef.current !== null ||
-        effectsRef.current.length > 0 ||
-        pickupRef.current.length > 0 ||
-        throwRef.current.length > 0 ||
-        magicRef.current.length > 0 ||
-        pixelEffectsRef.current.length > 0 ||
-        cameraShakesRef.current.length > 0 ||
-        entityFlashRef.current.length > 0 ||
-        pixelFogRuntimeRef.current.transitions.size > 0;
-      const minimumFrameInterval = highMotion ? 1000 / 60 : 1000 / 30;
-      if (now - lastDrawAt < minimumFrameInterval - 1) {
-        frame = requestAnimationFrame(render);
-        return;
-      }
-      lastDrawAt = now;
-
-      const state = gameRef.current;
-      const renderCache = syncDungeonRenderCache(
-        renderCacheRef.current!,
-        state,
-      );
-      const revealAll = developerModeRef.current;
-      context.imageSmoothingEnabled = false;
-      context.clearRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-      context.fillStyle = "#020405";
-      context.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-
-      const playerVisual = interpolate(PLAYER_ID, state.player, now);
-      const followedActorId = manualPartyModeRef.current
-        ? controlledActorIdRef.current
-        : PLAYER_ID;
-      const followedActor = partyActor(state, followedActorId);
-      const followedVisual = followedActorId === PLAYER_ID
-        ? playerVisual
-        : interpolate(followedActorId, followedActor, now);
-      const zoom = zoomRef.current;
-      if (cameraFollowRef.current) {
-        cameraRef.current = clampCamera(
-          {
-            x:
-              followedVisual.point.x * TILE_SIZE +
-              TILE_SIZE / 2 -
-              VIEW_WIDTH / zoom / 2,
-            y:
-              followedVisual.point.y * TILE_SIZE +
-              TILE_SIZE / 2 -
-              VIEW_HEIGHT / zoom / 2,
-          },
-          zoom,
-          state,
-        );
-      } else {
-        cameraRef.current = clampCamera(cameraRef.current, zoom, state);
-      }
-      cameraShakesRef.current = pruneCameraShakes(
-        cameraShakesRef.current,
-        now,
-      );
-      const shake = cameraShakeOffset(cameraShakesRef.current, now);
-      const cameraX = cameraRef.current.x;
-      const cameraY = cameraRef.current.y;
-      const tileScreenSize = TILE_SIZE * zoom;
-      const spritePixelSize = ENTITY_SPRITE_SCALE * zoom;
-      const screenX = (worldX: number) =>
-        (worldX - cameraX) * zoom + shake.x;
-      const screenY = (worldY: number) =>
-        (worldY - cameraY) * zoom + shake.y;
-      const pixelViewport = {
-        screenX,
-        screenY,
-        zoom,
-        width: VIEW_WIDTH,
-        height: VIEW_HEIGHT,
-      };
-      pixelEffectsRef.current = prunePixelEffects(
-        pixelEffectsRef.current,
-        now,
-      );
-      entityFlashRef.current = entityFlashRef.current.filter(
-        (flash) => now < flash.startedAt + flash.duration,
-      );
-      const entityFlashAlphas = new Map<string, number>();
-      for (const flash of entityFlashRef.current) {
-        if (now < flash.startedAt) continue;
-        const progress = (now - flash.startedAt) / flash.duration;
-        entityFlashAlphas.set(
-          flash.id,
-          Math.max(0, Math.sin(progress * Math.PI)),
-        );
-      }
-      const entityFlashAlpha = (id: string) =>
-        entityFlashAlphas.get(id) ?? 0;
-      const drawSpeechBubble = (
-        centerX: number,
-        bottomY: number,
-        text: string,
-        color: string,
-        alpha = 1,
-      ) => {
-        const bubbleWidth = (text.length > 1 ? 26 : 20) * zoom;
-        const bubbleHeight = 17 * zoom;
-        const left = Math.round(centerX - bubbleWidth / 2);
-        const top = Math.round(bottomY - bubbleHeight);
-        context.save();
-        context.globalAlpha = alpha;
-        context.fillStyle = "rgba(12, 16, 14, .94)";
-        context.strokeStyle = color;
-        context.lineWidth = Math.max(1, zoom);
-        context.fillRect(left, top, bubbleWidth, bubbleHeight);
-        context.strokeRect(left, top, bubbleWidth, bubbleHeight);
-        context.beginPath();
-        context.moveTo(centerX - 3 * zoom, bottomY);
-        context.lineTo(centerX + 3 * zoom, bottomY);
-        context.lineTo(centerX, bottomY + 5 * zoom);
-        context.closePath();
-        context.fill();
-        context.stroke();
-        context.fillStyle = color;
-        context.font = `${Math.round(9 * zoom)}px MonaGame, monospace`;
-        context.textAlign = "center";
-        context.textBaseline = "middle";
-        context.fillText(text, centerX, top + bubbleHeight * 0.54);
-        context.restore();
-      };
-      const drawEntityShadow = (
-        centerX: number,
-        bottomY: number,
-        width: number,
-        alpha = 0.34,
-      ) => {
-        context.save();
-        context.globalAlpha = alpha;
-        context.fillStyle = "#000";
-        context.beginPath();
-        context.ellipse(
-          Math.round(centerX),
-          Math.round(bottomY - 2 * zoom),
-          Math.max(7 * zoom, width * 0.32),
-          Math.max(2.5 * zoom, width * 0.1),
-          0,
-          0,
-          Math.PI * 2,
-        );
-        context.fill();
-        context.restore();
-      };
-
-      const startX = Math.max(0, Math.floor(cameraX / TILE_SIZE) - 2);
-      const endX = Math.min(
-        state.width - 1,
-        Math.ceil((cameraX + VIEW_WIDTH / zoom) / TILE_SIZE) + 2,
-      );
-      const startY = Math.max(0, Math.floor(cameraY / TILE_SIZE) - 2);
-      const endY = Math.min(
-        state.height - 1,
-        Math.ceil((cameraY + VIEW_HEIGHT / zoom) / TILE_SIZE) + 2,
-      );
-      const inViewport = (x: number, y: number, padding = 2) =>
-        x >= startX - padding &&
-        x <= endX + padding &&
-        y >= startY - padding &&
-        y <= endY + padding;
-
-      for (let y = startY; y <= endY; y += 1) {
-        for (let x = startX; x <= endX; x += 1) {
-          const tile = state.tiles[y][x];
-          const underlay = terrainUnderlayForPixelFog(tile);
-          if (!underlay.draw) continue;
-          const visual = terrainFrameAt(renderCache, x, y);
-          if (visual === null) continue;
-          context.globalAlpha = underlay.alpha;
-          if (tile.terrain === "water") {
-            const waterX = screenX(x * TILE_SIZE);
-            const waterY = screenY(y * TILE_SIZE);
-            for (const slice of waterTextureSlices(x, y, now)) {
-              context.drawImage(
-                assets.water,
-                slice.sourceX,
-                slice.sourceY,
-                16,
-                slice.sourceHeight,
-                waterX,
-                waterY +
-                  (slice.destinationY / 16) * tileScreenSize,
-                tileScreenSize,
-                (slice.sourceHeight / 16) * tileScreenSize,
-              );
-            }
-          }
-          drawSheetFrame(
-            context,
-            assets.tiles,
-            visual,
-            16,
-            16,
-            screenX(x * TILE_SIZE),
-            screenY(y * TILE_SIZE),
-            tileScreenSize,
-            tileScreenSize,
-          );
-        }
-      }
-      context.globalAlpha = 1;
-      drawPixelEffects(
-        context,
-        pixelEffectsRef.current,
-        now,
-        pixelViewport,
-        "ground",
-      );
-
-      const activePath = pathRef.current;
-      activePath.forEach((point, index) => {
-        if (!inViewport(point.x, point.y)) return;
-        if (
-          !revealAll &&
-          !state.tiles[point.y]?.[point.x]?.discovered
-        ) return;
-        const centerX = screenX(point.x * TILE_SIZE + TILE_SIZE / 2);
-        const centerY = screenY(point.y * TILE_SIZE + TILE_SIZE / 2);
-        context.fillStyle =
-          index === activePath.length - 1
-            ? "rgba(255, 215, 112, .78)"
-            : "rgba(255, 215, 112, .38)";
-        context.beginPath();
-        context.arc(
-          centerX,
-          centerY,
-          (index === activePath.length - 1 ? 5 : 3) * zoom,
-          0,
-          Math.PI * 2,
-        );
-        context.fill();
-      });
-
-      state.groundItems.forEach((item) => {
-        if (!inViewport(item.x, item.y)) return;
-        if (!revealAll && !state.tiles[item.y][item.x].visible) return;
-        const definition = ITEM_DEFS[item.defId];
-        const offset = itemSpriteOffset(item.defId);
-        const bob = Math.sin(now / 270 + item.x) * zoom;
-        drawSheetFrame(
-          context,
-          assets.items,
-          definition.sprite,
-          16,
-          16,
-          screenX(item.x * TILE_SIZE + offset.x * 3),
-          screenY(item.y * TILE_SIZE + offset.y * 3) + bob,
-          tileScreenSize,
-          tileScreenSize,
-        );
-      });
-
-      throwRef.current = throwRef.current.filter((itemThrow) => {
-        const progress = Math.max(
-          0,
-          Math.min(
-            1,
-            (now - itemThrow.startedAt) / itemThrow.duration,
-          ),
-        );
-        if (progress >= 1) return false;
-        const travelProgress = progress;
-        const arcProgress = progress;
-        const offset = itemSpriteOffset(itemThrow.defId);
-        const worldX =
-          itemThrow.from.x +
-          (itemThrow.to.x - itemThrow.from.x) * travelProgress;
-        const worldY =
-          itemThrow.from.y +
-          (itemThrow.to.y - itemThrow.from.y) * travelProgress;
-        const arc = Math.sin(arcProgress * Math.PI) * TILE_SIZE * 0.55;
-        const centerX = screenX(worldX * TILE_SIZE + TILE_SIZE / 2);
-        const centerY =
-          screenY(worldY * TILE_SIZE + TILE_SIZE / 2) - arc * zoom;
-        const travelAngle = Math.atan2(
-          itemThrow.to.y - itemThrow.from.y,
-          itemThrow.to.x - itemThrow.from.x,
-        );
-        // Missile sheet art faces north-east by default (-45 degrees).
-        context.save();
-        context.translate(Math.round(centerX), Math.round(centerY));
-        context.rotate(travelAngle + Math.PI / 4);
-        drawSheetFrame(
-          context,
-          assets.items,
-          ITEM_DEFS[itemThrow.defId].sprite,
-          16,
-          16,
-          -tileScreenSize / 2 + offset.x * 3 * zoom,
-          -tileScreenSize / 2 + offset.y * 3 * zoom,
-          tileScreenSize,
-          tileScreenSize,
-        );
-        context.restore();
-        return true;
-      });
-
-      state.objects.forEach((object) => {
-        if (
-          !inViewport(object.x, object.y) ||
-          object.looted ||
-          (!revealAll && !state.tiles[object.y][object.x].visible)
-        ) return;
-        const definition = OBJECT_SPRITES[object.kind];
-        const bob = Math.sin(now / 420 + object.x * 0.7) * 0.5 * zoom;
-        drawSheetFrame(
-          context,
-          assets.items,
-          definition.sprite,
-          16,
-          16,
-          screenX(object.x * TILE_SIZE),
-          screenY(object.y * TILE_SIZE) + bob,
-          tileScreenSize,
-          tileScreenSize,
-        );
-      });
-
-      const cloudColors: Record<string, string> = {
-        fire: "rgba(255, 103, 48, .32)",
-        frost: "rgba(116, 224, 255, .32)",
-        paralytic: "rgba(226, 217, 123, .34)",
-        toxic: "rgba(111, 181, 75, .34)",
-        corrosive: "rgba(157, 205, 63, .38)",
-        storm: "rgba(77, 144, 203, .34)",
-      };
-      for (const cloud of state.clouds ?? []) {
-        for (const cloudTile of cloud.tiles) {
-          if (
-            !inViewport(cloudTile.x, cloudTile.y) ||
-            !revealAll &&
-            !state.tiles[cloudTile.y]?.[cloudTile.x]?.visible
-          ) continue;
-          const drawX = screenX(cloudTile.x * TILE_SIZE);
-          const drawY = screenY(cloudTile.y * TILE_SIZE);
-          const pulse =
-            0.78 +
-            Math.sin(now / 190 + cloudTile.x * 1.7 + cloudTile.y) * 0.12;
-          context.save();
-          context.globalAlpha =
-            Math.max(0.24, cloudTile.intensity) * pulse;
-          context.fillStyle = cloudColors[cloud.kind];
-          context.fillRect(
-            Math.floor(drawX),
-            Math.floor(drawY),
-            Math.ceil(tileScreenSize) + 1,
-            Math.ceil(tileScreenSize) + 1,
-          );
-          context.restore();
-          drawLogicalGridPixels(
-            context,
-            fieldTilePixels(
-              cloud.kind,
-              now,
-              cloudTile.x * 31 + cloudTile.y * 17,
-            ),
-            drawX,
-            drawY,
-            tileScreenSize / 16,
-            Math.max(0.28, cloudTile.intensity),
-          );
-        }
-      }
-      for (const ward of state.wards ?? []) {
-        if (!inViewport(ward.x, ward.y)) continue;
-        if (!revealAll && !state.tiles[ward.y]?.[ward.x]?.visible) continue;
-        const centerX = screenX(ward.x * TILE_SIZE + TILE_SIZE / 2);
-        const centerY = screenY(ward.y * TILE_SIZE + TILE_SIZE / 2);
-        context.save();
-        context.translate(centerX, centerY);
-        context.rotate(now / 700);
-        context.strokeStyle = "#c7a5ff";
-        context.lineWidth = Math.max(1, 2 * zoom);
-        context.strokeRect(-7 * zoom, -7 * zoom, 14 * zoom, 14 * zoom);
-        context.restore();
-      }
-
-      magicRef.current = magicRef.current.filter((visual) => {
-        const progress = (now - visual.startedAt) / visual.duration;
-        if (progress < 0) return true;
-        if (progress >= 1) return false;
-        const fromX = screenX(visual.from.x * TILE_SIZE + TILE_SIZE / 2);
-        const fromY = screenY(visual.from.y * TILE_SIZE + TILE_SIZE / 2);
-        const toX = screenX(visual.to.x * TILE_SIZE + TILE_SIZE / 2);
-        const toY = screenY(visual.to.y * TILE_SIZE + TILE_SIZE / 2);
-        context.save();
-        context.globalAlpha = Math.sin(progress * Math.PI);
-        context.strokeStyle = visual.color;
-        context.shadowColor = visual.secondaryColor ?? visual.color;
-        context.shadowBlur = 9 * zoom;
-        context.lineWidth =
-          (visual.kind === "cone" ? 9 : 3) * zoom * (1 - progress * 0.45);
-        context.beginPath();
-        context.moveTo(fromX, fromY);
-        context.lineTo(toX, toY);
-        context.stroke();
-        context.fillStyle = visual.secondaryColor ?? "#fff";
-        context.beginPath();
-        context.arc(
-          fromX + (toX - fromX) * Math.min(1, progress * 1.8),
-          fromY + (toY - fromY) * Math.min(1, progress * 1.8),
-          3.5 * zoom,
-          0,
-          Math.PI * 2,
-        );
-        context.fill();
-        context.restore();
-        return true;
-      });
-
-      const drawBurningStatus = (
-        id: string,
-        point: Point,
-        statuses: readonly { id: StatusEffectId; turns: number }[],
-      ) => {
-        if (
-          !statuses.some(
-            (status) => status.id === "burning" && status.turns > 0,
-          )
-        ) return;
-        let seed = 0;
-        for (const character of id) {
-          seed = Math.imul(seed ^ character.charCodeAt(0), 31);
-        }
-        drawLogicalGridPixels(
-          context,
-          burningStatusPixels(now, seed),
-          screenX(point.x * TILE_SIZE),
-          screenY(point.y * TILE_SIZE),
-          tileScreenSize / 16,
-        );
-      };
-
-      const drawEnemy = (enemy: Enemy) => {
-        if (!inViewport(enemy.x, enemy.y)) return;
-        if (!revealAll && !state.tiles[enemy.y][enemy.x].visible) return;
-        const sprite = ENEMY_SPRITES[enemy.kind];
-        const visual = interpolate(enemy.id, enemy, now);
-        let frames = sprite.idle;
-        if (visual.motion?.kind === "move") frames = sprite.run;
-        if (visual.motion?.kind === "attack") frames = sprite.attackFrames;
-        const frameIndex = visual.motion
-          ? Math.min(
-              frames.length - 1,
-              Math.floor(visual.progress * frames.length),
-            )
-          : Math.floor(now / 430) % frames.length;
-        const sourceFrame = frames[frameIndex] ?? frames[0];
-        const width = sprite.frameWidth * spritePixelSize;
-        const height = sprite.frameHeight * spritePixelSize;
-        const centerX = screenX(
-          visual.point.x * TILE_SIZE + TILE_SIZE / 2,
-        );
-        const bottom = screenY(
-          visual.point.y * TILE_SIZE + TILE_SIZE - 3,
-        );
-        const flip =
-          visual.motion && visual.motion.to.x < visual.motion.from.x;
-
-        drawEntityShadow(centerX, bottom, width, enemy.sleeping ? 0.25 : 0.36);
-        const paintEnemySprite = () => {
-          context.save();
-          if (flip) {
-            context.translate(Math.round(centerX), 0);
-            context.scale(-1, 1);
-            drawSheetFrame(
-              context,
-              assets.enemies[enemy.kind],
-              sourceFrame,
-              sprite.frameWidth,
-              sprite.frameHeight,
-              -width / 2,
-              bottom - height,
-              width,
-              height,
-            );
-          } else {
-            drawSheetFrame(
-              context,
-              assets.enemies[enemy.kind],
-              sourceFrame,
-              sprite.frameWidth,
-              sprite.frameHeight,
-              centerX - width / 2,
-              bottom - height,
-              width,
-              height,
-            );
-          }
-          context.restore();
-        };
-        paintEnemySprite();
-        const flashAlpha = entityFlashAlpha(enemy.id);
-        if (flashAlpha > 0) {
-          context.save();
-          context.globalAlpha = flashAlpha;
-          context.globalCompositeOperation = "screen";
-          paintEnemySprite();
-          context.restore();
-        }
-
-        if (
-          (enemy.statuses ?? []).some(
-            (status) => status.id === "corrupted" && status.turns > 0,
-          )
-        ) {
-          context.save();
-          context.strokeStyle = "rgba(201, 156, 255, .9)";
-          context.shadowColor = "#9b55d8";
-          context.shadowBlur = 7 * zoom;
-          context.lineWidth = Math.max(1, 1.5 * zoom);
-          context.beginPath();
-          context.ellipse(
-            centerX,
-            bottom - height * 0.45,
-            width * 0.55,
-            height * 0.6,
-            0,
-            0,
-            Math.PI * 2,
-          );
-          context.stroke();
-          context.restore();
-        }
-        drawBurningStatus(enemy.id, visual.point, enemy.statuses ?? []);
-
-        if (enemy.sleeping) {
-          drawSpeechBubble(
-            centerX,
-            bottom - height - (8 + Math.sin(now / 360 + enemy.x) * 2) * zoom,
-            "Zz",
-            "#9dc8d6",
-          );
-        }
-
-        if (enemy.hp < enemy.maxHp) {
-          const barWidth = Math.max(24 * zoom, width);
-          const barX = centerX - barWidth / 2;
-          const barY = bottom - height - 7 * zoom;
-          context.fillStyle = "rgba(0,0,0,.8)";
-          context.fillRect(
-            Math.round(barX - zoom),
-            Math.round(barY - zoom),
-            barWidth + 2 * zoom,
-            5 * zoom,
-          );
-          context.fillStyle = "#b82f3b";
-          context.fillRect(
-            Math.round(barX),
-            Math.round(barY),
-            Math.round(barWidth * (enemy.hp / enemy.maxHp)),
-            3 * zoom,
-          );
-        }
-      };
-
-      renderCache.sortedEnemies.forEach(drawEnemy);
-      const liveEnemyIds = new Set(state.enemies.map((enemy) => enemy.id));
-      defeatedEnemyVisualRef.current.forEach(({ enemy }) => {
-        if (!liveEnemyIds.has(enemy.id)) drawEnemy(enemy);
-      });
-
-      const drawCompanion = (companion: Companion) => {
-        if (!inViewport(companion.x, companion.y)) return;
-        if (
-          !revealAll &&
-          !state.tiles[companion.y]?.[companion.x]?.visible
-        ) {
-          return;
-        }
-        const visual = interpolate(companion.id, companion, now);
-        const definition = COMPANION_CLASSES[companion.classId];
-        const usesAdventurerFrames = definition.animationSet === "adventurer";
-        let frames: readonly number[] = usesAdventurerFrames
-          ? PLAYER_IDLE_FRAMES
-          : COMPANION_IDLE_FRAMES;
-        if (companion.hp <= 0) {
-          frames = usesAdventurerFrames
-            ? [PLAYER_IDLE_FRAMES[0]]
-            : COMPANION_DEFEAT_FRAMES;
-        } else if (visual.motion?.kind === "move") {
-          frames = usesAdventurerFrames
-            ? PLAYER_MOVE_FRAMES
-            : COMPANION_MOVE_FRAMES;
-        } else if (visual.motion?.kind === "attack") {
-          frames = usesAdventurerFrames
-            ? PLAYER_ATTACK_FRAMES
-            : COMPANION_ATTACK_FRAMES;
-        } else if (visual.motion?.kind === "interact") {
-          frames = usesAdventurerFrames
-            ? PLAYER_INTERACT_FRAMES
-            : COMPANION_INTERACT_FRAMES;
-        }
-        const frameProgress = visual.motion
-          ? visual.progress * frames.length
-          : companion.hp <= 0
-            ? frames.length - 1
-            : now / 180;
-        const frameWithinTier =
-          frames[
-            Math.min(
-              frames.length - 1,
-              Math.floor(frameProgress) % frames.length,
-            )
-          ] ?? frames[0];
-        const sourceFrame = usesAdventurerFrames
-          ? frameWithinTier
-          : companionFrameIndex(
-              companionArmorTier(companion),
-              frameWithinTier,
-            );
-        const width = definition.frameWidth * spritePixelSize;
-        const height = definition.frameHeight * spritePixelSize;
-        const centerX = screenX(
-          visual.point.x * TILE_SIZE + TILE_SIZE / 2,
-        );
-        const bottom = screenY(
-          visual.point.y * TILE_SIZE + TILE_SIZE - 3,
-        );
-        const flip =
-          visual.motion?.kind === "move" ||
-          visual.motion?.kind === "attack"
-            ? visual.motion.to.x < visual.motion.from.x
-            : companion.facing === "left";
-        drawEntityShadow(
-          centerX,
-          bottom,
-          width,
-          companion.hp <= 0 ? 0.16 : 0.34,
-        );
-        const paintCompanion = () => {
-          context.save();
-          const isDragSource =
-            companionMapDragRef.current?.moved === true &&
-            companionMapDragRef.current.companionId === companion.id;
-          context.globalAlpha = isDragSource
-            ? 0.34
-            : companion.hp <= 0
-              ? 0.58
-              : 1;
-          if (flip) {
-            context.translate(Math.round(centerX), 0);
-            context.scale(-1, 1);
-            drawSheetFrame(
-              context,
-              assets.companions[companion.classId],
-              sourceFrame,
-              definition.frameWidth,
-              definition.frameHeight,
-              -width / 2,
-              bottom - height,
-              width,
-              height,
-            );
-          } else {
-            drawSheetFrame(
-              context,
-              assets.companions[companion.classId],
-              sourceFrame,
-              definition.frameWidth,
-              definition.frameHeight,
-              centerX - width / 2,
-              bottom - height,
-              width,
-              height,
-            );
-          }
-          context.restore();
-        };
-        paintCompanion();
-        const flashAlpha = entityFlashAlpha(companion.id);
-        if (flashAlpha > 0) {
-          context.save();
-          context.globalAlpha = flashAlpha;
-          context.globalCompositeOperation = "screen";
-          paintCompanion();
-          context.restore();
-        }
-        drawBurningStatus(
-          companion.id,
-          visual.point,
-          companion.statuses ?? [],
-        );
-        if (companion.hp > 0 && companion.hp < companion.maxHp) {
-          const barWidth = Math.max(22 * zoom, width);
-          const barX = centerX - barWidth / 2;
-          const barY = bottom - height - 6 * zoom;
-          context.fillStyle = "rgba(0,0,0,.8)";
-          context.fillRect(
-            Math.round(barX - zoom),
-            Math.round(barY - zoom),
-            barWidth + 2 * zoom,
-            5 * zoom,
-          );
-          context.fillStyle = "#5faf78";
-          context.fillRect(
-            Math.round(barX),
-            Math.round(barY),
-            Math.round(barWidth * (companion.hp / companion.maxHp)),
-            3 * zoom,
-          );
-        }
-      };
-
-      [...(state.companions ?? [])]
-        .sort((a, b) => a.y - b.y || a.x - b.x)
-        .forEach((companion) => {
-          const pendingDefeat = defeatedCompanionVisualRef.current.find(
-            (visual) => visual.companion.id === companion.id,
-          );
-          drawCompanion(pendingDefeat?.companion ?? companion);
-        });
-
-      const playerMotion = playerVisual.motion;
-      const playerProgress = playerVisual.progress;
-      const playerDefinition = COMPANION_CLASSES[state.player.classId];
-      const usesAdventurerFrames =
-        playerDefinition.animationSet === "adventurer";
-      let playerAction = playerActionRef.current;
-      let playerActionProgress = -1;
-      if (playerAction) {
-        playerActionProgress =
-          (now - playerAction.startedAt) / playerAction.duration;
-        if (playerActionProgress >= 1) {
-          playerActionRef.current = null;
-          playerAction = null;
-        }
-      }
-
-      let playerFrames: readonly number[] = usesAdventurerFrames
-        ? PLAYER_IDLE_FRAMES
-        : COMPANION_IDLE_FRAMES;
-      let playerFrameProgress =
-        (now / PLAYER_IDLE_FRAME_DURATION) % playerFrames.length;
-      if (playerMotion?.kind === "attack") {
-        playerFrames = usesAdventurerFrames
-          ? PLAYER_ATTACK_FRAMES
-          : COMPANION_ATTACK_FRAMES;
-        playerFrameProgress = playerProgress * playerFrames.length;
-      } else if (
-        playerAction?.kind === "interact" &&
-        playerActionProgress >= 0
-      ) {
-        playerFrames = usesAdventurerFrames
-          ? PLAYER_INTERACT_FRAMES
-          : COMPANION_INTERACT_FRAMES;
-        playerFrameProgress = playerActionProgress * playerFrames.length;
-      } else if (
-        playerMotion?.kind === "move" ||
-        (autoTravelRef.current &&
-          pathRef.current.length > 0 &&
-          playerMoveCycleStartedAtRef.current !== null)
-      ) {
-        playerFrames = usesAdventurerFrames
-          ? PLAYER_MOVE_FRAMES
-          : COMPANION_MOVE_FRAMES;
-        const cycleStartedAt =
-          playerMoveCycleStartedAtRef.current ??
-          now - playerProgress * PLAYER_MOVE_DURATION;
-        playerFrameProgress =
-          Math.max(0, now - cycleStartedAt) / PLAYER_MOVE_FRAME_DURATION;
-      }
-      const playerFrameWithinTier =
-        playerFrames[
-          Math.min(
-            playerFrames.length - 1,
-            Math.floor(playerFrameProgress) % playerFrames.length,
-          )
-        ];
-      const playerFrame = usesAdventurerFrames
-        ? playerFrameWithinTier
-        : companionFrameIndex(
-            companionArmorTier(state.player),
-            playerFrameWithinTier,
-          );
-      const playerWidth = playerDefinition.frameWidth * spritePixelSize;
-      const playerHeight = playerDefinition.frameHeight * spritePixelSize;
-      const playerCenterX = screenX(
-        playerVisual.point.x * TILE_SIZE + TILE_SIZE / 2,
-      );
-      const playerBottom = screenY(
-        playerVisual.point.y * TILE_SIZE + TILE_SIZE - 2,
-      );
-      drawEntityShadow(
-        playerCenterX,
-        playerBottom,
-        playerWidth,
-        state.player.invisibleTurns > 0 ? 0.16 : 0.38,
-      );
-      const paintPlayerSprite = () => {
-        context.save();
-        if (state.player.facing === "left") {
-          context.translate(Math.round(playerCenterX), 0);
-          context.scale(-1, 1);
-          drawSheetFrame(
-            context,
-            assets.companions[state.player.classId],
-            playerFrame,
-            playerDefinition.frameWidth,
-            playerDefinition.frameHeight,
-            -playerWidth / 2,
-            playerBottom - playerHeight,
-            playerWidth,
-            playerHeight,
-          );
-        } else {
-          drawSheetFrame(
-            context,
-            assets.companions[state.player.classId],
-            playerFrame,
-            playerDefinition.frameWidth,
-            playerDefinition.frameHeight,
-            playerCenterX - playerWidth / 2,
-            playerBottom - playerHeight,
-            playerWidth,
-            playerHeight,
-          );
-        }
-        context.restore();
-      };
-      context.globalAlpha = state.player.invisibleTurns > 0 ? 0.48 : 1;
-      paintPlayerSprite();
-      context.globalAlpha = 1;
-      const playerFlashAlpha = entityFlashAlpha(PLAYER_ID);
-      if (playerFlashAlpha > 0) {
-        context.save();
-        context.globalAlpha = playerFlashAlpha;
-        context.globalCompositeOperation = "screen";
-        paintPlayerSprite();
-        context.restore();
-      }
-      drawBurningStatus(
-        state.player.companionId,
-        playerVisual.point,
-        state.player.statuses ?? [],
-      );
-      drawPixelEffects(
-        context,
-        pixelEffectsRef.current,
-        now,
-        pixelViewport,
-        "actor",
-      );
-
-      for (let y = startY; y <= endY; y += 1) {
-        for (let x = startX; x <= endX; x += 1) {
-          const tile = state.tiles[y][x];
-          const underlay = terrainUnderlayForPixelFog(tile);
-          if (!underlay.draw) continue;
-          const overlay = overlayFrameAt(renderCache, x, y);
-          if (overlay === null) continue;
-          context.globalAlpha = underlay.alpha;
-          drawSheetFrame(
-            context,
-            assets.tiles,
-            overlay,
-            16,
-            16,
-            screenX(x * TILE_SIZE),
-            screenY(y * TILE_SIZE),
-            tileScreenSize,
-            tileScreenSize,
-          );
-        }
-      }
-      context.globalAlpha = 1;
-
-      (state.companions ?? []).forEach((companion) => {
-        const target = companion.priorityTarget;
-        const tile = target ? state.tiles[target.y]?.[target.x] : null;
-        if (!target || !tile || (!revealAll && !tile.discovered)) return;
-        const left = screenX(target.x * TILE_SIZE);
-        const top = screenY(target.y * TILE_SIZE);
-        const pulse =
-          0.52 + Math.sin(now / 150 + companion.id.length) * 0.16;
-        context.save();
-        context.globalAlpha = pulse;
-        context.strokeStyle = "#79f0c4";
-        context.lineWidth = Math.max(1, zoom);
-        context.strokeRect(
-          left + 4 * zoom,
-          top + 4 * zoom,
-          tileScreenSize - 8 * zoom,
-          tileScreenSize - 8 * zoom,
-        );
-        context.restore();
-      });
-
-      const hovered = hoverRef.current;
-      if (
-        hovered &&
-        (revealAll ||
-          state.tiles[hovered.y]?.[hovered.x]?.discovered) &&
-        !cameraDragRef.current?.moved
-      ) {
-        const x = screenX(hovered.x * TILE_SIZE);
-        const y = screenY(hovered.y * TILE_SIZE);
-          context.strokeStyle = inspectModeRef.current
-            ? "rgba(126, 222, 255, .95)"
-            : "rgba(255, 219, 126, .9)";
-        context.lineWidth = Math.max(1, 2 * zoom);
-        context.strokeRect(
-          Math.round(x + 3 * zoom),
-          Math.round(y + 3 * zoom),
-          tileScreenSize - 6 * zoom,
-          tileScreenSize - 6 * zoom,
-        );
-      }
-
-      const companionDrag = companionMapDragRef.current;
-      if (companionDrag?.moved) {
-        const companion = (state.companions ?? []).find(
-          (candidate) =>
-            candidate.id === companionDrag.companionId && candidate.hp > 0,
-        );
-        if (companion) {
-          const target = companionDrag.target;
-          const targetTile = target
-            ? state.tiles[target.y]?.[target.x]
-            : null;
-          const visual = interpolate(companion.id, companion, now);
-          const originX = screenX((visual.point.x + 0.5) * TILE_SIZE);
-          const originY = screenY((visual.point.y + 0.5) * TILE_SIZE);
-          const ghostCenterX =
-            companionDrag.cursor.x - companionDrag.grabOffset.x;
-          const ghostBottom =
-            companionDrag.cursor.y - companionDrag.grabOffset.y;
-          const definition = COMPANION_CLASSES[companion.classId];
-          const usesAdventurerFrames =
-            definition.animationSet === "adventurer";
-          const idleFrames = usesAdventurerFrames
-            ? PLAYER_IDLE_FRAMES
-            : COMPANION_IDLE_FRAMES;
-          const idleFrame =
-            idleFrames[Math.floor(now / 180) % idleFrames.length] ??
-            idleFrames[0];
-          const sourceFrame = usesAdventurerFrames
-            ? idleFrame
-            : companionFrameIndex(
-                companionArmorTier(companion),
-                idleFrame,
-              );
-          const ghostWidth = definition.frameWidth * spritePixelSize;
-          const ghostHeight = definition.frameHeight * spritePixelSize;
-          const pulse = 0.72 + Math.sin(now / 105) * 0.2;
-          context.save();
-          context.globalAlpha = pulse;
-          context.strokeStyle = "#79f0c4";
-          context.fillStyle = "rgba(72, 210, 168, .18)";
-          context.lineWidth = Math.max(1, zoom);
-          context.setLineDash([4 * zoom, 3 * zoom]);
-          context.beginPath();
-          context.moveTo(originX, originY);
-          context.lineTo(ghostCenterX, ghostBottom - ghostHeight / 2);
-          context.stroke();
-          context.setLineDash([]);
-          if (target && targetTile && (revealAll || targetTile.discovered)) {
-            const targetX = screenX((target.x + 0.5) * TILE_SIZE);
-            const targetY = screenY((target.y + 0.5) * TILE_SIZE);
-            context.fillRect(
-              targetX - tileScreenSize / 2 + 2 * zoom,
-              targetY - tileScreenSize / 2 + 2 * zoom,
-              tileScreenSize - 4 * zoom,
-              tileScreenSize - 4 * zoom,
-            );
-            context.strokeRect(
-              targetX - tileScreenSize / 2 + 2 * zoom,
-              targetY - tileScreenSize / 2 + 2 * zoom,
-              tileScreenSize - 4 * zoom,
-              tileScreenSize - 4 * zoom,
-            );
-          }
-          context.restore();
-
-          context.save();
-          context.globalAlpha = 0.58;
-          if (companion.facing === "left") {
-            context.translate(Math.round(ghostCenterX), 0);
-            context.scale(-1, 1);
-            drawSheetFrame(
-              context,
-              assets.companions[companion.classId],
-              sourceFrame,
-              definition.frameWidth,
-              definition.frameHeight,
-              -ghostWidth / 2,
-              ghostBottom - ghostHeight,
-              ghostWidth,
-              ghostHeight,
-            );
-          } else {
-            drawSheetFrame(
-              context,
-              assets.companions[companion.classId],
-              sourceFrame,
-              definition.frameWidth,
-              definition.frameHeight,
-              ghostCenterX - ghostWidth / 2,
-              ghostBottom - ghostHeight,
-              ghostWidth,
-              ghostHeight,
-            );
-          }
-          context.restore();
-        }
-      }
-
-      const suggestedAim = suggestedAimTargetRef.current;
-      if (
-        suggestedAim &&
-        (revealAll || state.tiles[suggestedAim.y]?.[suggestedAim.x]?.visible)
-      ) {
-        const origin = partyActor(
-          state,
-          controlledActorIdRef.current,
-        );
-        const targetX = screenX(suggestedAim.x * TILE_SIZE);
-        const targetY = screenY(suggestedAim.y * TILE_SIZE);
-        const originX = screenX((origin.x + 0.5) * TILE_SIZE);
-        const originY = screenY((origin.y + 0.5) * TILE_SIZE);
-        const pulse = 0.68 + Math.sin(now / 115) * 0.22;
-        context.save();
-        context.globalAlpha = pulse;
-        context.strokeStyle = "#8cecff";
-        context.lineWidth = Math.max(1, zoom);
-        context.setLineDash([
-          Math.max(2, Math.round(3 * zoom)),
-          Math.max(2, Math.round(2 * zoom)),
-        ]);
-        context.beginPath();
-        context.moveTo(Math.round(originX), Math.round(originY));
-        context.lineTo(
-          Math.round(targetX + tileScreenSize / 2),
-          Math.round(targetY + tileScreenSize / 2),
-        );
-        context.stroke();
-        context.setLineDash([]);
-        context.lineWidth = Math.max(1, 2 * zoom);
-        context.strokeRect(
-          Math.round(targetX + 2 * zoom),
-          Math.round(targetY + 2 * zoom),
-          tileScreenSize - 4 * zoom,
-          tileScreenSize - 4 * zoom,
-        );
-        context.fillStyle = "#e7fbff";
-        const corner = Math.max(2, Math.round(3 * zoom));
-        context.fillRect(targetX, targetY, corner, corner);
-        context.fillRect(
-          targetX + tileScreenSize - corner,
-          targetY,
-          corner,
-          corner,
-        );
-        context.fillRect(
-          targetX,
-          targetY + tileScreenSize - corner,
-          corner,
-          corner,
-        );
-        context.fillRect(
-          targetX + tileScreenSize - corner,
-          targetY + tileScreenSize - corner,
-          corner,
-          corner,
-        );
-        context.restore();
-      }
-
-      if (!revealAll) {
-        const visibleBitAt = (cellX: number, cellY: number) =>
-          fogMaskBitAt(renderCache, cellX, cellY, "visible");
-        const discoveredBitAt = (cellX: number, cellY: number) =>
-          fogMaskBitAt(renderCache, cellX, cellY, "discovered");
-        const pixelFogRuntime = pixelFogRuntimeRef.current;
-        const fogTextureCanvas =
-          fogTextureCanvasRef.current ?? document.createElement("canvas");
-        fogTextureCanvasRef.current = fogTextureCanvas;
-        const fogTextureWidth = state.width * FOG_PIXELS_PER_TILE;
-        const fogTextureHeight = state.height * FOG_PIXELS_PER_TILE;
-        if (fogTextureCanvas.width !== fogTextureWidth) {
-          fogTextureCanvas.width = fogTextureWidth;
-        }
-        if (fogTextureCanvas.height !== fogTextureHeight) {
-          fogTextureCanvas.height = fogTextureHeight;
-        }
-        const fogTexture = fogTextureCanvas.getContext("2d", {
-          alpha: true,
-        });
-        if (fogTexture) {
-          fogTexture.imageSmoothingEnabled = false;
-          drawPixelFogTexture(fogTexture, {
-            now,
-            visibilityRevision: renderCache.fogRevision,
-            mapKey: state.floor,
-            runtime: pixelFogRuntime,
-            originCellX: state.player.x * 2 + 1,
-            originCellY: state.player.y * 2 + 1,
-            minCellX: 0,
-            maxCellX: state.width * 2 - 1,
-            minCellY: 0,
-            maxCellY: state.height * 2 - 1,
-            isVisible: visibleBitAt,
-            isDiscovered: discoveredBitAt,
-          });
-          context.save();
-          context.imageSmoothingEnabled = false;
-          context.drawImage(
-            fogTextureCanvas,
-            screenX(0),
-            screenY(0),
-            state.width * TILE_SIZE * zoom,
-            state.height * TILE_SIZE * zoom,
-          );
-          context.restore();
-        }
-      }
-      drawPixelEffects(
-        context,
-        pixelEffectsRef.current,
-        now,
-        pixelViewport,
-        "overlay",
-      );
-
-      statusSignalRef.current = statusSignalRef.current.filter((signal) => {
-        if (signal.holdUntilTurnEnd) {
-          if (now < signal.startedAt) return true;
-          const releaseProgress = signal.releasedAt
-            ? (now - signal.releasedAt) / 180
-            : 0;
-          if (releaseProgress >= 1) return false;
-          if (
-            !revealAll &&
-            !state.tiles[signal.y]?.[signal.x]?.visible
-          ) {
-            return true;
-          }
-          const bob =
-            Math.sin((now - signal.startedAt) / 115) * 1.5 * zoom;
-          drawSpeechBubble(
-            screenX(signal.x * TILE_SIZE + TILE_SIZE / 2),
-            screenY(signal.y * TILE_SIZE) - 7 * zoom - bob,
-            signal.text,
-            signal.color,
-            Math.max(0, 1 - releaseProgress),
-          );
-          return true;
-        }
-        const progress = (now - signal.startedAt) / signal.duration;
-        if (progress < 0) return true;
-        if (progress >= 1) return false;
-        if (
-          !revealAll &&
-          !state.tiles[signal.y]?.[signal.x]?.visible
-        ) return true;
-        const rise = Math.sin(progress * Math.PI) * 8 * zoom;
-        const fade =
-          progress < 0.7 ? 1 : (1 - progress) / 0.3;
-        drawSpeechBubble(
-          screenX(signal.x * TILE_SIZE + TILE_SIZE / 2),
-          screenY(signal.y * TILE_SIZE) - 7 * zoom - rise,
-          signal.text,
-          signal.color,
-          Math.max(0, fade),
-        );
-        return true;
-      });
-
-      pickupRef.current = pickupRef.current.filter((pickup) => {
-        const progress = (now - pickup.startedAt) / PICKUP_DURATION;
-        if (progress < 0) return true;
-        if (progress >= 1) return false;
-        const definition = ITEM_DEFS[pickup.defId];
-        if (!definition) return false;
-        const eased = 1 - Math.pow(1 - progress, 3);
-        const pulse = 1 + Math.sin(progress * Math.PI) * 0.24;
-        const size = tileScreenSize * pulse;
-        const offset = itemSpriteOffset(pickup.defId);
-        const centerX = screenX(pickup.x * TILE_SIZE + TILE_SIZE / 2);
-        const centerY =
-          screenY(pickup.y * TILE_SIZE + TILE_SIZE / 2) -
-          eased * 30 * zoom;
-        const fade = progress < 0.58 ? 1 : 1 - (progress - 0.58) / 0.42;
-
-        context.save();
-        context.globalAlpha = Math.max(0, fade);
-        context.translate(Math.round(centerX), Math.round(centerY));
-        context.rotate(progress * Math.PI * 0.5);
-        context.strokeStyle = "rgba(255, 221, 123, .9)";
-        context.lineWidth = Math.max(1, 2 * zoom);
-        const sparkleSize = (12 + progress * 9) * zoom;
-        context.strokeRect(
-          -sparkleSize / 2,
-          -sparkleSize / 2,
-          sparkleSize,
-          sparkleSize,
-        );
-        context.rotate(-progress * Math.PI * 0.5);
-        drawSheetFrame(
-          context,
-          assets.items,
-          definition.sprite,
-          16,
-          16,
-          -size / 2 + offset.x * (size / 16),
-          -size / 2 + offset.y * (size / 16),
-          size,
-          size,
-        );
-        context.restore();
-        return true;
-      });
-      context.globalAlpha = 1;
-
-      effectsRef.current = effectsRef.current.filter((effect) => {
-        const progress = (now - effect.startedAt) / 900;
-        if (progress < 0) return true;
-        if (progress >= 1) return false;
-        const fade =
-          progress < 0.58 ? 1 : Math.max(0, (1 - progress) / 0.42);
-        const travelX =
-          effect.originOffsetX + effect.velocityX * progress;
-        const travelY =
-          effect.originOffsetY +
-          effect.velocityY * progress +
-          0.5 * effect.gravity * progress * progress;
-        context.globalAlpha = fade;
-        context.fillStyle = effect.color;
-        context.font = `${Math.round(14 * zoom)}px MonaGame, monospace`;
-        context.textAlign = "center";
-        context.shadowColor = "#000";
-        context.shadowBlur = Math.max(1, 2 * zoom);
-        context.fillText(
-          effect.text,
-          screenX(effect.x * TILE_SIZE + TILE_SIZE / 2) + travelX * zoom,
-          screenY(effect.y * TILE_SIZE + 5) + travelY * zoom,
-        );
-        context.shadowBlur = 0;
-        return true;
-      });
-      context.globalAlpha = 1;
-
-      context.fillStyle = vignette;
-      context.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT);
-
-      frame = requestAnimationFrame(render);
-    };
-    frame = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(frame);
-  }, [assetsReady]);
+  useEffect(
+    () =>
+      startDungeonRenderer({
+        assetsReady,
+        canvasRef,
+        fogTextureCanvasRef,
+        renderCacheRef,
+        assetsRef,
+        gameRef,
+        motionRef,
+        playerMoveCycleStartedAtRef,
+        effectsRef,
+        pickupRef,
+        throwRef,
+        magicRef,
+        statusSignalRef,
+        pixelEffectsRef,
+        cameraShakesRef,
+        pixelFogRuntimeRef,
+        entityFlashRef,
+        defeatedEnemyVisualRef,
+        defeatedCompanionVisualRef,
+        playerActionRef,
+        cameraRef,
+        cameraFollowRef,
+        cameraDragRef,
+        companionMapDragRef,
+        zoomRef,
+        developerModeRef,
+        manualPartyModeRef,
+        controlledActorIdRef,
+        hoverRef,
+        pathRef,
+        autoTravelRef,
+        inspectModeRef,
+        targetingOverlayRef,
+      }),
+    [assetsReady],
+  );
 
   const controlledCompanion = controlledActorId === PLAYER_ID
     ? null
@@ -10414,13 +8772,18 @@ function DungeonRun({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const controlledCharacterDefinition =
-    COMPANION_CLASSES[controlledCharacter.classId];
+    COMPANION_PRESENTATIONS[controlledCharacter.classId];
   const controlledHasActed = manualActedIds.has(controlledActorId);
   const controlledActionDisabled =
     busy || game.gameOver || (manualPartyMode && controlledHasActed);
   const pendingQuickslotDefinition = pendingQuickslotAim
     ? ITEM_DEFS[pendingQuickslotAim.itemId]
     : null;
+  const pendingQuickslotOwnerName = pendingQuickslotAim?.ownerId === PLAYER_ID
+    ? game.player.name
+    : game.companions.find(
+        (companion) => companion.id === pendingQuickslotAim?.ownerId,
+      )?.name ?? "";
   const inspectedEffectDetail = inspectedEffect?.kind === "invisible"
     ? game.player.invisibleTurns > 0
       ? {
@@ -10625,8 +8988,12 @@ function DungeonRun({
                 <b>{game.player.inventory.iron_key ?? 0}</b>
               </span>
               <TurnGauge
-                moveSpeed={controlledCompanion ? 1 : getPlayerMoveSpeed(game.player)}
-                attackSpeed={controlledCompanion ? 1 : getPlayerAttackSpeed(game.player)}
+                moveSpeed={controlledCompanion
+                  ? getCompanionMoveSpeed(controlledCompanion)
+                  : getPlayerMoveSpeed(game.player)}
+                attackSpeed={controlledCompanion
+                  ? getCompanionAttackSpeed(controlledCompanion)
+                  : getPlayerAttackSpeed(game.player)}
                 progress={controlledCompanion ? 0 : game.player.actionProgress ?? 0}
               />
             </div>
@@ -10743,7 +9110,7 @@ function DungeonRun({
               </button>
               <button
                 type="button"
-                onClick={() => setSoundEnabled((enabled) => !enabled)}
+                onClick={() => onSoundEnabledChange(!soundEnabled)}
                 aria-pressed={soundEnabled}
               >
                 {text("소리", "Sound")}{" "}
@@ -10872,19 +9239,19 @@ function DungeonRun({
                 <ItemIcon itemId={pendingQuickslotDefinition.id} size={28} />
                 <span>
                   <strong>
-                    {controlledCharacter.name} · {localizedItemName(
+                    {pendingQuickslotOwnerName} · {localizedItemName(
                       pendingQuickslotDefinition.id,
                       language,
                     )}
                   </strong>
                   {pendingQuickslotAim?.suggestedTarget
-                    ? text(
-                        "가까운 적 조준됨 · 같은 퀵슬롯을 다시 눌러 발사 · 빈 타일도 선택 가능 · Esc 취소",
-                        "Nearest enemy targeted · press the same slot to fire · empty tiles are valid · Esc to cancel",
+                      ? text(
+                        "가까운 적 조준됨 · 같은 퀵슬롯을 다시 눌러 발사 · 빈 타일·시야 밖 타일도 선택 가능 · Esc 취소",
+                        "Nearest enemy targeted · press the same slot to fire · empty and unseen tiles are valid · Esc to cancel",
                       )
                     : text(
-                        "가까운 적 없음 · 원하는 타일을 선택해 발사 · Esc 취소",
-                        "No nearby enemy · select any tile to fire · Esc to cancel",
+                        "가까운 적 없음 · 시야 밖을 포함한 원하는 타일로 발사 · Esc 취소",
+                        "No nearby enemy · fire toward any tile, including unseen tiles · Esc to cancel",
                       )}
                 </span>
               </div>
@@ -10907,12 +9274,12 @@ function DungeonRun({
                   </strong>
                   {pendingCompanionSkill?.suggestedTarget
                     ? text(
-                        `${pendingSkillDefinition.range === 0 ? "자기 칸" : `사거리 ${pendingSkillDefinition.range}칸`} · 같은 스킬을 다시 누르면 자동 발동 · 빈 타일도 선택 가능 · Esc 취소`,
-                        `${pendingSkillDefinition.range === 0 ? "Self tile" : `Range ${pendingSkillDefinition.range}`} · press the same skill to auto-cast · empty tiles are valid · Esc to cancel`,
+                        `${pendingSkillDefinition.range === 0 ? "자기 칸" : `사거리 ${pendingSkillDefinition.range}칸`} · 같은 스킬을 다시 누르면 자동 발동 · 빈 타일·시야 밖 타일도 선택 가능 · Esc 취소`,
+                        `${pendingSkillDefinition.range === 0 ? "Self tile" : `Range ${pendingSkillDefinition.range}`} · press the same skill to auto-cast · empty and unseen tiles are valid · Esc to cancel`,
                       )
                     : text(
-                        `사거리 ${pendingSkillDefinition.range}칸 · 원하는 타일 선택 · 빈 타일도 발동 · Esc 취소`,
-                        `Range ${pendingSkillDefinition.range} · select any tile · empty tiles are valid · Esc to cancel`,
+                        `사거리 ${pendingSkillDefinition.range}칸 · 빈 타일·시야 밖 타일도 선택 가능 · Esc 취소`,
+                        `Range ${pendingSkillDefinition.range} · empty and unseen tiles are valid · Esc to cancel`,
                       )}
                 </span>
               </div>
@@ -10925,8 +9292,8 @@ function DungeonRun({
                     {localizedItemName(throwingDefinition.id, language)}
                   </strong>
                   {text(
-                    "던질 방향을 지도에서 클릭 · Esc 취소",
-                    "Select a direction on the map · Esc to cancel",
+                    "던질 방향을 지도에서 클릭 · 시야 밖도 가능 · Esc 취소",
+                    "Select a direction, including unseen tiles · Esc to cancel",
                   )}
                 </span>
               </div>
@@ -10939,8 +9306,8 @@ function DungeonRun({
                     {localizedItemName(castingDefinition.id, language)}
                   </strong>
                   {text(
-                    "발사할 목표를 지도에서 클릭 · Esc 취소",
-                    "Select a target tile · Esc to cancel",
+                    "발사할 목표를 지도에서 클릭 · 시야 밖도 가능 · Esc 취소",
+                    "Select a target tile, including unseen tiles · Esc to cancel",
                   )}
                 </span>
               </div>
@@ -11263,10 +9630,12 @@ function DungeonRun({
           uiScale={uiScale}
           fontScale={fontScale}
           language={language}
+          soundEnabled={soundEnabled}
           developerMode={developerMode}
           onScaleChange={onScaleChange}
           onFontScaleChange={onFontScaleChange}
           onLanguageChange={onLanguageChange}
+          onSoundEnabledChange={onSoundEnabledChange}
           onDeveloperModeChange={onDeveloperModeChange}
           onClose={() => setSettingsOpen(false)}
         />
@@ -11322,6 +9691,7 @@ export default function DungeonGame() {
   const [uiScale, setUiScale] = useState(1);
   const [fontScale, setFontScale] = useState(1);
   const [language, setLanguage] = useState<UiLanguage>("ko");
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [developerMode, setDeveloperMode] = useState(false);
   const [selectedDungeon, setSelectedDungeon] =
     useState<DungeonDefinition | null>(null);
@@ -11336,6 +9706,7 @@ export default function DungeonGame() {
     useState<ActiveExpedition | null>(null);
   const [expeditionResult, setExpeditionResult] =
     useState<ExpeditionResultView | null>(null);
+  const uiAudioRuntimeRef = useRef<GameAudioRuntime | null>(null);
   const dungeonOffers = useMemo(
     () => generateDungeonOffers(campaign.offerSeed),
     [campaign.offerSeed],
@@ -11377,6 +9748,44 @@ export default function DungeonGame() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  useEffect(() => {
+    const runtime = new GameAudioRuntime();
+    runtime.setEnabled(true);
+    runtime.preload();
+    uiAudioRuntimeRef.current = runtime;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      if (uiAudioControlAt(event.target)) {
+        void runtime.unlockAndPlay("uiClick", 0.62, 1.04);
+      } else {
+        void runtime.unlock();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.repeat ||
+        (event.key !== "Enter" && event.key !== " ") ||
+        !uiAudioControlAt(event.target)
+      ) return;
+      void runtime.unlockAndPlay("uiClick", 0.62, 1.04);
+    };
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+      runtime.destroy();
+      if (uiAudioRuntimeRef.current === runtime) {
+        uiAudioRuntimeRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    uiAudioRuntimeRef.current?.setEnabled(soundEnabled);
+  }, [soundEnabled]);
 
   useEffect(() => {
     if (!campaignHydrated) return;
@@ -11434,493 +9843,24 @@ export default function DungeonGame() {
   const handleCampaignSlotDrop = useCallback(
     (held: HeldSlotItem, target: ItemSlotAddress) => {
       const source = held.source;
-      const isWarehouseOrBag = (address: ItemSlotAddress) =>
-        address.zone === "warehouse" ||
-        address.zone === "preparationInventory";
-      const isPreparationEquipment = (
-        address: ItemSlotAddress,
-      ): address is Extract<
-        ItemSlotAddress,
-        { zone: "preparationCompanionEquipment" }
-      > => address.zone === "preparationCompanionEquipment";
-
       if (
-        !isWarehouseOrBag(source) &&
-        !isPreparationEquipment(source)
+        !isPreparationSlotAddress(source) ||
+        !isPreparationSlotAddress(target)
       ) {
         return;
       }
-      if (
-        !isWarehouseOrBag(target) &&
-        !isPreparationEquipment(target)
-      ) {
-        return;
-      }
-
-      const nextCampaign: CampaignSave = {
-        ...campaign,
-        warehouse: cloneWarehouse(campaign.warehouse),
-        companions: campaign.companions.map((companion) => ({
-          ...companion,
-          equipment: { ...companion.equipment },
-          equipmentInstances: { ...companion.equipmentInstances },
-          autoSlots: companion.autoSlots.map((slot) =>
-            slot
-              ? {
-                  ...slot,
-                  instance: slot.instance ? { ...slot.instance } : null,
-                }
-              : null,
-          ) as Companion["autoSlots"],
-        })),
-      };
-      const nextLoadout: ExpeditionLoadout = {
-        stacks: { ...preparationLoadout.stacks },
-        instanceIds: [...preparationLoadout.instanceIds],
-        slotRefs: [...preparationLoadout.slotRefs],
-      };
-      const selectedRefs = () => [
-        ...Object.keys(nextLoadout.stacks).filter(
-          (itemId) => nextLoadout.stacks[itemId] > 0,
-        ),
-        ...nextLoadout.instanceIds,
-      ];
-      const normalizeLoadout = () => {
-        nextLoadout.slotRefs = normalizeFixedSlots(
-          nextLoadout.slotRefs,
-          selectedRefs(),
-          MAX_INVENTORY_SLOTS,
-        );
-      };
-      const selectStoredRef = (itemRef: string) => {
-        const instance = nextCampaign.warehouse.instances.find(
-          (candidate) => candidate.id === itemRef,
-        );
-        if (instance) {
-          if (!nextLoadout.instanceIds.includes(itemRef)) {
-            nextLoadout.instanceIds.push(itemRef);
-          }
-        } else if ((nextCampaign.warehouse.stacks[itemRef] ?? 0) > 0) {
-          nextLoadout.stacks[itemRef] = nextCampaign.warehouse.stacks[itemRef];
-        }
-        normalizeLoadout();
-      };
-      const deselectStoredRef = (itemRef: string) => {
-        delete nextLoadout.stacks[itemRef];
-        nextLoadout.instanceIds = nextLoadout.instanceIds.filter(
-          (candidate) => candidate !== itemRef,
-        );
-        normalizeLoadout();
-      };
-      const warehouseSlots = () =>
-        normalizeStorageSlots(nextCampaign.warehouse, WAREHOUSE_SLOT_COUNT);
-      const visibleWarehouseRefAt = (index: number) => {
-        const itemRef = warehouseSlots()[index];
-        return itemRef && !selectedRefs().includes(itemRef) ? itemRef : null;
-      };
-      const bagRefAt = (index: number) => {
-        normalizeLoadout();
-        return nextLoadout.slotRefs[index] ?? null;
-      };
-      const placeWarehouseRef = (itemRef: string, index: number) => {
-        const slots = warehouseSlots();
-        const fromIndex = slots.indexOf(itemRef);
-        nextCampaign.warehouse.slots = fromIndex >= 0
-          ? swapFixedSlots(slots, fromIndex, index)
-          : slots;
-      };
-      const placeBagRef = (itemRef: string, index: number) => {
-        normalizeLoadout();
-        const fromIndex = nextLoadout.slotRefs.indexOf(itemRef);
-        if (fromIndex >= 0) {
-          nextLoadout.slotRefs = swapFixedSlots(
-            nextLoadout.slotRefs,
-            fromIndex,
-            index,
-          );
-        }
-      };
-
-      if (source.zone === "warehouse" && target.zone === "warehouse") {
-        nextCampaign.warehouse.slots = swapFixedSlots(
-          warehouseSlots(),
-          source.index,
-          target.index,
-        );
-        setCampaign(nextCampaign);
-        return;
-      }
-      if (
-        source.zone === "preparationInventory" &&
-        target.zone === "preparationInventory"
-      ) {
-        normalizeLoadout();
-        nextLoadout.slotRefs = swapFixedSlots(
-          nextLoadout.slotRefs,
-          source.index,
-          target.index,
-        );
-        setPreparationLoadout(nextLoadout);
-        return;
-      }
-      if (source.zone === "warehouse" && target.zone === "preparationInventory") {
-        const sourceRef = visibleWarehouseRefAt(source.index);
-        const targetRef = bagRefAt(target.index);
-        if (!sourceRef) return;
-        if (!targetRef && selectedLoadoutSlotCount(nextLoadout) >= MAX_INVENTORY_SLOTS) {
-          return;
-        }
-        if (targetRef) deselectStoredRef(targetRef);
-        selectStoredRef(sourceRef);
-        placeBagRef(sourceRef, target.index);
-        if (targetRef) {
-          const targetWarehouseIndex = warehouseSlots().indexOf(targetRef);
-          if (targetWarehouseIndex >= 0) {
-            nextCampaign.warehouse.slots = swapFixedSlots(
-              warehouseSlots(),
-              source.index,
-              targetWarehouseIndex,
-            );
-          }
-        }
-        setCampaign(nextCampaign);
-        setPreparationLoadout(nextLoadout);
-        return;
-      }
-      if (source.zone === "preparationInventory" && target.zone === "warehouse") {
-        const sourceRef = bagRefAt(source.index);
-        const targetRef = visibleWarehouseRefAt(target.index);
-        if (!sourceRef) return;
-        deselectStoredRef(sourceRef);
-        if (targetRef) selectStoredRef(targetRef);
-        const sourceWarehouseIndex = warehouseSlots().indexOf(sourceRef);
-        if (sourceWarehouseIndex >= 0) {
-          nextCampaign.warehouse.slots = swapFixedSlots(
-            warehouseSlots(),
-            sourceWarehouseIndex,
-            target.index,
-          );
-        }
-        if (targetRef) placeBagRef(targetRef, source.index);
-        setCampaign(nextCampaign);
-        setPreparationLoadout(nextLoadout);
-        return;
-      }
-
-      type PreparationEquipmentAddress = Extract<
-        ItemSlotAddress,
-        { zone: "preparationCompanionEquipment" }
-      >;
-      type StoredGear = {
-        defId: string;
-        instance: InventoryInstance;
-      };
-      const equipmentKey = (address: PreparationEquipmentAddress) =>
-        address.target.kind === "equipment"
-          ? address.target.slot
-          : FLEX_RING_KEYS[address.target.index];
-      const equipmentOwner = (address: PreparationEquipmentAddress) =>
-        nextCampaign.companions.find(
-          (companion) => companion.id === address.companionId,
-        ) ?? null;
-      const readGear = (address: PreparationEquipmentAddress) => {
-        const owner = equipmentOwner(address);
-        if (!owner) return null;
-        if (address.target.kind === "flex") {
-          const autoItem = owner.autoSlots[address.target.index];
-          if (autoItem?.instance) {
-            return {
-              defId: autoItem.defId,
-              instance: autoItem.instance,
-            };
-          }
-          if (autoItem) return null;
-        }
-        const key = equipmentKey(address);
-        const defId = owner.equipment[key];
-        if (!defId) return null;
-        return {
-          defId,
-          instance:
-            owner.equipmentInstances[key] ??
-            createPlainEquipmentInstance(
-              ITEM_DEFS[defId],
-              `preparation-${defId}-${address.zone}-${key}`,
-            ),
-        };
-      };
-      const acceptsGear = (
-        gear: StoredGear,
-        address: PreparationEquipmentAddress,
-      ) => {
-        const definition = ITEM_DEFS[gear.defId];
-        if (!definition) return false;
-        return address.target.kind === "equipment"
-          ? definition.slot === address.target.slot
-          : isPartyQuickslotTarget(address.target)
-            ? AUTO_SLOT_CATEGORIES.has(definition.category)
-            : definition.category === "ring" ||
-              definition.category === "artifact";
-      };
-      const writeGear = (
-        address: PreparationEquipmentAddress,
-        gear: StoredGear | null,
-      ) => {
-        const owner = equipmentOwner(address);
-        if (!owner) return;
-        if (address.target.kind === "flex") {
-          const ringKey = FLEX_RING_KEYS[address.target.index];
-          owner.equipment[ringKey] = null;
-          owner.equipmentInstances[ringKey] = null;
-          owner.autoSlots[address.target.index] = null;
-          if (!gear) return;
-          if (
-            !isPartyQuickslotTarget(address.target) &&
-            ["ring", "artifact"].includes(
-              ITEM_DEFS[gear.defId]?.category ?? "",
-            )
-          ) {
-            owner.equipment[ringKey] = gear.defId;
-            owner.equipmentInstances[ringKey] = gear.instance;
-          } else if (
-            isPartyQuickslotTarget(address.target) &&
-            ITEM_DEFS[gear.defId] &&
-            AUTO_SLOT_CATEGORIES.has(ITEM_DEFS[gear.defId].category)
-          ) {
-            owner.autoSlots[address.target.index] = {
-              defId: gear.defId,
-              quantity: 1,
-              instance: gear.instance,
-            };
-          }
-          return;
-        }
-        const key = equipmentKey(address);
-        owner.equipment[key] = gear?.defId ?? null;
-        owner.equipmentInstances[key] = gear?.instance ?? null;
-      };
-      const takeStoredGear = (itemRef: string): StoredGear | null => {
-        const instanceIndex = nextCampaign.warehouse.instances.findIndex(
-          (instance) => instance.id === itemRef,
-        );
-        if (instanceIndex < 0) return null;
-        const [instance] = nextCampaign.warehouse.instances.splice(instanceIndex, 1);
-        const gear = { defId: instance.defId, instance };
-        deselectStoredRef(itemRef);
-        nextCampaign.warehouse.slots = normalizeStorageSlots(
-          nextCampaign.warehouse,
-          WAREHOUSE_SLOT_COUNT,
-        );
-        return gear;
-      };
-      const storeGear = (
-        gear: StoredGear,
-        warehouseIndex: number | null,
-        bagIndex: number | null,
-      ) => {
-        nextCampaign.warehouse.instances.push(gear.instance);
-        nextCampaign.warehouse.slots = normalizeStorageSlots(
-          nextCampaign.warehouse,
-          WAREHOUSE_SLOT_COUNT,
-        );
-        if (warehouseIndex !== null) {
-          placeWarehouseRef(gear.instance.id, warehouseIndex);
-        }
-        if (bagIndex !== null) {
-          selectStoredRef(gear.instance.id);
-          placeBagRef(gear.instance.id, bagIndex);
-        }
-      };
-
-      const sharedAutoItemAt = (address: PreparationEquipmentAddress) => {
-        if (address.target.kind !== "flex") return null;
-        const owner = equipmentOwner(address);
-        if (!owner) return null;
-        const item = owner.autoSlots[address.target.index];
-        if (!item) return null;
-        return typeof item === "string"
-          ? { defId: item, shared: true }
-          : {
-              defId: item.defId,
-              shared: !item.instance,
-            };
-      };
-      const clearSharedAutoReferences = (defId: string) => {
-        nextCampaign.companions.forEach((companion) => {
-          companion.autoSlots = companion.autoSlots.map((item) =>
-            item?.defId === defId && !item.instance ? null : item,
-          ) as Companion["autoSlots"];
-        });
-      };
-
-      if (isWarehouseOrBag(source) && isPreparationEquipment(target)) {
-        const sourceRef = source.zone === "warehouse"
-          ? visibleWarehouseRefAt(source.index)
-          : bagRefAt(source.index);
-        const sourceInstance = sourceRef
-          ? nextCampaign.warehouse.instances.find(
-              (instance) => instance.id === sourceRef,
-            ) ?? null
-          : null;
-        const sourceDefId = sourceRef && !sourceInstance
-          ? sourceRef
-          : null;
-        const sourceDefinition = sourceDefId
-          ? ITEM_DEFS[sourceDefId]
-          : null;
-        if (
-          sourceRef &&
-          sourceDefId &&
-          sourceDefinition &&
-          target.target.kind === "flex" &&
-          isPartyQuickslotTarget(target.target) &&
-          AUTO_SLOT_CATEGORIES.has(sourceDefinition.category) &&
-          sourceDefinition.category !== "wand"
-        ) {
-          if (
-            source.zone === "warehouse" &&
-            !selectedRefs().includes(sourceRef) &&
-            selectedLoadoutSlotCount(nextLoadout) >= MAX_INVENTORY_SLOTS
-          ) {
-            return;
-          }
-          if (source.zone === "warehouse") selectStoredRef(sourceRef);
-          const owner = equipmentOwner(target);
-          if (!owner) return;
-          const previousAuto = owner.autoSlots[target.target.index];
-          if (
-            previousAuto &&
-            typeof previousAuto !== "string" &&
-            previousAuto.instance
-          ) {
-            return;
-          }
-          const ringKey = FLEX_RING_KEYS[target.target.index];
-          const previousRing = owner.equipment[ringKey];
-          if (owner.equipmentInstances[ringKey]?.cursed) return;
-          if (previousRing) {
-            nextCampaign.warehouse.instances.push(
-              owner.equipmentInstances[ringKey] ??
-                createPlainEquipmentInstance(
-                  ITEM_DEFS[previousRing],
-                  `preparation-return-${previousRing}-${ringKey}`,
-                ),
-            );
-            owner.equipment[ringKey] = null;
-            owner.equipmentInstances[ringKey] = null;
-            nextCampaign.warehouse.slots = normalizeStorageSlots(
-              nextCampaign.warehouse,
-              WAREHOUSE_SLOT_COUNT,
-            );
-          }
-          const companion = nextCampaign.companions.find(
-            (candidate) => candidate.id === target.companionId,
-          );
-          if (!companion) return;
-          companion.autoSlots[target.target.index] = {
-            defId: sourceDefId,
-            quantity: 0,
-            instance: null,
-          };
-          setCampaign(nextCampaign);
-          setPreparationLoadout(nextLoadout);
-          return;
-        }
-      }
-
-      if (isPreparationEquipment(source) && isWarehouseOrBag(target)) {
-        const autoItem = sharedAutoItemAt(source);
-        if (autoItem?.shared && source.target.kind === "flex") {
-          const owner = equipmentOwner(source);
-          if (!owner) return;
-          const companion = nextCampaign.companions.find(
-            (candidate) => candidate.id === source.companionId,
-          );
-          if (!companion) return;
-          companion.autoSlots[source.target.index] = null;
-          if (target.zone === "warehouse") {
-            clearSharedAutoReferences(autoItem.defId);
-            deselectStoredRef(autoItem.defId);
-            placeWarehouseRef(autoItem.defId, target.index);
-          } else {
-            if (!selectedRefs().includes(autoItem.defId)) {
-              if (selectedLoadoutSlotCount(nextLoadout) >= MAX_INVENTORY_SLOTS) {
-                return;
-              }
-              selectStoredRef(autoItem.defId);
-            }
-            placeBagRef(autoItem.defId, target.index);
-          }
-          setCampaign(nextCampaign);
-          setPreparationLoadout(nextLoadout);
-          return;
-        }
-      }
-
-      if (isWarehouseOrBag(source) && isPreparationEquipment(target)) {
-        const sourceRef = source.zone === "warehouse"
-          ? visibleWarehouseRefAt(source.index)
-          : bagRefAt(source.index);
-        if (!sourceRef) return;
-        const sourceGear = takeStoredGear(sourceRef);
-        const targetGear = readGear(target);
-        if (
-          !sourceGear ||
-          !acceptsGear(sourceGear, target) ||
-          targetGear?.instance.cursed
-        ) return;
-        writeGear(target, sourceGear);
-        if (targetGear) {
-          storeGear(
-            targetGear,
-            source.zone === "warehouse" ? source.index : null,
-            source.zone === "preparationInventory" ? source.index : null,
-          );
-        }
-        setCampaign(nextCampaign);
-        setPreparationLoadout(nextLoadout);
-        return;
-      }
-
-      if (isPreparationEquipment(source) && isWarehouseOrBag(target)) {
-        const sourceGear = readGear(source);
-        if (!sourceGear || sourceGear.instance.cursed) return;
-        const targetRef = target.zone === "warehouse"
-          ? visibleWarehouseRefAt(target.index)
-          : bagRefAt(target.index);
-        const targetGear = targetRef ? takeStoredGear(targetRef) : null;
-        if (targetRef && (!targetGear || !acceptsGear(targetGear, source))) return;
-        writeGear(source, targetGear);
-        storeGear(
-          sourceGear,
-          target.zone === "warehouse" ? target.index : null,
-          target.zone === "preparationInventory" ? target.index : null,
-        );
-        setCampaign(nextCampaign);
-        setPreparationLoadout(nextLoadout);
-        return;
-      }
-
-      if (isPreparationEquipment(source) && isPreparationEquipment(target)) {
-        const sourceGear = readGear(source);
-        const targetGear = readGear(target);
-        if (
-          !sourceGear ||
-          sourceGear.instance.cursed ||
-          targetGear?.instance.cursed ||
-          !acceptsGear(sourceGear, target) ||
-          (targetGear && !acceptsGear(targetGear, source))
-        ) {
-          return;
-        }
-        writeGear(source, targetGear);
-        writeGear(target, sourceGear);
-        setCampaign(nextCampaign);
-      }
+      const result = applyPreparationSlotTransfer(
+        campaign,
+        preparationLoadout,
+        source,
+        target,
+      );
+      if (!result.changed) return;
+      setCampaign(result.campaign);
+      setPreparationLoadout(result.loadout);
     },
     [campaign, preparationLoadout],
   );
-
   const campaignSlotDrag = useItemSlotDrag(handleCampaignSlotDrop);
 
   const renderCampaignSurface = (content: ReactNode) => (
@@ -11959,10 +9899,12 @@ export default function DungeonGame() {
               uiScale={uiScale}
               fontScale={fontScale}
               language={language}
+              soundEnabled={soundEnabled}
               developerMode={developerMode}
               onScaleChange={changeUiScale}
               onFontScaleChange={changeFontScale}
               onLanguageChange={changeLanguage}
+              onSoundEnabledChange={setSoundEnabled}
               onDeveloperModeChange={setDeveloperMode}
               onClose={() => setHubSettingsOpen(false)}
             />
@@ -12007,7 +9949,9 @@ export default function DungeonGame() {
         dungeonName: dungeon.nameKo,
         maxFloor: dungeon.floorCount,
         difficultyScale: dungeon.difficultyScale,
+        difficulty: dungeon.difficulty,
         mainDropIds: [...dungeon.mainDropIds],
+        lootPlan: dungeon.lootPlan,
       },
       player,
       companions,
@@ -12076,13 +10020,16 @@ export default function DungeonGame() {
         key={`${activeExpedition.dungeon.id}-${activeExpedition.initialGame.seed}`}
         initialGame={activeExpedition.initialGame}
         dungeon={activeExpedition.dungeon}
+        audioRuntimeRef={uiAudioRuntimeRef}
         uiScale={uiScale}
         fontScale={fontScale}
         language={language}
+        soundEnabled={soundEnabled}
         developerMode={developerMode}
         onScaleChange={changeUiScale}
         onFontScaleChange={changeFontScale}
         onLanguageChange={changeLanguage}
+        onSoundEnabledChange={setSoundEnabled}
         onDeveloperModeChange={setDeveloperMode}
         onFinish={finishExpedition}
       />
@@ -12106,6 +10053,7 @@ export default function DungeonGame() {
       <PreparationScreen
         dungeon={selectedDungeon ?? dungeonOffers[0]}
         campaign={campaign}
+        developerMode={developerMode}
         loadout={preparationLoadout}
         selectedCompanionIds={selectedCompanionIds}
         onCompanionToggle={togglePreparationCompanion}
@@ -12122,6 +10070,7 @@ export default function DungeonGame() {
     <HubScreen
       campaign={campaign}
       dungeons={dungeonOffers}
+      developerMode={developerMode}
       onSelectDungeon={openPreparation}
       onOpenWarehouse={() => setWarehouseOpen(true)}
       onOpenCompendium={() => setHubCompendiumOpen(true)}

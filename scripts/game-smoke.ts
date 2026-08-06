@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import DungeonGame from "../app/components/DungeonGame";
@@ -51,6 +50,7 @@ import {
   playerStep,
   previewAlchemy,
   runEnemyTurn,
+  scaledEnemyStats,
   setCompanionCommand,
   setCompanionPriorityTarget,
   shouldAutoPickup,
@@ -69,6 +69,7 @@ import {
 } from "../app/game/engine";
 import {
   DUNGEON_DEFINITIONS,
+  DUNGEON_DIFFICULTY_RULES,
   applyLoadoutToPlayer,
   cloneWarehouse,
   companionToPlayer,
@@ -77,33 +78,49 @@ import {
   depositPlayerInventory,
   generateDungeonOffers,
   normalizeCompanionForHubWithReleasedItems,
+  newExpeditionPickups,
   playerToCompanion,
+  selectMainLootEntries,
   selectedLoadoutSlotCount,
   takeLoadoutFromWarehouse,
 } from "../app/game/campaign";
 import {
-  COMPANION_ATTACK_FRAMES,
   COMPANION_CLASSES,
   COMPANION_CLASS_IDS,
-  COMPANION_FRAME_HEIGHT,
-  COMPANION_FRAME_WIDTH,
-  COMPANION_INTERACT_FRAMES,
-  COMPANION_MOVE_FRAMES,
   COMPANION_TRAIT_IDS,
   COMPANION_TRAITS,
   createCompanionTraits,
   getCompanionAccuracy,
   getCompanionAttack,
+  getCompanionAttackSpeed,
   getCompanionEvasion,
+  getCompanionMoveSpeed,
   reduceCharacterDamage,
 } from "../app/game/companions";
 import {
+  COMPANION_ATTACK_FRAMES,
+  COMPANION_FRAME_HEIGHT,
+  COMPANION_FRAME_WIDTH,
+  COMPANION_INTERACT_FRAMES,
+  COMPANION_MOVE_FRAMES,
+  COMPANION_VISUALS,
+} from "../app/presentation/companion-visuals";
+import {
+  COMPANION_PROFESSIONS,
+  COMPANION_PROFESSION_IDS,
   COMPANION_SKILLS,
   COMPANION_SKILL_IDS,
   createCompanionSkills,
+  normalizeCompanionProfession,
 } from "../app/game/companion-skills";
 import {
+  companionSkillBlueprint,
+  deriveCompanionSkill,
+} from "../app/game/companion-skill-blueprints";
+import {
   experienceForNextLevel,
+  LEVEL_STAT_GROWTH,
+  LEVEL_XP_REQUIREMENT_GROWTH,
   LEVEL_XP_REQUIREMENT_MULTIPLIER,
   PLANNED_ENDGAME_POWER_MULTIPLIER,
 } from "../app/game/progression";
@@ -111,10 +128,23 @@ import { AUGMENT_DEFS, AUGMENTS_ENABLED } from "../app/game/augments";
 import {
   createEquipmentInstance,
   createPlainEquipmentInstance,
+  enchantEquipmentInstance,
+  enchantmentGradePower,
+  enchantmentGradeChances,
   equipmentStatProfile,
+  equipmentTraitSummary,
   isUpgradeableEquipment,
+  normalizeEquipmentInstance,
+  rollEnchantmentGrade,
+  upgradeEquipmentInstance,
 } from "../app/game/equipment";
-import { resolveItemRarity } from "../app/game/item-rarity";
+import type { InventoryInstance } from "../app/game/types";
+import {
+  ITEM_GRADES,
+  itemGradeIndex,
+  itemGradeMultiplier,
+  resolveItemGrade,
+} from "../app/game/item-grade";
 import {
   ENEMY_DROP_CHANCE,
   ENEMY_DROP_TABLE,
@@ -132,7 +162,7 @@ import {
 import {
   createEffectTrajectories,
   releaseHeldSignalsAtTurnStart,
-} from "../app/game/effects";
+} from "../app/presentation/effects";
 import {
   WAREHOUSE_SLOT_COUNT,
   normalizeFixedSlots,
@@ -140,6 +170,21 @@ import {
   normalizeStorageSlots,
   swapFixedSlots,
 } from "../app/game/inventory-slots";
+import {
+  reorderDungeonInventory,
+  swapPartyLoadout,
+} from "../app/game/loadout-transactions";
+import { applyPreparationSlotTransfer } from "../app/game/preparation-transactions";
+import {
+  nearestVisibleEnemy,
+  PLAYER_ACTOR_ID,
+  suggestedSkillTarget,
+} from "../app/game/party";
+import { isTileClickReachable } from "../app/game/spatial";
+import {
+  completeFloorExit,
+  resolveGameSession,
+} from "../app/game/session";
 import {
   blocksSight,
   findPath,
@@ -149,7 +194,7 @@ import {
 import {
   PLAYER_ATTACK_FRAMES,
   PLAYER_INTERACT_FRAMES,
-} from "../app/game/player-animation";
+} from "../app/presentation/player-animation";
 import {
   burningStatusPixels,
   cameraShakeOffset,
@@ -163,7 +208,17 @@ import {
   fieldTilePixels,
   pruneCameraShakes,
   prunePixelEffects,
-} from "../app/game/pixel-effects";
+} from "../app/presentation/pixel-effects";
+import {
+  createFootprintFragmentParticles,
+  createFragmentParticles,
+  createShockwaveParticles,
+  createSlashParticles,
+  createThrustParticles,
+  particleFootprintTiles,
+} from "../app/presentation/pixel-particle-emitters";
+import { SKILL_PARTICLE_RECIPES } from "../app/presentation/skill-particle-recipes";
+import { sampleTravelMotion } from "../app/presentation/skill-motion";
 import {
   FOG_INNER_BOUNDARY_PIXELS,
   FOG_OUTER_BOUNDARY_PIXELS,
@@ -188,7 +243,7 @@ import {
   syncPixelFogRuntime,
   usesRememberedFogBase,
   usesStaticFogAtPixel,
-} from "../app/game/fog-frontier";
+} from "../app/presentation/fog-frontier";
 import {
   fogMasksForTile,
   SEWER_TILE_FRAMES,
@@ -200,126 +255,380 @@ import {
   waterSurfaceMaskRows,
   waterTextureSlices,
   WATER_SCROLL_PIXELS_PER_SECOND,
-} from "../app/game/render";
+} from "../app/presentation/render";
 import {
   ATTACK_SEQUENCE_GAP,
   ATTACK_START_DELAY,
+  COMPANION_ATTACK_DURATION,
   COMPANION_MOVE_DURATION,
   createTurnMotionTimeline,
+  durationForInteraction,
   durationForMotion,
+  impactDelayForMotion,
   ENEMY_ATTACK_DURATION,
   ENEMY_MOVE_DURATION,
   PLAYER_ATTACK_DURATION,
   PLAYER_INTERACTION_DURATION,
   PLAYER_PICKUP_DURATION,
   PLAYER_MOVE_DURATION,
-} from "../app/game/timing";
+  SKILL_CHARGE_DURATION,
+  SKILL_LEAP_DURATION,
+  SKILL_TELEPORT_DURATION,
+} from "../app/presentation/timing";
+import {
+  isDamageEffect,
+  isDefeatEffect,
+  isImpactEffect,
+} from "../app/presentation/combat-feedback";
 
 const pointKey = (x: number, y: number) => `${x},${y}`;
 const fileHash = (path: string) =>
   createHash("sha256").update(readFileSync(path)).digest("hex");
-const directoryBytes = (path: string): number =>
-  readdirSync(path, { withFileTypes: true }).reduce(
-    (total, entry) => {
-      const childPath = join(path, entry.name);
-      return total + (
-        entry.isDirectory()
-          ? directoryBytes(childPath)
-          : statSync(childPath).size
-      );
-    },
-    0,
-  );
-
-const windowsLauncher = readFileSync("ShatteredWebDungeon-Local.exe");
-assert.equal(
-  windowsLauncher.subarray(0, 2).toString("ascii"),
-  "MZ",
-  "the local Windows launcher must have a DOS/PE executable header",
-);
-const peHeaderOffset = windowsLauncher.readUInt32LE(0x3c);
-assert.equal(
-  windowsLauncher.subarray(peHeaderOffset, peHeaderOffset + 4).toString("binary"),
-  "PE\u0000\u0000",
-  "the local Windows launcher must contain a valid PE signature",
-);
-assert.equal(
-  windowsLauncher.readUInt16LE(peHeaderOffset + 4),
-  0x8664,
-  "the local Windows launcher must target 64-bit Windows",
-);
-const optionalHeaderOffset = peHeaderOffset + 24;
-assert.equal(
-  windowsLauncher.readUInt16LE(optionalHeaderOffset + 68),
-  2,
-  "the local Windows launcher must use the GUI subsystem and never open a terminal",
-);
-const launcherSource = readFileSync(
-  "tools/windows-launcher/launcher.c",
-  "utf8",
-);
-const localServerSource = readFileSync("tools/local-server.mjs", "utf8");
-const runtimeAssetsSource = readFileSync(
-  "app/game/runtime-assets.ts",
-  "utf8",
-);
-assert.doesNotMatch(
-  launcherSource,
-  /npm ci|npm run dev:local|node_modules/,
-  "the Windows launcher must never install the development dependency tree",
-);
-assert.match(
-  launcherSource,
-  /local-dist\\\\index\.html/,
-  "the Windows launcher must start from the prebuilt local game bundle",
-);
-assert.match(
-  launcherSource,
-  /tools\\\\local-server\.mjs/,
-  "the Windows launcher must use the dependency-free local server",
-);
-assert.match(
-  launcherSource,
-  /find_available_local_port[\s\S]*--port %u/,
-  "every Windows launch must select a free dedicated port for its own server",
-);
-assert.doesNotMatch(
-  launcherSource,
-  /로컬 게임 서버가 이미 실행 중이어서/,
-  "the launcher must never mistake an unrelated or older fixed-port server for this build",
-);
-assert.match(
-  localServerSource,
-  /process\.argv\.indexOf\("--port"\)/,
-  "the local server must accept the launcher's dedicated port",
-);
-assert.match(
-  localServerSource,
-  /Cache-Control": "no-store, max-age=0"/,
-  "stable local asset names must never reuse bytes from an earlier extraction",
-);
-assert.equal(
-  (runtimeAssetsSource.match(/\?inline/g) ?? []).length,
-  16,
-  "all map, item, enemy, and companion images needed to enter a floor must be embedded",
-);
-assert.equal(
-  statSync("local-dist/index.html").size > 0,
-  true,
-  "the distributable must contain a prebuilt local entry page",
-);
-assert.equal(
-  directoryBytes("local-dist") < 2 * 1024 * 1024,
-  true,
-  "the complete prebuilt local bundle must stay below two megabytes",
-);
-const dungeonUiSource = readFileSync(
+const dungeonUiSource = [
   "app/components/DungeonGame.tsx",
-  "utf8",
-);
+  "app/presentation/dungeon-renderer.ts",
+  "app/presentation/description-window.tsx",
+  "app/presentation/companion-visuals.ts",
+  "app/presentation/inspection-catalog.ts",
+]
+  .map((path) => readFileSync(path, "utf8"))
+  .join("\n");
 const globalStyleSource = readFileSync("app/globals.css", "utf8");
 const mapSource = readFileSync("app/game/map.ts", "utf8");
+const dungeonRendererSource = readFileSync(
+  "app/presentation/dungeon-renderer.ts",
+  "utf8",
+);
 const campaignHtml = renderToStaticMarkup(createElement(DungeonGame));
+
+const semanticDamageEffect = {
+  x: 1,
+  y: 1,
+  text: "번역과 무관한 피해 문구",
+  color: "#fff",
+  kind: "damage" as const,
+};
+assert.ok(
+  isDamageEffect(semanticDamageEffect) && isImpactEffect(semanticDamageEffect),
+  "damage presentation must use semantic effect kinds instead of localized text",
+);
+assert.ok(
+  !isDamageEffect({ ...semanticDamageEffect, kind: "notice", text: "-99" }),
+  "numeric-looking display text must not be interpreted as rule feedback",
+);
+assert.ok(
+  isDefeatEffect({ ...semanticDamageEffect, kind: "defeat", text: "defeated" }),
+  "defeat presentation must remain stable when display text changes",
+);
+
+const sessionState = createNewGame(0x5e5510);
+sessionState.enemies = [];
+sessionState.companions = [];
+const sessionAction = waitTurn(sessionState);
+const sessionResolution = resolveGameSession(sessionAction);
+assert.equal(sessionResolution.kind, "turn");
+if (sessionResolution.kind === "turn") {
+  assert.equal(
+    sessionResolution.enemyTurns.length,
+    sessionAction.elapsedTurns ?? 1,
+    "the game session must own enemy-turn progression",
+  );
+  assert.equal(
+    sessionResolution.state,
+    sessionResolution.enemyTurns.at(-1)?.state,
+  );
+}
+const floorSession = resolveGameSession({
+  ...sessionAction,
+  state: { ...sessionAction.state, floor: 1, maxFloor: 2 },
+  reachedExit: true,
+});
+assert.equal(floorSession.kind, "floorExit");
+if (floorSession.kind === "floorExit") {
+  assert.equal(
+    completeFloorExit(floorSession).kind,
+    "descended",
+    "the game session must own floor-transition rules",
+  );
+}
+
+const clickReachState = createNewGame(0xc11cab1e);
+clickReachState.tiles.forEach((row) =>
+  row.forEach((tile) => {
+    tile.visible = false;
+    tile.visibleMask = 0;
+    tile.discovered = false;
+    tile.discoveredMask = 0;
+  }),
+);
+const clickReachCenter = { x: 10, y: 10 };
+clickReachState.tiles[clickReachCenter.y][clickReachCenter.x].visible = true;
+clickReachState.tiles[clickReachCenter.y][clickReachCenter.x].visibleMask = 15;
+clickReachState.tiles[clickReachCenter.y][clickReachCenter.x].discovered = true;
+clickReachState.tiles[clickReachCenter.y][clickReachCenter.x].discoveredMask = 15;
+assert.equal(
+  isTileClickReachable(clickReachState, { x: 11, y: 11 }),
+  true,
+  "the clickable frontier must extend one diagonal tile beyond live vision",
+);
+assert.equal(
+  isTileClickReachable(clickReachState, { x: 12, y: 10 }),
+  false,
+  "the clickable frontier must not expose a second hidden tile",
+);
+clickReachState.tiles[4][4].discovered = true;
+assert.equal(
+  isTileClickReachable(clickReachState, { x: 4, y: 4 }),
+  true,
+  "previously explored tiles must remain clickable outside live vision",
+);
+
+const loadoutTransactionState = developerRecruitCompanion(
+  createNewGame(0x10ad07),
+  COMPANION_CLASS_IDS[0],
+);
+const loadoutCompanion = loadoutTransactionState.companions[0];
+loadoutTransactionState.player.equipment.ring = "ring_might";
+loadoutTransactionState.player.equipmentInstances.ring =
+  createPlainEquipmentInstance(ITEM_DEFS.ring_might);
+loadoutCompanion.equipment.ring = "ring_guard";
+loadoutCompanion.equipmentInstances.ring =
+  createPlainEquipmentInstance(ITEM_DEFS.ring_guard);
+const loadoutSwap = swapPartyLoadout(
+  loadoutTransactionState,
+  { ownerId: PLAYER_ACTOR_ID, target: { kind: "flex", index: 0 } },
+  { ownerId: loadoutCompanion.id, target: { kind: "flex", index: 0 } },
+);
+assert.equal(loadoutSwap.changed, true);
+assert.equal(loadoutSwap.state.player.equipment.ring, "ring_guard");
+assert.equal(loadoutSwap.state.companions[0].equipment.ring, "ring_might");
+assert.equal(
+  loadoutTransactionState.player.equipment.ring,
+  "ring_might",
+  "loadout transactions must not mutate their input state",
+);
+
+const cursedTransactionState = loadoutSwap.state;
+cursedTransactionState.player.equipmentInstances.ring!.cursed = true;
+const cursedSwap = swapPartyLoadout(
+  cursedTransactionState,
+  { ownerId: PLAYER_ACTOR_ID, target: { kind: "flex", index: 0 } },
+  { ownerId: loadoutCompanion.id, target: { kind: "flex", index: 0 } },
+);
+assert.equal(cursedSwap.changed, false);
+assert.equal(cursedSwap.reason, "cursed");
+assert.equal(cursedSwap.state.player.equipment.ring, "ring_guard");
+
+const inventoryTransactionState = createNewGame(0x5107);
+inventoryTransactionState.player.inventory.potion_healing = 1;
+inventoryTransactionState.player.inventory.potion_strength = 1;
+inventoryTransactionState.player.inventorySlots = [
+  "potion_healing",
+  "potion_strength",
+  ...Array.from({ length: MAX_INVENTORY_SLOTS - 2 }, () => null),
+];
+const reorderedInventory = reorderDungeonInventory(
+  inventoryTransactionState,
+  0,
+  1,
+  "potion_healing",
+);
+assert.equal(reorderedInventory.player.inventorySlots?.[0], "potion_strength");
+assert.equal(reorderedInventory.player.inventorySlots?.[1], "potion_healing");
+assert.equal(
+  inventoryTransactionState.player.inventorySlots?.[0],
+  "potion_healing",
+);
+
+const createPreparationTransferFixture = () => {
+  const sword = createPlainEquipmentInstance(
+    ITEM_DEFS.shortsword,
+    "preparation-sword",
+  );
+  const ring = createPlainEquipmentInstance(
+    ITEM_DEFS.ring_might,
+    "preparation-ring",
+  );
+  const companions = createStarterCompanionRoster(
+    COMPANION_CLASS_IDS.slice(0, 2),
+  );
+  return {
+    campaign: {
+      version: 4 as const,
+      warehouse: {
+        stacks: { potion_healing: 3 },
+        instances: [sword, ring],
+        throwableProfiles: {},
+        slots: [
+          sword.id,
+          ring.id,
+          "potion_healing",
+          ...Array.from({ length: WAREHOUSE_SLOT_COUNT - 3 }, () => null),
+        ],
+      },
+      companions,
+      expeditions: 0,
+      completedExpeditions: 0,
+      offerSeed: 1,
+    },
+    loadout: {
+      stacks: {},
+      instanceIds: [],
+      slotRefs: Array.from(
+        { length: MAX_INVENTORY_SLOTS },
+        () => null,
+      ),
+    },
+    sword,
+    ring,
+  };
+};
+
+const preparationReorderFixture = createPreparationTransferFixture();
+const preparationReorder = applyPreparationSlotTransfer(
+  preparationReorderFixture.campaign,
+  preparationReorderFixture.loadout,
+  { zone: "warehouse", index: 0 },
+  { zone: "warehouse", index: 1 },
+);
+assert.equal(preparationReorder.changed, true);
+assert.equal(preparationReorder.campaign.warehouse.slots[0], "preparation-ring");
+assert.equal(preparationReorder.campaign.warehouse.slots[1], "preparation-sword");
+assert.equal(
+  preparationReorderFixture.campaign.warehouse.slots[0],
+  "preparation-sword",
+  "preparation transfers must not mutate the persisted campaign input",
+);
+
+const preparationEquipFixture = createPreparationTransferFixture();
+const returningWeapon = createPlainEquipmentInstance(
+  ITEM_DEFS.rusty_sword,
+  "returning-preparation-weapon",
+);
+preparationEquipFixture.campaign.companions[0].equipment.weapon = "rusty_sword";
+preparationEquipFixture.campaign.companions[0].equipmentInstances.weapon =
+  returningWeapon;
+const preparationEquip = applyPreparationSlotTransfer(
+  preparationEquipFixture.campaign,
+  preparationEquipFixture.loadout,
+  { zone: "warehouse", index: 0 },
+  {
+    zone: "preparationCompanionEquipment",
+    companionId: preparationEquipFixture.campaign.companions[0].id,
+    target: { kind: "equipment", slot: "weapon" },
+  },
+);
+assert.equal(preparationEquip.changed, true);
+assert.equal(
+  preparationEquip.campaign.companions[0].equipmentInstances.weapon?.id,
+  "preparation-sword",
+  "equipping in preparation must transfer the exact warehouse instance",
+);
+assert.equal(
+  preparationEquip.campaign.warehouse.slots[0],
+  "returning-preparation-weapon",
+  "displaced companion gear must return to the dragged warehouse slot",
+);
+assert.equal(
+  preparationEquip.campaign.warehouse.instances.some(
+    (instance) => instance.id === "preparation-sword",
+  ),
+  false,
+  "one equipment instance must never be owned by the warehouse and companion together",
+);
+
+const preparationIncompatibleFixture = createPreparationTransferFixture();
+const incompatiblePreparationTransfer = applyPreparationSlotTransfer(
+  preparationIncompatibleFixture.campaign,
+  preparationIncompatibleFixture.loadout,
+  { zone: "warehouse", index: 1 },
+  {
+    zone: "preparationCompanionEquipment",
+    companionId: preparationIncompatibleFixture.campaign.companions[0].id,
+    target: { kind: "flex", index: 2 },
+  },
+);
+assert.equal(incompatiblePreparationTransfer.changed, false);
+assert.equal(
+  incompatiblePreparationTransfer.campaign,
+  preparationIncompatibleFixture.campaign,
+  "passive rings must be rejected by active preparation quickslots without cloning state",
+);
+
+const preparationCurseFixture = createPreparationTransferFixture();
+const cursedPreparationRing = createPlainEquipmentInstance(
+  ITEM_DEFS.ring_guard,
+  "cursed-preparation-ring",
+);
+cursedPreparationRing.cursed = true;
+preparationCurseFixture.campaign.companions[0].equipment.ring = "ring_guard";
+preparationCurseFixture.campaign.companions[0].equipmentInstances.ring =
+  cursedPreparationRing;
+const cursedPreparationTransfer = applyPreparationSlotTransfer(
+  preparationCurseFixture.campaign,
+  preparationCurseFixture.loadout,
+  {
+    zone: "preparationCompanionEquipment",
+    companionId: preparationCurseFixture.campaign.companions[0].id,
+    target: { kind: "flex", index: 0 },
+  },
+  { zone: "warehouse", index: 5 },
+);
+assert.equal(cursedPreparationTransfer.changed, false);
+assert.equal(
+  cursedPreparationTransfer.campaign.companions[0].equipmentInstances.ring?.id,
+  "cursed-preparation-ring",
+  "cursed preparation gear must remain with its owner",
+);
+
+const preparationSharedFixture = createPreparationTransferFixture();
+const firstSharedRegistration = applyPreparationSlotTransfer(
+  preparationSharedFixture.campaign,
+  preparationSharedFixture.loadout,
+  { zone: "warehouse", index: 2 },
+  {
+    zone: "preparationCompanionEquipment",
+    companionId: preparationSharedFixture.campaign.companions[0].id,
+    target: { kind: "flex", index: 2 },
+  },
+);
+assert.equal(firstSharedRegistration.changed, true);
+assert.equal(firstSharedRegistration.loadout.slotRefs[0], "potion_healing");
+const secondSharedRegistration = applyPreparationSlotTransfer(
+  firstSharedRegistration.campaign,
+  firstSharedRegistration.loadout,
+  { zone: "preparationInventory", index: 0 },
+  {
+    zone: "preparationCompanionEquipment",
+    companionId: preparationSharedFixture.campaign.companions[1].id,
+    target: { kind: "flex", index: 2 },
+  },
+);
+assert.equal(secondSharedRegistration.changed, true);
+assert.equal(
+  secondSharedRegistration.campaign.companions[0].autoSlots[2]?.defId,
+  "potion_healing",
+);
+assert.equal(
+  secondSharedRegistration.campaign.companions[1].autoSlots[2]?.defId,
+  "potion_healing",
+  "multiple companions must be able to reference one selected consumable stack",
+);
+const returnedSharedStack = applyPreparationSlotTransfer(
+  secondSharedRegistration.campaign,
+  secondSharedRegistration.loadout,
+  {
+    zone: "preparationCompanionEquipment",
+    companionId: preparationSharedFixture.campaign.companions[0].id,
+    target: { kind: "flex", index: 2 },
+  },
+  { zone: "warehouse", index: 2 },
+);
+assert.equal(returnedSharedStack.changed, true);
+assert.equal(returnedSharedStack.campaign.companions[0].autoSlots[2], null);
+assert.equal(returnedSharedStack.campaign.companions[1].autoSlots[2], null);
+assert.equal(returnedSharedStack.loadout.stacks.potion_healing, undefined);
+
 assert.match(
   campaignHtml,
   /어디로 향하시겠습니까\?/,
@@ -336,21 +645,23 @@ assert.equal(
   6,
   "the initial hub render must show all six recommendations",
 );
-assert.deepEqual(
-  DUNGEON_DEFINITIONS.map((dungeon) => dungeon.difficulty).sort(),
-  [1, 1, 2, 2, 3, 3],
-  "every recommendation set must include two dungeons at each difficulty",
+const offeredDifficulties = DUNGEON_DEFINITIONS
+  .map((dungeon) => dungeon.difficulty)
+  .sort((a, b) => a - b);
+assert.equal(
+  new Set(offeredDifficulties).size,
+  6,
+  "the six recommendations must use six distinct grades from the seven-step scale",
+);
+assert.ok(
+  offeredDifficulties.includes(1) && offeredDifficulties.includes(7),
+  "every recommendation set must include both F and S so the full danger range remains available",
 );
 assert.ok(
   DUNGEON_DEFINITIONS.some(
     (dungeon) => dungeon.difficulty === 1 && dungeon.floorCount === 3,
   ),
   "each recommendation set must retain at least one three-floor easy expedition",
-);
-assert.equal(
-  new Set(DUNGEON_DEFINITIONS.map((dungeon) => dungeon.mainDropIds[0])).size,
-  6,
-  "each recommended dungeon must lead with a different featured drop",
 );
 for (const dungeon of DUNGEON_DEFINITIONS) {
   assert.match(
@@ -359,18 +670,113 @@ for (const dungeon of DUNGEON_DEFINITIONS) {
     `the hub must list ${dungeon.nameKo}`,
   );
   assert.ok(
-    dungeon.mainDropIds.length === 3 &&
+    dungeon.mainDropIds.length === 2 &&
       dungeon.mainDropIds.every(
-        (itemId) => ITEM_DEFS[itemId] && ITEM_DEFS[itemId].category !== "key",
+        (itemId) =>
+          ITEM_DEFS[itemId] &&
+          !["seed", "potion", "stone"].includes(
+            ITEM_DEFS[itemId].category,
+          ),
       ),
-    `${dungeon.nameKo} must advertise only real, persistent main drops`,
+    `${dungeon.nameKo} must advertise exactly two rewards while excluding seeds, potions, and runestones`,
+  );
+  const featuredEntries = selectMainLootEntries(dungeon.lootPlan);
+  assert.deepEqual(
+    dungeon.mainDropIds,
+    featuredEntries.map((entry) => entry.defId),
+    `${dungeon.nameKo} must advertise the exact planned instances selected as main loot`,
+  );
+  const bestEligibleGradeByItem = new Map<string, number>();
+  dungeon.lootPlan.forEach((entry) => {
+    const definition = ITEM_DEFS[entry.defId];
+    if (
+      !definition ||
+      ["seed", "potion", "stone"].includes(definition.category)
+    ) return;
+    const grade = itemGradeIndex(resolveItemGrade(definition, entry.instance));
+    bestEligibleGradeByItem.set(
+      entry.defId,
+      Math.max(bestEligibleGradeByItem.get(entry.defId) ?? -1, grade),
+    );
+  });
+  const expectedTopGrades = [...bestEligibleGradeByItem.values()]
+    .sort((a, b) => b - a)
+    .slice(0, 2);
+  const featuredGrades = featuredEntries
+    .map((entry) =>
+      itemGradeIndex(resolveItemGrade(ITEM_DEFS[entry.defId], entry.instance)),
+    )
+    .sort((a, b) => b - a);
+  assert.deepEqual(
+    featuredGrades,
+    expectedTopGrades,
+    `${dungeon.nameKo} must feature the two highest grades in its complete pre-generated loot plan`,
   );
   assert.equal(
-    dungeon.mainDropIds.filter(
-      (itemId) => ITEM_DEFS[itemId]?.category === "scroll",
-    ).length,
-    1,
-    `${dungeon.nameKo} must advertise exactly one rare scroll as main loot`,
+    dungeon.difficultyGrade,
+    DUNGEON_DIFFICULTY_RULES[dungeon.difficulty].grade,
+    `${dungeon.nameKo} must expose the grade assigned by the seven-step rules`,
+  );
+  assert.ok(
+    dungeon.mainDropIds.every((itemId) =>
+      dungeon.lootPlan.some((entry) => entry.defId === itemId),
+    ),
+    `${dungeon.nameKo} must actually contain both advertised main drops`,
+  );
+  assert.ok(
+    dungeon.lootPlan.some((entry) => entry.source === "object"),
+    `${dungeon.nameKo} must pre-plan object contents before map generation`,
+  );
+  assert.ok(
+    dungeon.lootPlan.every(
+      (entry) => entry.floor >= 1 && entry.floor <= dungeon.floorCount,
+    ),
+    `${dungeon.nameKo} must assign every planned reward to a valid floor`,
+  );
+  const gradeRules = DUNGEON_DIFFICULTY_RULES[dungeon.difficulty];
+  assert.ok(
+    dungeon.lootPlan
+      .filter((entry) => entry.instance)
+      .every(
+        (entry) =>
+          itemGradeIndex(entry.instance?.grade ?? "F") >=
+            itemGradeIndex(gradeRules.minimumItemGrade) &&
+          itemGradeIndex(entry.instance?.grade ?? "S") <=
+            itemGradeIndex(gradeRules.maximumItemGrade),
+      ),
+    `${dungeon.nameKo} equipment grade must follow its difficulty band`,
+  );
+  assert.ok(
+    dungeon.lootPlan
+      .filter((entry) => entry.instance)
+      .every(
+        (entry) =>
+          entry.instance?.traits?.[0]?.grade === entry.instance?.grade,
+      ),
+    `${dungeon.nameKo} equipment must pre-plan a first enchantment matching its item grade`,
+  );
+}
+assert.equal(
+  DUNGEON_DIFFICULTY_RULES[7].enemyStatMultiplier /
+    DUNGEON_DIFFICULTY_RULES[1].enemyStatMultiplier,
+  50,
+  "S enemy stats must use exactly fifty times the F multiplier",
+);
+const easiestRat = scaledEnemyStats(
+  "rat",
+  1,
+  DUNGEON_DIFFICULTY_RULES[1].enemyStatMultiplier,
+);
+const hardestRat = scaledEnemyStats(
+  "rat",
+  1,
+  DUNGEON_DIFFICULTY_RULES[7].enemyStatMultiplier,
+);
+for (const stat of ["hp", "attack", "defense", "accuracy", "evasion", "xp"] as const) {
+  assert.equal(
+    hardestRat[stat],
+    easiestRat[stat] * 50,
+    `S rat ${stat} must be exactly fifty times its F value`,
   );
 }
 const alternateDungeonOffers = generateDungeonOffers(0x71ac92e4);
@@ -511,8 +917,9 @@ assert.deepEqual(
 campaignWarehouse.instances.push({
   id: "warehouse-sword-1",
   defId: "sword",
+  grade: "C",
   upgradeLevel: 2,
-  traits: [{ id: "keen", rank: 1 }],
+  traits: [{ id: "keen", grade: "C" }],
 });
 const warehouseKnife = campaignWarehouse.instances.find(
   (instance) => instance.defId === "throwing_knife",
@@ -564,7 +971,7 @@ assert.deepEqual(
   preparedPlayer.inventoryInstances.find(
     (instance) => instance.id === "warehouse-sword-1",
   )?.traits,
-  [{ id: "keen", rank: 1 }],
+  [{ id: "keen", grade: "C" }],
   "preparation must preserve individual equipment identity and traits",
 );
 const preparedKnife = preparedPlayer.inventoryInstances.find(
@@ -590,7 +997,9 @@ const soloExpedition = createExpeditionGame(
     dungeonName: sewerRules.nameKo,
     maxFloor: sewerRules.floorCount,
     difficultyScale: sewerRules.difficultyScale,
+    difficulty: sewerRules.difficulty,
     mainDropIds: sewerRules.mainDropIds,
+    lootPlan: sewerRules.lootPlan,
   },
   preparedPlayer,
   [],
@@ -627,7 +1036,9 @@ for (let seed = 1; seed <= 24; seed += 1) {
       dungeonName: sewerRules.nameKo,
       maxFloor: sewerRules.floorCount,
       difficultyScale: sewerRules.difficultyScale,
+      difficulty: sewerRules.difficulty,
       mainDropIds: sewerRules.mainDropIds,
+      lootPlan: sewerRules.lootPlan,
     },
     preparedPlayer,
     [],
@@ -661,6 +1072,52 @@ for (let seed = 1; seed <= 24; seed += 1) {
     `seed ${seed} must include the scroll advertised as main dungeon loot`,
   );
 }
+const collectPlacedDungeonLoot = (mapSeed: number) => {
+  let expedition = createExpeditionGame(
+    mapSeed,
+    {
+      dungeonId: sewerRules.id,
+      dungeonName: sewerRules.nameKo,
+      maxFloor: sewerRules.floorCount,
+      difficultyScale: sewerRules.difficultyScale,
+      difficulty: sewerRules.difficulty,
+      mainDropIds: sewerRules.mainDropIds,
+      lootPlan: sewerRules.lootPlan,
+    },
+    preparedPlayer,
+    [],
+  );
+  const ids: string[] = [];
+  while (true) {
+    ids.push(
+      ...expedition.groundItems.flatMap((item) =>
+        item.dungeonLootId ? [item.dungeonLootId] : [],
+      ),
+      ...expedition.objects.flatMap((object) =>
+        (object.lootPlanEntryIds ?? []).flatMap((id) => id ? [id] : []),
+      ),
+      ...expedition.enemies.flatMap((enemy) =>
+        enemy.drop?.id ? [enemy.drop.id] : [],
+      ),
+    );
+    if (expedition.floor >= expedition.maxFloor) break;
+    expedition = descendFloor(expedition);
+  }
+  return ids.sort();
+};
+const expectedPlannedLootIds = sewerRules.lootPlan
+  .map((entry) => entry.id)
+  .sort();
+assert.deepEqual(
+  collectPlacedDungeonLoot(0x3150a1),
+  expectedPlannedLootIds,
+  "the first map layout must place every pre-generated ground, object, and enemy reward",
+);
+assert.deepEqual(
+  collectPlacedDungeonLoot(0x3150a2),
+  expectedPlannedLootIds,
+  "changing the map seed must not reroll the dungeon's pre-generated loot list",
+);
 const roster = createStarterCompanionRoster(COMPANION_CLASS_IDS);
 assert.equal(
   roster[0].classId,
@@ -746,7 +1203,9 @@ const duoExpedition = createExpeditionGame(
     dungeonName: sewerRules.nameKo,
     maxFloor: sewerRules.floorCount,
     difficultyScale: sewerRules.difficultyScale,
+    difficulty: sewerRules.difficulty,
     mainDropIds: sewerRules.mainDropIds,
+    lootPlan: sewerRules.lootPlan,
   },
   preparedPlayer,
   roster.slice(2, 4),
@@ -807,11 +1266,6 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
-  /isPartyQuickslotTarget\(address\.target\)[\s\S]*AUTO_SLOT_CATEGORIES\.has\(definition\.category\)[\s\S]*definition\.category === "ring"[\s\S]*definition\.category === "artifact"/,
-  "preparation slots must separate active quickslot items from passive rings and artifacts",
-);
-assert.match(
-  dungeonUiSource,
   /FONT_SCALE_OPTIONS = \[0\.85, 1, 1\.15, 1\.3\]/,
   "settings must expose independent font-size choices",
 );
@@ -824,6 +1278,31 @@ assert.match(
   dungeonUiSource,
   /function PreparationScreen\([\s\S]*setItemPreview\([\s\S]*<ItemDetailModal[\s\S]*readOnly/,
   "preparation storage, bag, and equipment clicks must reuse the item-detail dialog",
+);
+assert.match(
+  dungeonUiSource,
+  /style=\{\{ left: held\.clientX, top: held\.clientY \}\}/,
+  "the held item cursor must use the pointer coordinates without a rightward offset",
+);
+assert.doesNotMatch(
+  dungeonUiSource,
+  /held\.clientX \+|held\.clientY \+/,
+  "item dragging must not add a fixed cursor offset",
+);
+assert.match(
+  globalStyleSource,
+  /\.held-item-cursor \{[\s\S]*transform: translate\(-50%, -50%\) rotate\(2deg\) scale\(1\.04\)/,
+  "the item ghost must be centered on the pointer while retaining its drag styling",
+);
+assert.match(
+  dungeonUiSource,
+  /\[1, 2, 3, 4, 5, 6, 7\]\.map[\s\S]*difficultyGrade/,
+  "dungeon difficulty must render as a seven-cell F-to-S gauge",
+);
+assert.match(
+  dungeonUiSource,
+  /developerMode && \([\s\S]*DeveloperDungeonLoot/,
+  "developer mode must expose the pre-generated dungeon loot list before entry",
 );
 assert.match(
   dungeonUiSource,
@@ -875,6 +1354,16 @@ assert.match(
   /className="throw-prompt skill-target-prompt"[\s\S]*Esc 취소/,
   "manual skill aiming must show the caster, skill, range, and cancel guidance",
 );
+assert.match(
+  dungeonUiSource,
+  /mode: "skill",[\s\S]*originActorId: pendingCompanionSkill\.casterId[\s\S]*range: definition\.range/,
+  "skill targeting presentation must retain the actual caster and cast range",
+);
+assert.match(
+  dungeonUiSource,
+  /mode: "quickslot",[\s\S]*originActorId: pendingQuickslotAim\.ownerId/,
+  "companion quickslot targeting presentation must retain the item owner",
+);
 assert.doesNotMatch(
   dungeonUiSource,
   /className="manual-party-control"|완전 수동 조작/,
@@ -902,6 +1391,18 @@ const canvasMoveSource = dungeonUiSource.slice(
 const canvasPointerDownSource = dungeonUiSource.slice(
   canvasPointerDownStart,
   canvasPointerFinishStart,
+);
+assert.match(
+  canvasMoveSource,
+  /targeting[\s\S]*pointInBounds\(gameRef\.current, point\)[\s\S]*isTileClickReachable/,
+  "aiming hover must accept in-bounds fog tiles while ordinary map input remains vision-limited",
+);
+assert.ok(
+  dungeonRendererSource.indexOf("drawImage(\n            fogTextureCanvas") <
+    dungeonRendererSource.indexOf("drawTargetingOverlay(") &&
+    dungeonRendererSource.indexOf("drawTargetingOverlay(") <
+      dungeonRendererSource.indexOf("pixelEffectBuckets.overlay"),
+  "targeting overlays must render after fog and before overlay particles",
 );
 assert.doesNotMatch(
   canvasMoveSource,
@@ -947,11 +1448,6 @@ assert.match(
   dungeonUiSource,
   /function DescriptionWindow\([\s\S]*createPortal\([\s\S]*description-window-layer[\s\S]*data-anchor-side/,
   "every explanation must use the shared portal-based description window",
-);
-assert.match(
-  dungeonUiSource,
-  /roomOnRight[\s\S]*roomOnLeft[\s\S]*resolvedAnchor\.right \+ gap[\s\S]*resolvedAnchor\.left - bounds\.width - gap/,
-  "description windows must choose a side from the clicked element instead of opening at screen center",
 );
 assert.match(
   dungeonUiSource,
@@ -1014,37 +1510,37 @@ assert.doesNotMatch(
   "pixel framework geometry and two-pixel scaling must not affect the original interface",
 );
 assert.equal(
-  resolveItemRarity(ITEM_DEFS.shortsword, {
-    id: "common-rarity-test",
+  resolveItemGrade(ITEM_DEFS.shortsword, {
+    id: "f-grade-test",
     defId: "shortsword",
-    quality: 1,
+    grade: "F",
   }),
-  1,
-  "quality-one equipment must use the common border",
+  "F",
+  "F equipment must resolve to the brown grade border",
 );
 assert.equal(
-  resolveItemRarity(ITEM_DEFS.shortsword, {
-    id: "mythic-rarity-test",
+  resolveItemGrade(ITEM_DEFS.shortsword, {
+    id: "s-grade-test",
     defId: "shortsword",
-    quality: 5,
+    grade: "S",
   }),
-  5,
-  "quality-five equipment must use the animated mythic border",
+  "S",
+  "S equipment must use the animated rainbow grade border",
 );
 assert.match(
   dungeonUiSource,
-  /className="item-rarity-marker"[\s\S]*data-item-rarity=\{rarity\}/,
-  "every occupied shared item slot must publish its resolved rarity without changing its layout",
+  /className="item-grade-marker"[\s\S]*data-item-grade=\{grade\}/,
+  "every occupied shared item slot must publish its resolved F-S grade without changing its layout",
 );
 assert.match(
   globalStyleSource,
-  /data-item-rarity="1"[\s\S]*data-item-rarity="2"[\s\S]*data-item-rarity="3"[\s\S]*data-item-rarity="4"[\s\S]*data-item-rarity="5"/,
-  "the original item slots must define all five rarity border levels",
+  /data-item-grade="F"[\s\S]*#8b5a2b[\s\S]*data-item-grade="E"[\s\S]*#ffffff[\s\S]*data-item-grade="D"[\s\S]*#ffffff[\s\S]*data-item-grade="C"[\s\S]*#3b82f6[\s\S]*data-item-grade="B"[\s\S]*#22c55e[\s\S]*data-item-grade="A"[\s\S]*#ef4444[\s\S]*data-item-grade="S"/,
+  "item slots must define F brown, E/D white, C blue, B green, A red, and S rainbow grades",
 );
 assert.match(
   globalStyleSource,
-  /item-rarity-marker\[data-item-rarity="5"\][\s\S]*animation:\s*item-rarity-rainbow\s+1800ms\s+linear\s+infinite[\s\S]*@keyframes item-rarity-rainbow/,
-  "the mythic border must continuously cycle through the rainbow independently of slot animations",
+  /item-grade-marker\[data-item-grade="S"\][\s\S]*animation:\s*item-grade-rainbow\s+1800ms\s+linear\s+infinite[\s\S]*@keyframes item-grade-rainbow/,
+  "the S border must continuously cycle through the rainbow independently of slot animations",
 );
 const shortWaitResult = waitTurn(createNewGame(0x5a1711), false);
 assert.equal(shortWaitResult.consumedTurn, true);
@@ -1383,6 +1879,70 @@ assert.equal(
   PLAYER_MOVE_DURATION,
   123,
   "player travel animation should resolve 1.3 times faster than 160ms",
+);
+assert.equal(
+  durationForMotion({
+    id: "player",
+    from: { x: 1, y: 1 },
+    to: { x: 4, y: 1 },
+    kind: "move",
+    travelStyle: "leap",
+  }),
+  SKILL_LEAP_DURATION,
+  "leap motions must use their own aerial timing",
+);
+assert.equal(
+  durationForMotion({
+    id: "player",
+    from: { x: 1, y: 1 },
+    to: { x: 4, y: 1 },
+    kind: "move",
+    travelStyle: "teleport",
+  }),
+  SKILL_TELEPORT_DURATION,
+  "teleports must use a disappearance/reappearance timing",
+);
+assert.equal(
+  durationForMotion({
+    id: "player",
+    from: { x: 1, y: 1 },
+    to: { x: 4, y: 1 },
+    kind: "move",
+    travelStyle: "charge",
+  }),
+  SKILL_CHARGE_DURATION,
+  "charges must retain a fast ground-travel timing",
+);
+assert.deepEqual(
+  [
+    impactDelayForMotion({
+      id: "player",
+      from: { x: 1, y: 1 },
+      to: { x: 4, y: 1 },
+      kind: "move",
+      travelStyle: "leap",
+    }),
+    impactDelayForMotion({
+      id: "player",
+      from: { x: 1, y: 1 },
+      to: { x: 4, y: 1 },
+      kind: "move",
+      travelStyle: "teleport",
+    }),
+    impactDelayForMotion({
+      id: "player",
+      from: { x: 1, y: 1 },
+      to: { x: 4, y: 1 },
+      kind: "move",
+      travelStyle: "charge",
+    }),
+  ],
+  [
+    SKILL_LEAP_DURATION - 10,
+    SKILL_TELEPORT_DURATION * 0.62,
+    SKILL_CHARGE_DURATION - 10,
+  ],
+  "combat feedback must resolve at the same landing/reappearance timing as skill particles",
 );
 assert.equal(
   COMPANION_MOVE_DURATION,
@@ -1974,24 +2534,171 @@ const sequenceRandom = (values: number[]) => {
 const weakSwordInstance = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "rolled-weak-sword",
-  sequenceRandom([0, 0.99, 0.5, 0.99]),
+  sequenceRandom([0.99]),
+  { grade: "F", allowCurse: false, preferredFirstTrait: "swift" },
 );
 const strongSwordInstance = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "rolled-strong-sword",
-  sequenceRandom([0.99, 0.99, 0.99, 0.99]),
+  sequenceRandom([0.99]),
+  { grade: "S", allowCurse: false, preferredFirstTrait: "swift" },
 );
-assert.equal(weakSwordInstance.quality, 1);
-assert.equal(strongSwordInstance.quality, 5);
+assert.equal(weakSwordInstance.grade, "F");
+assert.equal(strongSwordInstance.grade, "S");
+const weakSwordAttack = equipmentStatProfile(
+  ITEM_DEFS.shortsword,
+  weakSwordInstance,
+).attack;
+const strongSwordAttack = equipmentStatProfile(
+  ITEM_DEFS.shortsword,
+  strongSwordInstance,
+).attack;
 assert.ok(
-  equipmentStatProfile(ITEM_DEFS.shortsword, strongSwordInstance).attack >
-    equipmentStatProfile(ITEM_DEFS.shortsword, weakSwordInstance).attack,
-  "identical equipment definitions must support independently rolled stat values",
+  Math.abs(
+    strongSwordAttack / weakSwordAttack - itemGradeMultiplier("S"),
+  ) < 0.001,
+  "equipment base stats must compound by exactly twenty percent at every F-S step",
+);
+for (const [index, grade] of ITEM_GRADES.entries()) {
+  const current = createEquipmentInstance(
+    ITEM_DEFS.shortsword,
+    `grade-${grade}-sword`,
+    sequenceRandom([0.99]),
+    { grade, allowCurse: false, preferredFirstTrait: "swift" },
+  );
+  assert.equal(
+    current.traits?.[0]?.grade,
+    grade,
+    `${grade} equipment must spawn with a first enchantment of the same grade`,
+  );
+  if (index > 0) {
+    const previous = createEquipmentInstance(
+      ITEM_DEFS.shortsword,
+      `grade-${ITEM_GRADES[index - 1]}-comparison`,
+      sequenceRandom([0.99]),
+      {
+        grade: ITEM_GRADES[index - 1],
+        allowCurse: false,
+        preferredFirstTrait: "swift",
+      },
+    );
+    const currentAttack = equipmentStatProfile(ITEM_DEFS.shortsword, current).attack;
+    const previousAttack = equipmentStatProfile(
+      ITEM_DEFS.shortsword,
+      previous,
+    ).attack;
+    assert.ok(
+      Math.abs(currentAttack / previousAttack - 1.2) < 0.005,
+      `${grade} base attack must be twenty percent stronger than the preceding grade`,
+    );
+  }
+}
+ITEM_GRADES.forEach((grade, index) => {
+  assert.equal(
+    enchantmentGradePower(grade),
+    2 ** index,
+    `${grade} enchantments must be exactly twice as strong as the preceding grade`,
+  );
+});
+assert.equal(enchantmentGradePower("F"), 1);
+assert.equal(enchantmentGradePower("S"), 64);
+const fEnchantChances = enchantmentGradeChances("F");
+const sEnchantChances = enchantmentGradeChances("S");
+assert.equal(fEnchantChances.S, 0.002);
+assert.equal(sEnchantChances.S, 0.1);
+for (const itemGrade of ITEM_GRADES) {
+  const chances = enchantmentGradeChances(itemGrade);
+  assert.ok(
+    ITEM_GRADES.slice(1).every(
+      (grade, index) => chances[ITEM_GRADES[index]] >= chances[grade],
+    ),
+    `${itemGrade} equipment must always make higher enchantment grades no more common than lower grades`,
+  );
+}
+assert.ok(
+  ITEM_GRADES.slice(1).every(
+    (grade, index) =>
+      enchantmentGradeChances(ITEM_GRADES[index]).S <=
+      enchantmentGradeChances(grade).S,
+  ),
+  "S enchantments must become progressively more likely as item grade rises",
+);
+assert.equal(rollEnchantmentGrade("F", () => 0.999), "S");
+const migratedLegacyEquipment = normalizeEquipmentInstance(
+  {
+    id: "legacy-quality-five",
+    defId: "shortsword",
+    quality: 5,
+    traits: [{ id: "keen", rank: 2 }],
+  } as unknown as InventoryInstance,
+  ITEM_DEFS.shortsword,
+);
+assert.equal(migratedLegacyEquipment.grade, "S");
+assert.equal(migratedLegacyEquipment.traits?.[0]?.grade, "S");
+assert.equal(
+  Object.hasOwn(migratedLegacyEquipment, "quality"),
+  false,
+  "legacy numeric quality and ranked enchantments must migrate to the F-S model on load",
+);
+const additionalEnchantInstance = createEquipmentInstance(
+  ITEM_DEFS.shortsword,
+  "additional-enchant-grade",
+  sequenceRandom([0.99]),
+  { grade: "F", allowCurse: false, preferredFirstTrait: "swift" },
+);
+enchantEquipmentInstance(
+  additionalEnchantInstance,
+  ITEM_DEFS.shortsword,
+  () => 0.999,
+  "keen",
+);
+assert.deepEqual(
+  additionalEnchantInstance.traits?.map((trait) => trait.grade),
+  ["F", "S"],
+  "the first enchantment must match the item while later enchantments use the item-grade probability curve",
+);
+const fKeenSummary = equipmentTraitSummary({
+  id: "f-keen",
+  defId: "shortsword",
+  grade: "F",
+  traits: [{ id: "keen", grade: "F" }],
+})[0];
+const sKeenSummary = equipmentTraitSummary({
+  id: "s-keen",
+  defId: "shortsword",
+  grade: "S",
+  traits: [{ id: "keen", grade: "S" }],
+})[0];
+assert.ok(
+  fKeenSummary.power === 1 &&
+    sKeenSummary.power === 64 &&
+    fKeenSummary.description.includes("+1") &&
+    sKeenSummary.description.includes("+64"),
+  "keen enchantments must display and apply the exact F +1 through S +64 sequence",
+);
+const gradeStableUpgrade = createEquipmentInstance(
+  ITEM_DEFS.shortsword,
+  "grade-stable-upgrade",
+  sequenceRandom([0.99]),
+  { grade: "D", allowCurse: false, preferredFirstTrait: "swift" },
+);
+const beforeUpgradeAttack = equipmentStatProfile(
+  ITEM_DEFS.shortsword,
+  gradeStableUpgrade,
+).attack;
+upgradeEquipmentInstance(gradeStableUpgrade, 3);
+assert.equal(gradeStableUpgrade.grade, "D");
+assert.equal(
+  equipmentStatProfile(ITEM_DEFS.shortsword, gradeStableUpgrade).attack -
+    beforeUpgradeAttack,
+  3,
+  "upgrade values must remain additive and must never change or scale the item grade",
 );
 const cursedSwordInstance = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "rolled-cursed-sword",
-  sequenceRandom([0.5, 0, 0.5, 0.99]),
+  sequenceRandom([0]),
+  { grade: "C", preferredFirstTrait: "swift" },
 );
 assert.equal(
   cursedSwordInstance.cursed,
@@ -2062,7 +2769,7 @@ assert.deepEqual(
   "all requested gear categories must use the per-instance upgrade system",
 );
 
-strongSwordInstance.traits = [{ id: "keen", rank: 2 }];
+strongSwordInstance.traits = [{ id: "keen", grade: "S" }];
 const individualGearGame = createNewGame(0x1ee7c0de);
 individualGearGame.player.inventory = {};
 individualGearGame.player.inventoryInstances = [strongSwordInstance];
@@ -2072,7 +2779,7 @@ const equippedIndividualGear = equipItem(
 );
 assert.deepEqual(
   equippedIndividualGear.state.player.equipmentInstances.weapon?.traits,
-  [{ id: "keen", rank: 2 }],
+  [{ id: "keen", grade: "S" }],
   "equipping an item must preserve that exact instance's enchantments",
 );
 const returnedIndividualGear = unequipSlot(
@@ -2084,7 +2791,7 @@ const returnedSword = returnedIndividualGear.state.player.inventoryInstances.fin
 );
 assert.deepEqual(
   returnedSword?.traits,
-  [{ id: "keen", rank: 2 }],
+  [{ id: "keen", grade: "S" }],
   "unequipping must return the same independently enchanted item instance",
 );
 
@@ -2113,11 +2820,8 @@ assert.equal(
   "manual enchanting must consume one available enchanting material",
 );
 assert.ok(
-  (enchantedSword?.traits ?? []).reduce(
-    (total, trait) => total + trait.rank,
-    0,
-  ) > 2,
-  "manual enchanting must add or rank up an instance-specific trait",
+  (enchantedSword?.traits ?? []).length > 1,
+  "manual enchanting must add a separately graded instance-specific enchantment",
 );
 
 const equippedEnchantGame = equipItem(
@@ -2137,11 +2841,8 @@ assert.equal(
 assert.ok(
   (
     enchantedEquippedGear.state.player.equipmentInstances.weapon?.traits ?? []
-  ).reduce((total, trait) => total + trait.rank, 0) >
-    (equippedEnchantGame.player.equipmentInstances.weapon?.traits ?? []).reduce(
-      (total, trait) => total + trait.rank,
-      0,
-    ),
+  ).length >
+    (equippedEnchantGame.player.equipmentInstances.weapon?.traits ?? []).length,
   "equipped enchanting must strengthen the equipped instance in place",
 );
 
@@ -2227,9 +2928,14 @@ assert.equal(
   "picking up an item must consume a separate turn",
 );
 assert.equal(
-  pickedUp.interactionDuration,
+  pickedUp.interactionKind,
+  "pickup",
+  "pickup actions should expose a semantic interaction kind",
+);
+assert.equal(
+  durationForInteraction(pickedUp.interactionKind),
   PLAYER_PICKUP_DURATION,
-  "pickup actions should carry their dedicated short interaction timing",
+  "the presentation layer should map pickup semantics to short timing",
 );
 assert.equal(
   pickedUp.presentationState?.groundItems.some(
@@ -2337,7 +3043,7 @@ const enchantedThrowableGame = openedThrowableChest.state;
 enchantedThrowableGame.player.inventory.stone_enchantment = 1;
 const throwableTraitRankBefore = (
   chestThrowable.traits ?? []
-).reduce((total, trait) => total + trait.rank, 0);
+).length;
 const enchantedThrowable = enchantItem(
   enchantedThrowableGame,
   chestThrowable.id,
@@ -2347,7 +3053,7 @@ const enchantedChestThrowable = enchantedThrowable.state.player.inventoryInstanc
 )!;
 const throwableTraitRankAfter = (
   enchantedChestThrowable.traits ?? []
-).reduce((total, trait) => total + trait.rank, 0);
+).length;
 assert.equal(
   enchantedThrowable.consumedTurn,
   true,
@@ -2379,6 +3085,27 @@ assert.equal(
   false,
   "discarded items must never be picked up automatically",
 );
+const repickedDiscard = pickupGroundItems(discarded.state, true);
+assert.equal(
+  repickedDiscard.pickups?.[0]?.lootOrigin,
+  "carried",
+  "a dropped expedition item must retain carried provenance when picked up again",
+);
+assert.equal(
+  newExpeditionPickups(repickedDiscard.pickups ?? []).length,
+  0,
+  "a brought-in item that is dropped and re-picked must not enter the new-loot report",
+);
+assert.deepEqual(
+  newExpeditionPickups([
+    { id: "planned", defId: "ration", quantity: 1, x: 0, y: 0, lootOrigin: "dungeon" },
+    { id: "grass", defId: "seed_sungrass", quantity: 1, x: 0, y: 0, lootOrigin: "grass" },
+    { id: "carried", defId: "ration", quantity: 1, x: 0, y: 0, lootOrigin: "carried" },
+    { id: "key", defId: "iron_key", quantity: 1, x: 0, y: 0, lootOrigin: "dungeon" },
+  ]).map((pickup) => pickup.id),
+  ["planned", "grass"],
+  "new-loot accounting must include dungeon and bush finds while excluding carried items and floor keys",
+);
 
 let throwGame = createNewGame(0x7a20);
 throwGame.enemies = [];
@@ -2404,7 +3131,10 @@ assert.ok(
   "throwable equipment must keep its own charge profile",
 );
 throwingKnifeProfile.upgradeLevel = 2;
-throwingKnifeProfile.traits = [{ id: "keen", rank: 1 }];
+throwingKnifeProfile.traits = [{
+  id: "keen",
+  grade: throwingKnifeProfile.grade ?? "C",
+}];
 const throwTarget = {
   x: throwGame.player.x + 3,
   y: throwGame.player.y,
@@ -2412,6 +3142,8 @@ const throwTarget = {
 for (let x = throwGame.player.x; x <= throwTarget.x; x += 1) {
   throwGame.tiles[throwGame.player.y][x].terrain = "floor";
 }
+throwGame.tiles[throwTarget.y][throwTarget.x].visible = false;
+throwGame.tiles[throwTarget.y][throwTarget.x].discovered = false;
 const thrown = throwItem(throwGame, throwingKnifeProfile.id, throwTarget);
 assert.equal(thrown.consumedTurn, true, "throwing should consume a turn");
 assert.deepEqual(thrown.throws?.[0].to, throwTarget);
@@ -3013,7 +3745,9 @@ for (let seed = 1; seed <= 96; seed += 1) {
       dungeonName: sewerRules.nameKo,
       maxFloor: sewerRules.floorCount,
       difficultyScale: sewerRules.difficultyScale,
+      difficulty: sewerRules.difficulty,
       mainDropIds: sewerRules.mainDropIds,
+      lootPlan: sewerRules.lootPlan,
     },
     soloExpedition.player,
     [],
@@ -3195,6 +3929,8 @@ const woundedLevelGame = developerGrantItem(
 );
 woundedLevelGame.player.hp = 7;
 woundedLevelGame.player.xp = woundedLevelGame.player.nextXp - 1;
+const woundedLevelMaxHp = woundedLevelGame.player.maxHp;
+const woundedLevelAttack = woundedLevelGame.player.baseAttack;
 const woundedLevelResult = consumeItemAction(
   woundedLevelGame,
   "potion_experience",
@@ -3207,6 +3943,20 @@ assert.equal(
   woundedLevelResult.player.hp,
   7,
   "level-up itself must not heal the player",
+);
+assert.equal(
+  woundedLevelResult.player.maxHp,
+  Math.max(
+    woundedLevelMaxHp + 1,
+    Math.round(woundedLevelMaxHp * LEVEL_STAT_GROWTH),
+  ),
+  "level-up must increase player maximum health by ten percent",
+);
+assert.equal(
+  woundedLevelResult.player.baseAttack,
+  Math.round(woundedLevelAttack * LEVEL_STAT_GROWTH * 1_000_000) /
+    1_000_000,
+  "level-up must increase player base attack by ten percent",
 );
 assert.ok(
   createNewGame(0x150150).player.maxHp >= 42,
@@ -3294,6 +4044,8 @@ const wandTarget = {
 for (let x = distinctWands.player.x; x <= wandTarget.x; x += 1) {
   distinctWands.tiles[wandTarget.y][x].terrain = "floor";
 }
+distinctWands.tiles[wandTarget.y][wandTarget.x].visible = false;
+distinctWands.tiles[wandTarget.y][wandTarget.x].discovered = false;
 const zapped = zapWand(distinctWands, firstWand.id, wandTarget);
 assert.equal(
   zapped.state.player.inventoryInstances.find(
@@ -3599,7 +4351,10 @@ const persistentProfile =
     (instance) => instance.defId === "throwing_knife",
   )!;
 persistentProfile.upgradeLevel = 3;
-persistentProfile.traits = [{ id: "swift", rank: 2 }];
+persistentProfile.traits = [{
+  id: "swift",
+  grade: persistentProfile.grade ?? "C",
+}];
 const persistentThrowTarget = {
   x: persistentThrowableSlotGame.player.x + 1,
   y: persistentThrowableSlotGame.player.y,
@@ -3703,7 +4458,7 @@ assert.deepEqual(
   },
   {
     upgradeLevel: 3,
-    traits: [{ id: "swift", rank: 2 }],
+    traits: [{ id: "swift", grade: persistentProfile.grade ?? "C" }],
     charges: 1,
     maxCharges: 3,
     autoSlot: persistentProfile.id,
@@ -4413,13 +5168,19 @@ const levelEffects = createLevelUpEffects(pixelOrigin, fixedRandom);
 const skillEffectsById = COMPANION_SKILL_IDS.map((skillId, index) => ({
   skillId,
   effects: createCompanionSkillEffects(
-    {
+    (() => {
+      const blueprint = companionSkillBlueprint(skillId);
+      return {
       id: `skill-pixel-test-${skillId}`,
       skillId,
       from: { x: 2, y: 2 },
       to: { x: 5 + (index % 2), y: 4 },
       accent: COMPANION_SKILLS[skillId].accent,
-    },
+        travelMode: blueprint.travelMode,
+        impactMode: blueprint.impactMode,
+        radius: blueprint.scalars.radius ?? 0,
+      };
+    })(),
     100,
     48,
   ),
@@ -4452,40 +5213,508 @@ assert.ok(
 assert.equal(
   [...dustEffects, ...hitEffects]
     .filter((effect) => effect.kind === "particle")
-    .every((effect) => effect.size === 1 || effect.size === 2),
+    .every((effect) => effect.cellSize === 1 || effect.cellSize === 2),
   true,
   "walk and hit particles must use one- or two-cell marks on the 16×16 tile grid",
 );
 assert.ok(
   skillEffectsById.every(
-    ({ effects }) =>
-      effects.filter((effect) => effect.kind === "particle").length >= 32 &&
-      effects.some((effect) => effect.kind === "ring"),
+    ({ effects }) => effects.length > 0,
   ),
-  "every manual skill must emit a dense pixel burst and ring highlight",
+  "every manual skill must resolve to a specialized particle recipe",
 );
-assert.ok(
-  skillEffectsById.every(({ effects }) =>
-    effects
-      .filter(
-        (effect) => effect.kind === "particle" || effect.kind === "ring",
-      )
-      .every(
-        (effect) =>
-          effect.worldPixelSize === 3 &&
-          effect.clipBounds?.width === 48 &&
-          effect.clipBounds.height === 48,
-      ),
-  ),
-  "manual skill particles must stay on clipped 16×16 logical pixel grids",
+assert.deepEqual(
+  Object.keys(SKILL_PARTICLE_RECIPES).sort(),
+  [...COMPANION_SKILL_IDS].sort(),
+  "the specialized particle recipe table must cover every registered skill",
 );
 assert.ok(
   skillEffectsById.every(({ effects }) =>
     effects
       .filter((effect) => effect.kind === "particle")
-      .every((effect) => effect.size === 1 || effect.size === 2),
+      .every((effect) => effect.cellSize === 1 || effect.cellSize === 2),
   ),
   "manual skill sparks must remain crisp one- or two-pixel marks",
+);
+assert.ok(
+  skillEffectsById.every(({ effects }) =>
+    effects
+      .filter((effect) => effect.kind === "particle" || effect.kind === "ring")
+      .every((effect) => effect.worldPixelSize === 3),
+  ),
+  "all transient skill marks must snap to the logical 16×16 pixel scale",
+);
+const shockLeapSignature = skillEffectsById
+  .find(({ skillId }) => skillId === "shockLeap")!
+  .effects.map((effect) => effect.id)
+  .join("|");
+const shadowStepSignature = skillEffectsById
+  .find(({ skillId }) => skillId === "shadowStep")!
+  .effects.map((effect) => effect.id)
+  .join("|");
+assert.match(
+  shockLeapSignature,
+  /takeoff|landing/,
+  "leap recipes must contain explicit takeoff and landing phases",
+);
+assert.match(
+  shadowStepSignature,
+  /depart|arrive|collapse/,
+  "teleport recipes must contain disappearance and reappearance phases",
+);
+assert.doesNotMatch(
+  shadowStepSignature,
+  /takeoff/,
+  "teleports must not reuse the leap travel trail",
+);
+const upgradedFireballEffects = createCompanionSkillEffects(
+  {
+    id: "upgraded-fireball",
+    skillId: "fireball",
+    from: { x: 2, y: 2 },
+    to: { x: 7, y: 2 },
+    accent: COMPANION_SKILLS.fireball.accent,
+    travelMode: "none",
+    impactMode: "burst",
+    radius: 2,
+    rank: 2,
+    variants: ["power-up"],
+    semanticOverride: false,
+  },
+  100,
+  48,
+);
+assert.ok(
+  upgradedFireballEffects.some((effect) =>
+    effect.id.includes("projectile-thrust"),
+  ) && upgradedFireballEffects.some((effect) => effect.id.includes("upgrade")),
+  "scalar-only upgrades must preserve the base skill identity and add a rank accent",
+);
+const derivedChainPaths = [
+  { from: { x: 2, y: 2 }, to: { x: 5, y: 2 } },
+  { from: { x: 5, y: 2 }, to: { x: 6, y: 4 } },
+];
+const accentChainEffects = createCompanionSkillEffects(
+  {
+    id: "accent-chain",
+    skillId: "chainLightning",
+    from: derivedChainPaths[0].from,
+    to: derivedChainPaths[0].to,
+    accent: "#ff66cc",
+    travelMode: "none",
+    impactMode: "fragments",
+    radius: 0,
+    rank: 2,
+    variants: ["pink-lightning"],
+    semanticOverride: false,
+    accentOverride: true,
+    paths: derivedChainPaths,
+  },
+  100,
+  48,
+);
+assert.ok(
+  accentChainEffects.some((effect) => effect.id.includes("chain-1")) &&
+    accentChainEffects.some((effect) => effect.color === "#ff66cc"),
+  "accent-only chain upgrades must preserve every branched path while recoloring pixels",
+);
+const semanticChainEffects = createCompanionSkillEffects(
+  {
+    id: "semantic-chain",
+    skillId: "chainLightning",
+    from: derivedChainPaths[0].from,
+    to: derivedChainPaths[0].to,
+    accent: "#81e6ff",
+    travelMode: "none",
+    impactMode: "shockwave",
+    radius: 0,
+    rank: 2,
+    variants: ["thunder-front"],
+    semanticOverride: true,
+    paths: derivedChainPaths,
+  },
+  100,
+  48,
+);
+assert.ok(
+  semanticChainEffects.some((effect) => effect.id.includes("derived-path-1")),
+  "semantic chain variants must retain all rule-provided lightning branches",
+);
+const companionTripleEffects = createCompanionSkillEffects(
+  {
+    id: "companion-triple-timing",
+    skillId: "tripleStrike",
+    from: { x: 2, y: 2 },
+    to: { x: 3, y: 2 },
+    accent: COMPANION_SKILLS.tripleStrike.accent,
+    travelMode: "none",
+    impactMode: "slash",
+    radius: 0,
+    sourceId: "companion-timing-test",
+  },
+  100,
+  48,
+);
+const tripleImpactStep = COMPANION_ATTACK_DURATION + ATTACK_SEQUENCE_GAP;
+const tripleFirstImpact =
+  100 + ATTACK_START_DELAY + COMPANION_ATTACK_DURATION * 0.52;
+assert.deepEqual(
+  [
+    companionTripleEffects.find(
+      (effect) => effect.kind === "ring" && effect.id.includes("one-slash"),
+    )?.startedAt,
+    companionTripleEffects.find(
+      (effect) => effect.kind === "ring" && effect.id.includes("two-slash"),
+    )?.startedAt,
+    Math.min(
+      ...companionTripleEffects
+        .filter((effect) => effect.id.includes("three-thrust"))
+        .map((effect) => effect.startedAt),
+    ),
+  ],
+  [
+    tripleFirstImpact,
+    tripleFirstImpact + tripleImpactStep,
+    tripleFirstImpact + tripleImpactStep * 2,
+  ],
+  "each Triple Strike particle phase must match its scheduled attack impact",
+);
+const shockLeapEffects = skillEffectsById.find(
+  ({ skillId }) => skillId === "shockLeap",
+)!.effects;
+assert.ok(
+  shockLeapEffects
+    .filter((effect) => effect.id.includes("landing"))
+    .every((effect) => effect.startedAt >= 100 + SKILL_LEAP_DURATION - 10),
+  "leap landing particles must wait until the actor reaches the destination",
+);
+const synchronizedFireballEffects = skillEffectsById.find(
+  ({ skillId }) => skillId === "fireball",
+)!.effects;
+const lastFireballPathStart = Math.max(
+  ...synchronizedFireballEffects
+    .filter((effect) => effect.id.includes("projectile-thrust"))
+    .map((effect) => effect.startedAt),
+);
+const firstFireballImpact = Math.min(
+  ...synchronizedFireballEffects
+    .filter(
+      (effect) =>
+        effect.id.includes("impact") || effect.id.includes("area-"),
+    )
+    .map((effect) => effect.startedAt),
+);
+assert.ok(
+  firstFireballImpact >= lastFireballPathStart,
+  "ranged impact particles must not explode before the projectile reaches its last tile",
+);
+
+const directionalFragments = createFragmentParticles(
+  {
+    idPrefix: "directional-fragments",
+    point: { x: 2, y: 2 },
+    startedAt: 100,
+    palette: ["#fff", "#ccc"],
+    tileSize: 48,
+    random: () => 0.5,
+    clip: "none",
+  },
+  {
+    direction: { x: 1, y: 0 },
+    spreadRadians: Math.PI / 2,
+    count: 16,
+    upwardBiasPixels: 0,
+    gravityPixels: 0,
+  },
+);
+assert.ok(
+  directionalFragments.every((effect) => effect.velocityX > 0),
+  "directional fragments must fly only into the configured forward half-plane",
+);
+const directionalWave = createShockwaveParticles(
+  {
+    idPrefix: "directional-wave",
+    point: { x: 2, y: 2 },
+    startedAt: 100,
+    palette: ["#fff"],
+    tileSize: 48,
+    random: fixedRandom,
+    clip: "none",
+  },
+  { direction: { x: 1, y: 0 }, sweepRadians: Math.PI / 2 },
+);
+assert.ok(
+  directionalWave.every(
+    (effect) => Math.abs(effect.sweepAngle ?? 0) === Math.PI / 2,
+  ),
+  "shockwaves must support a one-sided configurable sweep",
+);
+const radialWave = createShockwaveParticles({
+  idPrefix: "radial-wave",
+  point: { x: 2, y: 2 },
+  startedAt: 100,
+  palette: ["#fff"],
+  tileSize: 48,
+  random: fixedRandom,
+  clip: "none",
+});
+assert.ok(
+  radialWave.every(
+    (effect) => Math.abs(effect.sweepAngle ?? 0) === Math.PI * 2,
+  ),
+  "shockwaves must remain radial when no direction is supplied",
+);
+const thrustParticles = createThrustParticles(
+  {
+    idPrefix: "thrust-test",
+    from: { x: 1, y: 1 },
+    to: { x: 5, y: 1 },
+    startedAt: 100,
+    palette: ["#fff"],
+    tileSize: 48,
+    random: fixedRandom,
+  },
+  { densityPerTile: 4, widthPixels: 2 },
+);
+assert.ok(
+  thrustParticles.every(
+    (effect) => effect.kind !== "particle" || Math.abs(effect.velocityY) < 0.001,
+  ),
+  "horizontal thrust particles must remain in a narrow forward path",
+);
+const unclippedThrustParticles = createThrustParticles(
+  {
+    idPrefix: "unclipped-thrust-test",
+    from: { x: 1, y: 1 },
+    to: { x: 5, y: 1 },
+    startedAt: 100,
+    palette: ["#fff"],
+    tileSize: 48,
+    random: fixedRandom,
+    clip: "none",
+  },
+  { densityPerTile: 2 },
+);
+assert.ok(
+  unclippedThrustParticles.every((effect) => !effect.clipBounds),
+  "the reusable thrust emitter must honor unclipped multi-tile effects",
+);
+const clockwiseSlash = createSlashParticles(
+  {
+    idPrefix: "clockwise-slash",
+    point: { x: 2, y: 2 },
+    startedAt: 100,
+    palette: ["#fff"],
+    tileSize: 48,
+    random: fixedRandom,
+    clip: "none",
+  },
+  { direction: { x: 1, y: 0 }, clockwise: true },
+);
+const counterSlash = createSlashParticles(
+  {
+    idPrefix: "counter-slash",
+    point: { x: 2, y: 2 },
+    startedAt: 100,
+    palette: ["#fff"],
+    tileSize: 48,
+    random: fixedRandom,
+    clip: "none",
+  },
+  { direction: { x: 1, y: 0 }, clockwise: false },
+);
+const clockwiseFront = clockwiseSlash.find((effect) => effect.kind === "ring");
+const counterFront = counterSlash.find((effect) => effect.kind === "ring");
+assert.ok(
+  clockwiseFront?.revealProgress &&
+    counterFront?.revealProgress &&
+    Math.sign(clockwiseFront.sweepAngle ?? 0) ===
+      -Math.sign(counterFront.sweepAngle ?? 0),
+  "clockwise and counter-clockwise slash fronts must reveal in opposite directions",
+);
+
+const whirlwindCenter = { x: 4, y: 4 };
+const whirlwindAffectedTiles = particleFootprintTiles(whirlwindCenter, {
+  radiusTiles: 1,
+});
+const whirlwindVisual = {
+  id: "whirlwind-footprint-test",
+  skillId: "whirlwind" as const,
+  from: whirlwindCenter,
+  to: whirlwindCenter,
+  accent: COMPANION_SKILLS.whirlwind.accent,
+  travelMode: "none" as const,
+  impactMode: "slash" as const,
+  radius: 1,
+  affectedTiles: whirlwindAffectedTiles,
+};
+const whirlwindEffectsAt = (tileSize: number) =>
+  createCompanionSkillEffects(whirlwindVisual, 100, tileSize);
+const whirlwindTileSetAt = (tileSize: number) => new Set(
+  whirlwindEffectsAt(tileSize)
+    .filter(
+      (effect) =>
+        effect.kind === "particle" && effect.id.includes("area-footprint"),
+    )
+    .map((effect) =>
+      pointKey(
+        Math.floor(effect.x / tileSize),
+        Math.floor(effect.y / tileSize),
+      ),
+    ),
+);
+const expectedWhirlwindNeighbors = new Set(
+  whirlwindAffectedTiles
+    .filter(({ x, y }) => x !== whirlwindCenter.x || y !== whirlwindCenter.y)
+    .map(({ x, y }) => pointKey(x, y)),
+);
+for (const tileSize of [32, 48, 64]) {
+  assert.deepEqual(
+    whirlwindTileSetAt(tileSize),
+    expectedWhirlwindNeighbors,
+    `Whirlwind must mark all eight attacked neighbor tiles at tile size ${tileSize}`,
+  );
+  assert.ok(
+    whirlwindEffectsAt(tileSize)
+      .filter((effect) => effect.kind === "particle" || effect.kind === "ring")
+      .every((effect) => effect.worldPixelSize === tileSize / 16),
+    "tile resolution must remain exactly 16 logical cells regardless of world tile size",
+  );
+  assert.ok(
+    whirlwindEffectsAt(tileSize)
+      .filter((effect) => effect.kind === "particle")
+      .every((effect) => effect.cellSize === 1 || effect.cellSize === 2),
+    "particle mark thickness must stay independent from multi-tile effect reach",
+  );
+}
+const wideFootprint = particleFootprintTiles(whirlwindCenter, {
+  radiusTiles: 2,
+});
+assert.equal(
+  wideFootprint.length,
+  25,
+  "a two-tile derived area must cover the full Chebyshev 5×5 footprint",
+);
+const forwardFootprint = particleFootprintTiles(whirlwindCenter, {
+  radiusTiles: 2,
+  direction: { x: 1, y: 0 },
+  sweepRadians: Math.PI,
+});
+assert.ok(
+  forwardFootprint.every((point) => point.x >= whirlwindCenter.x),
+  "directional footprints must support a forward-only half-plane",
+);
+const budgetedFootprintContext = {
+  idPrefix: "budgeted-footprint",
+  point: whirlwindCenter,
+  startedAt: 100,
+  palette: ["#fff", "#ddd"],
+  tileSize: 48,
+  random: fixedRandom,
+  clip: "none" as const,
+};
+const budgetedFootprint = createFootprintFragmentParticles(
+  budgetedFootprintContext,
+  { radiusTiles: 4, countPerTile: 5, maxParticles: 144 },
+);
+assert.equal(budgetedFootprint.length, 144);
+assert.equal(
+  new Set(
+    budgetedFootprint.map((effect) =>
+      pointKey(Math.floor(effect.x / 48), Math.floor(effect.y / 48)),
+    ),
+  ).size,
+  81,
+  "particle budgeting must preserve at least one mark in every affected tile",
+);
+assert.deepEqual(
+  createFootprintFragmentParticles(
+    budgetedFootprintContext,
+    { radiusTiles: 4, countPerTile: 5, maxParticles: 144 },
+  ).map(({ id }) => id),
+  budgetedFootprint.map(({ id }) => id),
+  "footprint particle counts and ids must remain deterministic within the budget",
+);
+const crowdedDerivedFootprint = particleFootprintTiles(
+  { x: 12, y: 12 },
+  { radiusTiles: 4 },
+);
+const crowdedDerivedEffects = createCompanionSkillEffects(
+  {
+    id: "crowded-derived-footprint",
+    skillId: "chainLightning",
+    from: { x: 1, y: 1 },
+    to: { x: 12, y: 12 },
+    accent: COMPANION_SKILLS.chainLightning.accent,
+    travelMode: "none",
+    impactMode: "shockwave",
+    radius: 4,
+    affectedTiles: crowdedDerivedFootprint,
+    semanticOverride: true,
+    paths: Array.from({ length: 8 }, (_, index) => ({
+      from: { x: 1, y: 1 + index },
+      to: { x: 12, y: 12 + index },
+    })),
+  },
+  100,
+  48,
+);
+assert.ok(crowdedDerivedEffects.length <= 256);
+assert.equal(
+  new Set(
+    crowdedDerivedEffects
+      .filter(
+        (effect) =>
+          effect.kind === "particle" && effect.id.includes("area-footprint"),
+      )
+      .map((effect) =>
+        pointKey(Math.floor(effect.x / 48), Math.floor(effect.y / 48)),
+      ),
+  ).size,
+  81,
+  "the global skill budget must preserve every footprint tile before decorative paths",
+);
+
+const leapMidpoint = sampleTravelMotion("leap", 0.5);
+const teleportStart = sampleTravelMotion("teleport", 0.25);
+const teleportMiddle = sampleTravelMotion("teleport", 0.5);
+const teleportEnd = sampleTravelMotion("teleport", 0.75);
+assert.ok(
+  leapMidpoint.spriteLift > 0.35 && leapMidpoint.positionProgress === 0.5,
+  "leap travel must arc above the ground while crossing space",
+);
+assert.deepEqual(
+  [teleportStart.positionProgress, teleportMiddle.opacity, teleportEnd.positionProgress],
+  [0, 0, 1],
+  "teleport travel must disappear and snap without crossing intermediate tiles",
+);
+
+const baseShockLeap = companionSkillBlueprint("shockLeap");
+const upgradedShockLeap = deriveCompanionSkill("shockLeap", [{
+  id: "wide-impact",
+  scalarChanges: {
+    power: { multiply: 1.25 },
+    radius: { add: 1 },
+  },
+  addMechanics: ["status"],
+  impactMode: "fragments",
+  areaAnchor: "caster",
+}]);
+assert.equal(baseShockLeap.scalars.radius, 1);
+assert.equal(upgradedShockLeap.scalars.radius, 2);
+assert.equal(upgradedShockLeap.scalars.power, 2);
+assert.equal(upgradedShockLeap.mechanics.includes("status"), true);
+assert.equal(upgradedShockLeap.impactMode, "fragments");
+assert.equal(upgradedShockLeap.areaAnchor, "caster");
+assert.equal(
+  companionSkillBlueprint("whirlwind").areaAnchor,
+  "caster",
+  "caster-centered area skills must declare their footprint anchor in data",
+);
+assert.equal(
+  companionSkillBlueprint("shockLeap").scalars.radius,
+  1,
+  "derived upgrades must never mutate the immutable base skill blueprint",
 );
 const fireballSkillEffects = skillEffectsById.find(
   ({ skillId }) => skillId === "fireball",
@@ -4493,10 +5722,21 @@ const fireballSkillEffects = skillEffectsById.find(
 assert.ok(
   new Set(
     fireballSkillEffects
-      .filter((effect) => effect.kind === "particle" && effect.clipBounds)
-      .map((effect) => `${effect.clipBounds!.x},${effect.clipBounds!.y}`),
+      .flatMap((effect) =>
+        effect.kind === "particle" && effect.id.includes("area-")
+          ? [`${Math.floor(effect.x / 48)},${Math.floor(effect.y / 48)}`]
+          : [],
+      ),
   ).size >= 9,
   "area skills must scatter 16×16 particles across every affected neighboring tile",
+);
+assert.ok(
+  fireballSkillEffects
+    .filter(
+      (effect) => effect.kind === "particle" && effect.id.includes("area-"),
+    )
+    .every((effect) => !effect.clipBounds),
+  "transient area fragments must be free to fly across tile boundaries",
 );
 const fieldKinds = [
   "fire",
@@ -4587,7 +5827,7 @@ assert.equal(
   "the one-pixel wave must keep its existing total lifetime",
 );
 assert.match(
-  readFileSync("app/game/pixel-effects.ts", "utf8"),
+  readFileSync("app/presentation/pixel-effects.ts", "utf8"),
   /const alpha = Math\.max\(0, 1 - elapsed \/ effect\.duration\)/,
   "water ripples must begin fading immediately after creation",
 );
@@ -5777,7 +7017,7 @@ assert.deepEqual(
   "companions must use Shattered's operate strip",
 );
 for (const classId of COMPANION_CLASS_IDS) {
-  const definition = COMPANION_CLASSES[classId];
+  const definition = COMPANION_VISUALS[classId];
   const spritePath = `public${definition.sprite}`;
   const spriteBytes = readFileSync(spritePath);
   assert.equal(
@@ -5793,8 +7033,8 @@ for (const classId of COMPANION_CLASS_IDS) {
 }
 assert.deepEqual(
   {
-    frameWidth: COMPANION_CLASSES.adventurer.frameWidth,
-    frameHeight: COMPANION_CLASSES.adventurer.frameHeight,
+    frameWidth: COMPANION_VISUALS.adventurer.frameWidth,
+    frameHeight: COMPANION_VISUALS.adventurer.frameHeight,
   },
   { frameWidth: 16, frameHeight: 24 },
   "the former player sheet must remain a differently sized companion sprite",
@@ -5837,21 +7077,57 @@ assert.equal(
   "every manual companion skill ID must be unique",
 );
 assert.ok(
-  COMPANION_SKILL_IDS.every((skillId) => COMPANION_SKILLS[skillId]),
-  "every companion skill ID must resolve to a complete definition",
+  COMPANION_SKILL_IDS.every(
+    (skillId) =>
+      COMPANION_SKILLS[skillId] && COMPANION_SKILLS[skillId].soundId,
+  ),
+  "every companion skill ID must resolve to a definition and sound",
 );
 for (const classId of COMPANION_CLASS_IDS) {
-  const first = createCompanionSkills(`skill-test-${classId}`);
-  const second = createCompanionSkills(`skill-test-${classId}`);
+  const professionId = normalizeCompanionProfession(classId, undefined);
+  const first = createCompanionSkills(professionId, `skill-test-${classId}`);
+  const second = createCompanionSkills(professionId, `skill-test-${classId}`);
   assert.equal(first.length, 2, `${classId} must receive exactly two skills`);
   assert.equal(new Set(first).size, 2, `${classId}'s two skills must be unique`);
   assert.deepEqual(first, second, "skill assignment must remain stable across save restoration");
+  assert.ok(
+    first.every((skillId) =>
+      COMPANION_PROFESSIONS[professionId].skillPool.includes(skillId),
+    ),
+    `${classId} must draw both skills from the ${professionId} pool`,
+  );
 }
+assert.deepEqual(
+  new Set(
+    createStarterCompanionRoster(COMPANION_CLASS_IDS).map(
+      (companion) => companion.professionId,
+    ),
+  ),
+  new Set(COMPANION_PROFESSION_IDS),
+  "the roster must cover warrior, rogue, mage, and cleric professions",
+);
 assert.ok(
   createStarterCompanionRoster(COMPANION_CLASS_IDS).every(
     (companion) => companion.skills.length === 2,
   ),
   "every roster companion must start with two manually usable skills",
+);
+const legacyProfessionCompanion = createStarterCompanionRoster(["warrior"])[0];
+Reflect.deleteProperty(legacyProfessionCompanion, "professionId");
+legacyProfessionCompanion.skills = ["fireball", "lifeDrain"];
+const migratedProfessionCompanion = normalizeCompanionForHubWithReleasedItems(
+  legacyProfessionCompanion,
+).companion;
+assert.equal(
+  migratedProfessionCompanion.professionId,
+  "warrior",
+  "older saves without a profession must receive the class-compatible profession",
+);
+assert.ok(
+  migratedProfessionCompanion.skills.every((skillId) =>
+    COMPANION_PROFESSIONS.warrior.skillPool.includes(skillId),
+  ),
+  "older global skill assignments must migrate into the profession pool",
 );
 
 const createSkillArena = (skillId: (typeof COMPANION_SKILL_IDS)[number]) => {
@@ -5870,9 +7146,16 @@ const createSkillArena = (skillId: (typeof COMPANION_SKILL_IDS)[number]) => {
   }
   state.player.x = center.x;
   state.player.y = center.y;
+  const professionId = COMPANION_PROFESSION_IDS.find((candidate) =>
+    COMPANION_PROFESSIONS[candidate].skillPool.includes(skillId),
+  );
+  assert.ok(professionId, `${skillId} must belong to at least one profession pool`);
+  state.player.professionId = professionId;
   state.player.skills = [
     skillId,
-    COMPANION_SKILL_IDS.find((candidate) => candidate !== skillId)!,
+    COMPANION_PROFESSIONS[professionId].skillPool.find(
+      (candidate) => candidate !== skillId,
+    )!,
   ];
   state.player.skillCooldowns = {};
   state.player.actionProgress = 0;
@@ -5895,6 +7178,41 @@ const createSkillArena = (skillId: (typeof COMPANION_SKILL_IDS)[number]) => {
   }];
   return { state, center, enemyId: state.enemies[0].id };
 };
+
+const companionAimArena = createSkillArena("tripleStrike");
+const aimingCompanion = createStarterCompanionRoster(["warrior"])[0];
+aimingCompanion.x = companionAimArena.center.x + 7;
+aimingCompanion.y = companionAimArena.center.y;
+aimingCompanion.professionId = "warrior";
+aimingCompanion.skills = ["tripleStrike", "whirlwind"];
+companionAimArena.state.companions = [aimingCompanion];
+const playerNearEnemy = {
+  ...companionAimArena.state.enemies[0],
+  id: "player-near-aim-target",
+  x: companionAimArena.center.x + 1,
+  y: companionAimArena.center.y,
+};
+const companionNearEnemy = {
+  ...companionAimArena.state.enemies[0],
+  id: "companion-near-aim-target",
+  x: aimingCompanion.x + 1,
+  y: aimingCompanion.y,
+};
+companionAimArena.state.enemies = [playerNearEnemy, companionNearEnemy];
+assert.equal(
+  nearestVisibleEnemy(companionAimArena.state, aimingCompanion.id, 10)?.id,
+  companionNearEnemy.id,
+  "automatic targeting must measure distance from the companion using it",
+);
+assert.deepEqual(
+  suggestedSkillTarget(
+    companionAimArena.state,
+    aimingCompanion.id,
+    "tripleStrike",
+  ),
+  { x: companionNearEnemy.x, y: companionNearEnemy.y },
+  "skill suggestions must stay anchored to their caster while the player remains selected",
+);
 
 const manualRoundArena = createSkillArena("tripleStrike");
 manualRoundArena.state.enemies = [];
@@ -5958,11 +7276,53 @@ const manualWaitResult = manualCompanionWait(
 assert.equal(manualWaitResult.consumedTurn, true);
 assert.equal(manualWaitResult.elapsedTurns, 0);
 
+const incapacitatedSkillArena = createSkillArena("shockLeap");
+const incapacitatedCompanion = createStarterCompanionRoster(["warrior"])[0];
+incapacitatedCompanion.x = incapacitatedSkillArena.center.x;
+incapacitatedCompanion.y = incapacitatedSkillArena.center.y;
+incapacitatedCompanion.professionId = "warrior";
+incapacitatedCompanion.skills = ["shockLeap", "shieldCharge"];
+incapacitatedCompanion.statuses = [{
+  id: "paralyzed",
+  turns: 2,
+  power: 1,
+}];
+incapacitatedSkillArena.state.player.x = incapacitatedSkillArena.center.x - 2;
+incapacitatedSkillArena.state.companions = [incapacitatedCompanion];
+const incapacitatedSkill = activateCompanionSkill(
+  incapacitatedSkillArena.state,
+  incapacitatedCompanion.id,
+  "shockLeap",
+  { x: incapacitatedSkillArena.center.x + 1, y: incapacitatedSkillArena.center.y },
+);
+assert.equal(incapacitatedSkill.consumedTurn, true);
+assert.equal(
+  incapacitatedSkill.state.turn,
+  incapacitatedSkillArena.state.turn + 1,
+  "an incapacitated ally command must advance the authoritative world clock",
+);
+assert.equal(
+  incapacitatedSkill.elapsedTurns,
+  1,
+  "an incapacitated ally's failed command must still advance the shared world turn",
+);
+assert.equal(
+  (() => {
+    const resolution = resolveGameSession(incapacitatedSkill);
+    assert.equal(resolution.kind, "turn");
+    return resolution.kind === "turn" ? resolution.enemyTurns.length : 0;
+  })(),
+  1,
+  "an incapacitated ally command must not freeze enemy turns and status timers",
+);
+
 const emptyAimArena = createSkillArena("tripleStrike");
 const emptyAimTarget = {
   x: emptyAimArena.center.x + 1,
   y: emptyAimArena.center.y,
 };
+emptyAimArena.state.tiles[emptyAimTarget.y][emptyAimTarget.x].visible = false;
+emptyAimArena.state.tiles[emptyAimTarget.y][emptyAimTarget.x].discovered = false;
 const emptyAimEnemyHp = emptyAimArena.state.enemies[0].hp;
 const emptyAimSkill = activateCompanionSkill(
   emptyAimArena.state,
@@ -5973,7 +7333,7 @@ const emptyAimSkill = activateCompanionSkill(
 assert.equal(
   emptyAimSkill.consumedTurn,
   true,
-  "enemy-targeted skills must still fire when the selected tile is empty",
+  "enemy-targeted skills must still fire toward a hidden empty tile",
 );
 assert.equal(
   emptyAimSkill.state.enemies[0].hp,
@@ -5984,6 +7344,12 @@ assert.deepEqual(
   emptyAimSkill.skillVisuals?.at(-1)?.to,
   emptyAimTarget,
   "empty-tile skill aiming must publish its effect at the clicked tile",
+);
+assert.ok(
+  emptyAimSkill.soundCues?.some(
+    ({ id }) => id === COMPANION_SKILLS.tripleStrike.soundId,
+  ),
+  "every successful manual skill cast must publish its assigned sound cue",
 );
 
 const manualQuickslotArena = createSkillArena("fireball");
@@ -6007,6 +7373,10 @@ const emptyQuickslotTarget = {
   x: quickslotCompanion.x + 3,
   y: quickslotCompanion.y + 1,
 };
+manualQuickslotArena.state.tiles[emptyQuickslotTarget.y][emptyQuickslotTarget.x]
+  .visible = false;
+manualQuickslotArena.state.tiles[emptyQuickslotTarget.y][emptyQuickslotTarget.x]
+  .discovered = false;
 const emptyQuickslotResult = activateCompanionQuickslot(
   manualQuickslotArena.state,
   quickslotCompanion.id,
@@ -6028,6 +7398,16 @@ assert.deepEqual(
   emptyQuickslotTarget,
   "manual ally quickslot visuals must end at the clicked tile",
 );
+assert.equal(
+  activateCompanionQuickslot(
+    manualQuickslotArena.state,
+    quickslotCompanion.id,
+    2,
+    { x: -1, y: -1 },
+  ).consumedTurn,
+  false,
+  "out-of-bounds companion shots must fail without spending a charge or turn",
+);
 
 const leapArena = createSkillArena("shockLeap");
 leapArena.state.enemies[0].x = leapArena.center.x + 4;
@@ -6046,6 +7426,144 @@ assert.deepEqual(
 assert.ok(
   leapResult.state.enemies[0].hp < leapArena.state.enemies[0].hp,
   "Shock Leap must damage an enemy adjacent to its landing tile",
+);
+assert.equal(
+  leapResult.motions.find(
+    (motion) => motion.id === "player" && motion.kind === "move",
+  )?.travelStyle,
+  "leap",
+  "Shock Leap must publish semantic leap travel instead of ordinary walking",
+);
+assert.deepEqual(
+  {
+    travelMode: leapResult.skillVisuals?.[0]?.travelMode,
+    impactMode: leapResult.skillVisuals?.[0]?.impactMode,
+    radius: leapResult.skillVisuals?.[0]?.radius,
+  },
+  { travelMode: "leap", impactMode: "shockwave", radius: 1 },
+  "Shock Leap must expose reusable travel and impact cues to presentation",
+);
+
+const derivedLeapArena = createSkillArena("shockLeap");
+const derivedLanding = {
+  x: derivedLeapArena.center.x + 1,
+  y: derivedLeapArena.center.y,
+};
+derivedLeapArena.state.enemies = [
+  {
+    ...derivedLeapArena.state.enemies[0],
+    id: "derived-near",
+    x: derivedLanding.x + 1,
+    hp: 10_000,
+    maxHp: 10_000,
+    statuses: [],
+  },
+  {
+    ...derivedLeapArena.state.enemies[0],
+    id: "derived-wide",
+    x: derivedLanding.x + 2,
+    hp: 10_000,
+    maxHp: 10_000,
+    statuses: [],
+  },
+];
+const derivedAttack = getPlayerAttack(derivedLeapArena.state.player);
+const derivedModifier = {
+  id: "phase-quake",
+  scalarChanges: {
+    power: { set: 2 },
+    radius: { set: 2 },
+  },
+  travelMode: "teleport",
+  impactMode: "fragments",
+  accent: "#ff66cc",
+  addSpecialEffects: [{
+    id: "phase-poison",
+    kind: "status",
+    target: "area",
+    statusId: "poisoned",
+    turns: 3,
+    radius: 2,
+  }],
+} as const;
+const derivedLeapResult = activateCompanionSkill(
+  derivedLeapArena.state,
+  "player",
+  "shockLeap",
+  derivedLanding,
+  { modifiers: [derivedModifier] },
+);
+assert.ok(
+  derivedLeapResult.state.enemies.every(
+    (enemy, index) =>
+      derivedLeapArena.state.enemies[index].hp - enemy.hp ===
+        Math.round(derivedAttack * 2),
+  ),
+  "a derived radius and power modifier must execute through the real skill handler",
+);
+assert.ok(
+  derivedLeapResult.state.enemies.every((enemy) =>
+    enemy.statuses.some(
+      (status) => status.id === "poisoned" && status.turns === 3,
+    ),
+  ),
+  "data-only derived special effects must execute on their configured targets",
+);
+assert.equal(
+  derivedLeapResult.motions.find(
+    (motion) => motion.id === "player" && motion.kind === "move",
+  )?.travelStyle,
+  "teleport",
+  "a travel modifier must change the actual motion, not only metadata",
+);
+assert.deepEqual(
+  {
+    travelMode: derivedLeapResult.skillVisuals?.[0]?.travelMode,
+    impactMode: derivedLeapResult.skillVisuals?.[0]?.impactMode,
+    radius: derivedLeapResult.skillVisuals?.[0]?.radius,
+    variants: derivedLeapResult.skillVisuals?.[0]?.variants,
+    accent: derivedLeapResult.skillVisuals?.[0]?.accent,
+  },
+  {
+    travelMode: "teleport",
+    impactMode: "fragments",
+    radius: 2,
+    variants: ["phase-quake"],
+    accent: "#ff66cc",
+  },
+  "derived semantics must be forwarded to the reusable particle layer",
+);
+const derivedLeapParticles = createCompanionSkillEffects(
+  derivedLeapResult.skillVisuals![0],
+  100,
+  48,
+);
+assert.ok(
+  derivedLeapParticles.some((effect) => effect.id.includes("depart")) &&
+    derivedLeapParticles.some((effect) => effect.id.includes("area-")) &&
+    !derivedLeapParticles.some((effect) => effect.id.includes("takeoff")),
+  "derived teleport/fragments visuals must replace the base leap/shockwave recipe",
+);
+assert.ok(
+  derivedLeapParticles.some((effect) => effect.color === "#ff66cc"),
+  "derived particle recipes must consume the modifier accent",
+);
+assert.ok(
+  createCompanionSkillEffects(
+    {
+      ...derivedLeapResult.skillVisuals![0],
+      id: "oversized-derived-radius",
+      radius: 10,
+    },
+    100,
+    48,
+  ).length <= 256,
+  "derived visual radii must respect the per-cast particle safety budget",
+);
+assert.deepEqual(
+  companionSkillBlueprint("shockLeap").scalars,
+  baseShockLeap.scalars,
+  "executing a derived skill must not mutate its stable saved base blueprint",
 );
 
 const drivingArena = createSkillArena("drivingLeap");
@@ -6066,10 +7584,60 @@ assert.equal(
   drivingTarget.x + 2,
   "Driving Leap must push an unobstructed enemy two tiles away",
 );
+assert.equal(
+  drivingResult.motions.find(
+    (motion) => motion.id === "player" && motion.kind === "move",
+  )?.travelStyle,
+  "leap",
+  "Driving Leap must use the same reusable leap travel primitive",
+);
+
+const shadowArena = createSkillArena("shadowStep");
+const shadowTarget = {
+  x: shadowArena.center.x + 2,
+  y: shadowArena.center.y,
+};
+const shadowResult = activateCompanionSkill(
+  shadowArena.state,
+  "player",
+  "shadowStep",
+  shadowTarget,
+);
+assert.equal(shadowResult.consumedTurn, true);
+assert.equal(
+  shadowResult.motions.find(
+    (motion) => motion.id === "player" && motion.kind === "move",
+  )?.travelStyle,
+  "teleport",
+  "Shadow Step must snap with teleport semantics rather than glide like a leap",
+);
+assert.equal(
+  shadowResult.skillVisuals?.[0]?.travelMode,
+  "teleport",
+  "Shadow Step must request the teleport particle recipe",
+);
+
+const chargeArena = createSkillArena("shieldCharge");
+const chargeResult = activateCompanionSkill(
+  chargeArena.state,
+  "player",
+  "shieldCharge",
+  chargeArena.state.enemies[0],
+);
+assert.equal(chargeResult.consumedTurn, true);
+assert.equal(
+  chargeResult.motions.find(
+    (motion) => motion.id === "player" && motion.kind === "move",
+  )?.travelStyle,
+  "charge",
+  "Shield Charge must retain ground-charge travel distinct from leap and teleport",
+);
 
 const fireballArena = createSkillArena("fireball");
 const fireballTarget = { x: fireballArena.center.x + 5, y: fireballArena.center.y };
 fireballArena.state.enemies[0].x = fireballTarget.x;
+fireballArena.state.tiles[fireballTarget.y][fireballTarget.x].visible = false;
+fireballArena.state.tiles[fireballTarget.y][fireballTarget.x].discovered = false;
 const fireballResult = activateCompanionSkill(
   fireballArena.state,
   "player",
@@ -6077,6 +7645,74 @@ const fireballResult = activateCompanionSkill(
   fireballTarget,
 );
 assert.equal(fireballResult.consumedTurn, true);
+assert.deepEqual(
+  new Set(
+    fireballResult.skillVisuals?.[0].affectedTiles?.map(({ x, y }) =>
+      pointKey(x, y),
+    ),
+  ),
+  new Set(
+    particleFootprintTiles(fireballTarget, { radiusTiles: 1 }).map(({ x, y }) =>
+      pointKey(x, y),
+    ),
+  ),
+  "area skill visuals must receive the exact rule footprint, including all eight neighbors",
+);
+assert.deepEqual(
+  fireballResult.skillVisuals?.[0].footprintOrigin,
+  fireballTarget,
+  "the rule layer must publish the footprint anchor without presentation skill-id special cases",
+);
+assert.equal(
+  activateCompanionSkill(
+    fireballArena.state,
+    PLAYER_ACTOR_ID,
+    "fireball",
+    { x: -1, y: -1 },
+  ).consumedTurn,
+  false,
+  "out-of-bounds skill targets must fail safely without spending a turn",
+);
+const blockedBlindSkillArena = createSkillArena("fireball");
+const blockedBlindTarget = {
+  x: blockedBlindSkillArena.center.x + 3,
+  y: blockedBlindSkillArena.center.y,
+};
+blockedBlindSkillArena.state.tiles[blockedBlindTarget.y][blockedBlindTarget.x]
+  .visible = false;
+blockedBlindSkillArena.state.tiles[
+  blockedBlindSkillArena.center.y
+][blockedBlindSkillArena.center.x + 1].terrain = "wall";
+assert.equal(
+  activateCompanionSkill(
+    blockedBlindSkillArena.state,
+    PLAYER_ACTOR_ID,
+    "fireball",
+    blockedBlindTarget,
+  ).consumedTurn,
+  false,
+  "blind skill targeting must still respect walls and closed lines of sight",
+);
+const grassLineSkillArena = createSkillArena("fireball");
+const grassLineTarget = {
+  x: grassLineSkillArena.center.x + 3,
+  y: grassLineSkillArena.center.y,
+};
+grassLineSkillArena.state.enemies[0].x = grassLineTarget.x;
+grassLineSkillArena.state.enemies[0].y = grassLineTarget.y;
+grassLineSkillArena.state.tiles[grassLineSkillArena.center.y][
+  grassLineSkillArena.center.x + 1
+].terrain = "highGrass";
+assert.equal(
+  activateCompanionSkill(
+    grassLineSkillArena.state,
+    PLAYER_ACTOR_ID,
+    "fireball",
+    grassLineTarget,
+  ).consumedTurn,
+  true,
+  "dense grass must not block a manually aimed skill projectile",
+);
 assert.equal(fireballResult.state.clouds.at(-1)?.kind, "fire");
 assert.equal(
   fireballResult.state.clouds.at(-1)?.tiles.length,
@@ -6113,10 +7749,13 @@ assert.ok(
   "a lightning hit on water must conduct through the connected puddle to every other entity",
 );
 assert.ok(
-  (lightningResult.magicVisuals ?? []).some((visual) =>
-    visual.id.includes("-water-"),
-  ),
-  "water conduction must publish visible lightning arcs to secondary entities",
+  (lightningResult.skillVisuals?.[0].paths?.length ?? 0) > 1,
+  "water conduction must publish pixel-lightning paths to secondary entities",
+);
+assert.equal(
+  lightningResult.magicVisuals?.length ?? 0,
+  0,
+  "manual skills must not duplicate pixel recipes with legacy antialiased magic shapes",
 );
 
 const weaponArena = createSkillArena("weaponThrow");
@@ -6136,8 +7775,8 @@ const weaponResult = activateCompanionSkill(
 );
 assert.equal(
   weaponBeforeHp - weaponResult.state.enemies[0].hp,
-  Math.max(1, weaponProfile.attack) * 5,
-  "Weapon Throw must deal exactly five times the equipped weapon's attack value",
+  Math.max(1, Math.round(weaponProfile.attack * 5)),
+  "Weapon Throw must round the five-times graded weapon value at damage resolution",
 );
 assert.equal(
   weaponResult.state.player.equipment.weapon,
@@ -6171,6 +7810,64 @@ assert.equal(
   weaponResult.skillVisuals?.[0]?.skillId,
   "weaponThrow",
   "a successful manual skill must publish its 16×16 particle cue",
+);
+const blockedWeaponArena = createSkillArena("weaponThrow");
+const blockedWeaponTarget = {
+  x: blockedWeaponArena.center.x + 1,
+  y: blockedWeaponArena.center.y,
+};
+blockedWeaponArena.state.tiles[blockedWeaponTarget.y][
+  blockedWeaponTarget.x
+] = {
+  ...blockedWeaponArena.state.tiles[blockedWeaponTarget.y][blockedWeaponTarget.x],
+  terrain: "wall",
+  visible: true,
+  discovered: true,
+};
+const blockedWeaponId = blockedWeaponArena.state.player.equipmentInstances.weapon?.id;
+const blockedWeaponResult = activateCompanionSkill(
+  blockedWeaponArena.state,
+  "player",
+  "weaponThrow",
+  blockedWeaponTarget,
+);
+assert.equal(blockedWeaponResult.consumedTurn, false);
+assert.equal(
+  blockedWeaponResult.state.player.equipmentInstances.weapon?.id,
+  blockedWeaponId,
+  "Weapon Throw must retain ownership when the selected impact tile is not recoverable",
+);
+assert.equal(
+  blockedWeaponResult.state.groundItems.some(
+    (item) => item.instance?.id === blockedWeaponId,
+  ),
+  false,
+  "Weapon Throw must never bury a unique weapon inside a wall tile",
+);
+const circularWeaponArena = createSkillArena("weaponThrow");
+const formerSquareCorner = {
+  x: circularWeaponArena.center.x + 6,
+  y: circularWeaponArena.center.y + 6,
+};
+circularWeaponArena.state.enemies[0].x = formerSquareCorner.x;
+circularWeaponArena.state.enemies[0].y = formerSquareCorner.y;
+const circularWeaponId =
+  circularWeaponArena.state.player.equipmentInstances.weapon?.id;
+const circularWeaponResult = activateCompanionSkill(
+  circularWeaponArena.state,
+  PLAYER_ACTOR_ID,
+  "weaponThrow",
+  formerSquareCorner,
+);
+assert.equal(
+  circularWeaponResult.consumedTurn,
+  false,
+  "a range-eight skill must reject a 6-by-6 diagonal point outside its circular radius",
+);
+assert.equal(
+  circularWeaponResult.state.player.equipmentInstances.weapon?.id,
+  circularWeaponId,
+  "a circular-range rejection must not spend or drop the equipped weapon",
 );
 
 const dischargeArena = createSkillArena("arcaneDischarge");
@@ -6268,12 +7965,72 @@ assert.equal(
 assert.equal(
   LEVEL_XP_REQUIREMENT_MULTIPLIER,
   5,
-  "level requirements must be five times the previous progression curve",
+  "level two must retain the established fivefold base requirement",
+);
+assert.equal(
+  LEVEL_XP_REQUIREMENT_GROWTH,
+  1.15,
+  "each successive level requirement must grow by fifteen percent",
+);
+assert.equal(
+  LEVEL_STAT_GROWTH,
+  1.1,
+  "attack and maximum health must grow by ten percent per level",
 );
 assert.equal(
   experienceForNextLevel(1),
   50,
   "level two must require five times the former ten-XP threshold",
+);
+assert.equal(
+  experienceForNextLevel(2),
+  Math.ceil(experienceForNextLevel(1) * LEVEL_XP_REQUIREMENT_GROWTH),
+  "the next level requirement must be fifteen percent above the previous threshold",
+);
+for (let level = 2; level < 12; level += 1) {
+  assert.equal(
+    experienceForNextLevel(level),
+    Math.ceil(
+      10 *
+        LEVEL_XP_REQUIREMENT_MULTIPLIER *
+        LEVEL_XP_REQUIREMENT_GROWTH ** (level - 1),
+    ),
+    `level ${level + 1} must remain on the cumulative fifteen-percent XP curve`,
+  );
+}
+const companionSpeedInstance = createEquipmentInstance(
+  ITEM_DEFS.shortsword,
+  "companion-speed-sword",
+  sequenceRandom([0.99]),
+  { grade: "S", allowCurse: false, preferredFirstTrait: "swift" },
+);
+const speedCompanion = {
+  ...companionGame.companions[0],
+  equipment: {
+    ...companionGame.companions[0].equipment,
+    weapon: "shortsword",
+  },
+  equipmentInstances: {
+    ...companionGame.companions[0].equipmentInstances,
+    weapon: companionSpeedInstance,
+  },
+};
+assert.ok(
+  getCompanionMoveSpeed(speedCompanion) > 1 &&
+    getCompanionAttackSpeed(speedCompanion) > 1,
+  "companion move and attack speed must include equipment enchantments",
+);
+assert.ok(
+  getCompanionMoveSpeed({
+    ...speedCompanion,
+    statuses: [{ id: "chilled", turns: 2, power: 1 }],
+  }) < getCompanionMoveSpeed(speedCompanion),
+  "companion speed statistics must include active status effects",
+);
+assert.match(
+  dungeonUiSource,
+  /getCompanionMoveSpeed\(companion\)[\s\S]*getCompanionAttackSpeed\(companion\)/,
+  "the companion inspector must display calculated movement and attack speed",
 );
 const levelOnePower = getPlayerAttack(companionGame.player);
 assert.equal(
@@ -6406,12 +8163,13 @@ assert.ok(
   ),
   "the lead companion must occupy the first point in the player's trail",
 );
-assert.equal(
+assert.ok(
   formationTurn.motions.some(
-    (motion) => motion.id === formationGame.companions[1].id,
+    (motion) =>
+      motion.id === formationGame.companions[1].id &&
+      motion.to.x === formationCenter.x - 2,
   ),
-  false,
-  "a following companion must wait instead of taking a tile occupied by a fighting ally at turn start",
+  "a following companion must enter the tile vacated by the ally ahead in the same turn",
 );
 
 const reservationGame = createNewGame(0xc0111510);
@@ -6646,8 +8404,12 @@ assert.equal(
 let companionLevelGame = createNewGame(0x1e7e1);
 companionLevelGame.companions[0].hp = 0;
 companionLevelGame.companions[1].hp = 3;
+companionLevelGame.companions[1].xp =
+  companionLevelGame.companions[1].nextXp - 2;
 const fallenCompanionXp = companionLevelGame.companions[0].xp;
-const activeCompanionXp = companionLevelGame.companions[1].xp;
+const activeCompanionLevel = companionLevelGame.companions[1].level;
+const activeCompanionMaxHp = companionLevelGame.companions[1].maxHp;
+const activeCompanionAttack = companionLevelGame.companions[1].baseAttack;
 companionLevelGame.player.xp = companionLevelGame.player.nextXp - 1;
 companionLevelGame = developerGrantItem(
   companionLevelGame,
@@ -6675,13 +8437,27 @@ assert.equal(
   "a defeated companion must retain its own experience total",
 );
 assert.ok(
-  companionLevelResult.companions[1].xp > activeCompanionXp,
-  "each active companion must gain experience in its own progression record",
+  companionLevelResult.companions[1].level > activeCompanionLevel,
+  "each active companion must resolve experience in its own progression record",
 );
 assert.notEqual(
   companionLevelResult.companions[1].xp,
   companionLevelResult.player.xp,
   "leader and companion experience must no longer be a mirrored shared value",
+);
+assert.equal(
+  companionLevelResult.companions[1].maxHp,
+  Math.max(
+    activeCompanionMaxHp + 1,
+    Math.round(activeCompanionMaxHp * LEVEL_STAT_GROWTH),
+  ),
+  "companion level-up must increase maximum health by ten percent",
+);
+assert.equal(
+  companionLevelResult.companions[1].baseAttack,
+  Math.round(activeCompanionAttack * LEVEL_STAT_GROWTH * 1_000_000) /
+    1_000_000,
+  "companion level-up must increase base attack by ten percent",
 );
 
 const companionObjectGame = createNewGame(0x0b1ec7);
@@ -7787,6 +9563,17 @@ capGame.companions = [];
 const capStartMaxHp = capGame.player.maxHp;
 const capStartBaseAttack = capGame.player.baseAttack;
 const capStartBaseDefense = capGame.player.baseDefense;
+let capExpectedMaxHp = capStartMaxHp;
+let capExpectedBaseAttack = capStartBaseAttack;
+for (let level = 1; level < MAX_PLAYER_LEVEL; level += 1) {
+  capExpectedMaxHp = Math.max(
+    capExpectedMaxHp + 1,
+    Math.round(capExpectedMaxHp * LEVEL_STAT_GROWTH),
+  );
+  capExpectedBaseAttack =
+    Math.round(capExpectedBaseAttack * LEVEL_STAT_GROWTH * 1_000_000) /
+    1_000_000;
+}
 const capTarget = {
   x: capGame.player.x + 1,
   y: capGame.player.y,
@@ -7824,13 +9611,13 @@ assert.equal(
 );
 assert.equal(
   capped.player.maxHp,
-  capStartMaxHp,
-  "ordinary level-ups must not raise maximum health",
+  capExpectedMaxHp,
+  "every level up to the cap must apply ten-percent maximum-health growth",
 );
 assert.equal(
   capped.player.baseAttack,
-  capStartBaseAttack,
-  "ordinary level-ups must not raise base attack",
+  capExpectedBaseAttack,
+  "every level up to the cap must apply ten-percent base-attack growth",
 );
 assert.equal(
   capped.player.baseDefense,

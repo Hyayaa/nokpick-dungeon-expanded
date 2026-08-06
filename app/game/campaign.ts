@@ -1,10 +1,26 @@
-import { ITEM_DEFS } from "./data";
+import {
+  ENEMY_DROP_CHANCE,
+  ENEMY_DROP_TABLE,
+  FLOOR_EQUIPMENT_CATEGORIES,
+  FLOOR_LOOT,
+  ITEM_DEFS,
+} from "./data";
 import {
   COMPANION_CLASSES,
   createCompanion,
   normalizeCompanionProgression,
 } from "./companions";
-import { createPlainEquipmentInstance } from "./equipment";
+import {
+  createEquipmentInstance,
+  createPlainEquipmentInstance,
+  isUpgradeableEquipment,
+  normalizeEquipmentInstance,
+} from "./equipment";
+import {
+  ITEM_GRADES,
+  itemGradeIndex,
+  resolveItemGrade,
+} from "./item-grade";
 import {
   MAX_INVENTORY_SLOTS,
   WAREHOUSE_SLOT_COUNT,
@@ -15,13 +31,18 @@ import {
 import {
   Companion,
   CompanionClassId,
+  DungeonLootPlanEntry,
+  DungeonObjectKind,
   InventoryInstance,
   ItemCategory,
+  ItemPickup,
+  ItemGrade,
   Player,
 } from "./types";
 
 export type DungeonId = string;
-export type DungeonDifficulty = 1 | 2 | 3;
+export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export type DungeonDifficultyGrade = ItemGrade;
 
 export type DungeonDefinition = {
   id: DungeonId;
@@ -33,11 +54,13 @@ export type DungeonDefinition = {
   descriptionKo: string;
   descriptionEn: string;
   difficulty: DungeonDifficulty;
+  difficultyGrade: DungeonDifficultyGrade;
   difficultyLabelKo: string;
   difficultyLabelEn: string;
   floorCount: number;
   difficultyScale: number;
   mainDropIds: string[];
+  lootPlan: DungeonLootPlanEntry[];
   accent: string;
 };
 
@@ -46,11 +69,13 @@ type DungeonTheme = Omit<
   | "id"
   | "themeId"
   | "difficulty"
+  | "difficultyGrade"
   | "difficultyLabelKo"
   | "difficultyLabelEn"
   | "floorCount"
   | "difficultyScale"
   | "mainDropIds"
+  | "lootPlan"
 > & {
   themeId: string;
   lootCategories: ItemCategory[];
@@ -215,44 +240,96 @@ const DUNGEON_THEMES: DungeonTheme[] = [
   },
 ];
 
-const DIFFICULTY_RULES: Record<
+export const DUNGEON_DIFFICULTY_RULES: Record<
   DungeonDifficulty,
   {
+    grade: DungeonDifficultyGrade;
     labelKo: string;
     labelEn: string;
     minimumFloor: number;
     maximumFloor: number;
-    minimumScale: number;
-    maximumScale: number;
+    enemyStatMultiplier: number;
     itemTier: number;
+    minimumItemGrade: ItemGrade;
+    maximumItemGrade: ItemGrade;
   }
 > = {
   1: {
-    labelKo: "보통",
-    labelEn: "Normal",
+    grade: "F",
+    labelKo: "매우 쉬움",
+    labelEn: "Very Easy",
     minimumFloor: 3,
-    maximumFloor: 5,
-    minimumScale: 0.9,
-    maximumScale: 1,
-    itemTier: 2,
+    maximumFloor: 4,
+    enemyStatMultiplier: 1,
+    itemTier: 1,
+    minimumItemGrade: "F",
+    maximumItemGrade: "F",
   },
   2: {
-    labelKo: "어려움",
-    labelEn: "Hard",
-    minimumFloor: 5,
-    maximumFloor: 7,
-    minimumScale: 1.05,
-    maximumScale: 1.16,
-    itemTier: 3,
+    grade: "E",
+    labelKo: "쉬움",
+    labelEn: "Easy",
+    minimumFloor: 3,
+    maximumFloor: 5,
+    enemyStatMultiplier: Number(Math.pow(50, 1 / 6).toFixed(6)),
+    itemTier: 2,
+    minimumItemGrade: "F",
+    maximumItemGrade: "E",
   },
   3: {
+    grade: "D",
+    labelKo: "약간 쉬움",
+    labelEn: "Slightly Easy",
+    minimumFloor: 4,
+    maximumFloor: 5,
+    enemyStatMultiplier: Number(Math.pow(50, 2 / 6).toFixed(6)),
+    itemTier: 2,
+    minimumItemGrade: "E",
+    maximumItemGrade: "D",
+  },
+  4: {
+    grade: "C",
+    labelKo: "보통",
+    labelEn: "Normal",
+    minimumFloor: 5,
+    maximumFloor: 6,
+    enemyStatMultiplier: Number(Math.pow(50, 3 / 6).toFixed(6)),
+    itemTier: 3,
+    minimumItemGrade: "D",
+    maximumItemGrade: "C",
+  },
+  5: {
+    grade: "B",
+    labelKo: "약간 어려움",
+    labelEn: "Slightly Hard",
+    minimumFloor: 6,
+    maximumFloor: 7,
+    enemyStatMultiplier: Number(Math.pow(50, 4 / 6).toFixed(6)),
+    itemTier: 3,
+    minimumItemGrade: "C",
+    maximumItemGrade: "B",
+  },
+  6: {
+    grade: "A",
+    labelKo: "어려움",
+    labelEn: "Hard",
+    minimumFloor: 7,
+    maximumFloor: 8,
+    enemyStatMultiplier: Number(Math.pow(50, 5 / 6).toFixed(6)),
+    itemTier: 4,
+    minimumItemGrade: "B",
+    maximumItemGrade: "A",
+  },
+  7: {
+    grade: "S",
     labelKo: "매우 어려움",
     labelEn: "Very Hard",
-    minimumFloor: 7,
+    minimumFloor: 8,
     maximumFloor: 9,
-    minimumScale: 1.2,
-    maximumScale: 1.36,
+    enemyStatMultiplier: 50,
     itemTier: 5,
+    minimumItemGrade: "S",
+    maximumItemGrade: "S",
   },
 };
 
@@ -298,13 +375,314 @@ const dropCandidates = (
     )
     .map((definition) => definition.id);
 
+const plannedItemQuantity = (defId: string) =>
+  ITEM_DEFS[defId]?.category === "missile" ? 3 : 1;
+
+const tieredFloorLootCandidates = (
+  categories: readonly ItemCategory[],
+  maximumTier: number,
+  excludedIds: ReadonlySet<string> = new Set(),
+) => {
+  const categorySet = new Set(categories);
+  const available = FLOOR_LOOT.filter((itemId) => {
+    const definition = ITEM_DEFS[itemId];
+    return Boolean(
+      definition &&
+        categorySet.has(definition.category) &&
+        !excludedIds.has(itemId) &&
+        (definition.minFloor ?? 1) <= maximumTier,
+    );
+  });
+  if (!available.length) return [];
+  const highestAvailableTier = Math.max(
+    ...available.map((itemId) => ITEM_DEFS[itemId]?.minFloor ?? 1),
+  );
+  const preferredMinimumTier = Math.max(1, highestAvailableTier - 1);
+  const preferred = available.filter(
+    (itemId) =>
+      (ITEM_DEFS[itemId]?.minFloor ?? 1) >= preferredMinimumTier,
+  );
+  return preferred.length ? preferred : available;
+};
+
+const pickTieredFloorLoot = (
+  categories: readonly ItemCategory[],
+  maximumTier: number,
+  random: () => number,
+  excludedIds?: ReadonlySet<string>,
+) => {
+  const pool = tieredFloorLootCandidates(
+    categories,
+    maximumTier,
+    excludedIds,
+  );
+  if (!pool.length) {
+    throw new Error(
+      `No planned dungeon loot is available for: ${categories.join(", ")}`,
+    );
+  }
+  return pool[Math.floor(random() * pool.length)];
+};
+
+const plannedEnemyCount = (floor: number, difficulty: DungeonDifficulty) =>
+  Math.min(18 + floor * 4 + (difficulty - 1) * 2, 52);
+
+const pickEnemyDrop = (random: () => number) => {
+  const roll = random();
+  let accumulatedWeight = 0;
+  return (
+    ENEMY_DROP_TABLE.find(({ weight }) => {
+      accumulatedWeight += weight;
+      return roll < accumulatedWeight;
+    }) ?? ENEMY_DROP_TABLE[ENEMY_DROP_TABLE.length - 1]
+  ).itemId;
+};
+
+type PlannedRewardCandidate = {
+  source: "ground" | "object";
+  defId: string;
+  priority: number;
+  objectKind?: Exclude<DungeonObjectKind, "alchemy">;
+};
+
+const createDungeonLootPlan = ({
+  planId,
+  seed,
+  difficulty,
+  floorCount,
+  mainDropIds,
+}: {
+  planId: string;
+  seed: number;
+  difficulty: DungeonDifficulty;
+  floorCount: number;
+  mainDropIds: readonly string[];
+}) => {
+  const rules = DUNGEON_DIFFICULTY_RULES[difficulty];
+  const random = seededRandom(seed ^ 0xa511e9b3);
+  const entries: DungeonLootPlanEntry[] = [];
+  let entryIndex = 0;
+
+  const appendEntry = (
+    floor: number,
+    source: DungeonLootPlanEntry["source"],
+    defId: string,
+    objectKind?: Exclude<DungeonObjectKind, "alchemy">,
+  ) => {
+    const id = `${planId}-loot-${entryIndex + 1}`;
+    const definition = ITEM_DEFS[defId];
+    const minimumGradeIndex = itemGradeIndex(rules.minimumItemGrade);
+    const maximumGradeIndex = itemGradeIndex(rules.maximumItemGrade);
+    const grade = ITEM_GRADES[
+      minimumGradeIndex +
+        Math.floor(random() * (maximumGradeIndex - minimumGradeIndex + 1))
+    ];
+    const instance = isUpgradeableEquipment(definition)
+      ? createEquipmentInstance(definition!, `${id}-instance`, random, {
+          grade,
+        })
+      : undefined;
+    const quantity = plannedItemQuantity(defId);
+    if (instance && definition?.category === "missile") {
+      instance.baseMaxCharges = quantity;
+      instance.maxCharges = quantity;
+      instance.charges = quantity;
+    }
+    entries.push({
+      id,
+      floor,
+      source,
+      defId,
+      quantity,
+      objectKind,
+      instance,
+    });
+    entryIndex += 1;
+  };
+
+  const featuredByFloor = new Map<number, PlannedRewardCandidate[]>();
+  mainDropIds.slice(0, 2).forEach((defId, index) => {
+    const floor = index === 0 ? 1 : floorCount;
+    const rewards = featuredByFloor.get(floor) ?? [];
+    rewards.push({
+      source: index === 0 ? "ground" : "object",
+      defId,
+      priority: 4,
+      objectKind: index === 0 ? undefined : "crystalChest",
+    });
+    featuredByFloor.set(floor, rewards);
+  });
+
+  for (let floor = 1; floor <= floorCount; floor += 1) {
+    const candidates: PlannedRewardCandidate[] = [
+      {
+        source: "ground",
+        defId: "potion_healing",
+        priority: 1,
+      },
+      ...(featuredByFloor.get(floor) ?? []),
+    ];
+    const potionCount = 1 + Math.floor(random() * 3);
+    const usedPotions = new Set(["potion_healing"]);
+    for (let index = 1; index < potionCount; index += 1) {
+      const defId = pickTieredFloorLoot(
+        ["potion"],
+        rules.itemTier,
+        random,
+        usedPotions,
+      );
+      usedPotions.add(defId);
+      candidates.push({ source: "ground", defId, priority: 0 });
+    }
+
+    if (random() < 0.5) {
+      candidates.push({
+        source: "ground",
+        defId: pickTieredFloorLoot(
+          FLOOR_EQUIPMENT_CATEGORIES,
+          rules.itemTier,
+          random,
+        ),
+        priority: 0,
+      });
+    }
+
+    const objectCount = 1 + Math.floor(random() * 2);
+    for (let index = 0; index < objectCount; index += 1) {
+      const objectRoll = random();
+      candidates.push({
+        source: "object",
+        defId: pickTieredFloorLoot(
+          FLOOR_EQUIPMENT_CATEGORIES,
+          rules.itemTier,
+          random,
+        ),
+        priority: 0,
+        objectKind:
+          objectRoll < 0.58
+            ? "chest"
+            : objectRoll < 0.82
+              ? "tomb"
+              : "crystalChest",
+      });
+    }
+
+    const featuredCount = candidates.filter(
+      (candidate) => candidate.priority >= 4,
+    ).length;
+    const rewardCount = Math.max(
+      featuredCount,
+      1,
+      Math.round(candidates.length / 3),
+    );
+    candidates
+      .map((candidate) => ({ candidate, tieBreaker: random() }))
+      .sort(
+        (a, b) =>
+          b.candidate.priority - a.candidate.priority ||
+          a.tieBreaker - b.tieBreaker,
+      )
+      .slice(0, rewardCount)
+      .forEach(({ candidate }) =>
+        appendEntry(
+          floor,
+          candidate.source,
+          candidate.defId,
+          candidate.objectKind,
+        ),
+      );
+
+    for (
+      let enemyIndex = 0;
+      enemyIndex < plannedEnemyCount(floor, difficulty);
+      enemyIndex += 1
+    ) {
+      if (random() >= ENEMY_DROP_CHANCE) continue;
+      appendEntry(floor, "enemy", pickEnemyDrop(random));
+    }
+  }
+
+  if (!entries.some((entry) => entry.instance)) {
+    appendEntry(
+      Math.max(1, Math.ceil(floorCount / 2)),
+      "object",
+      pickTieredFloorLoot(
+        FLOOR_EQUIPMENT_CATEGORIES,
+        rules.itemTier,
+        random,
+      ),
+      "crystalChest",
+    );
+  }
+
+  return entries;
+};
+
+const MAIN_LOOT_EXCLUDED_CATEGORIES = new Set<ItemCategory>([
+  "seed",
+  "potion",
+  "stone",
+]);
+
+/**
+ * The hub advertises the two highest-grade planned rewards. Duplicate item
+ * definitions are collapsed to their best rolled instance, and common nature
+ * consumables never occupy a featured slot.
+ */
+export const selectMainLootEntries = (
+  lootPlan: readonly DungeonLootPlanEntry[],
+) => {
+  const bestByDefinition = new Map<
+    string,
+    { entry: DungeonLootPlanEntry; gradeIndex: number; planIndex: number }
+  >();
+  lootPlan.forEach((entry, planIndex) => {
+    const definition = ITEM_DEFS[entry.defId];
+    if (!definition || MAIN_LOOT_EXCLUDED_CATEGORIES.has(definition.category)) {
+      return;
+    }
+    const gradeIndex = itemGradeIndex(
+      resolveItemGrade(definition, entry.instance),
+    );
+    const existing = bestByDefinition.get(entry.defId);
+    if (!existing || gradeIndex > existing.gradeIndex) {
+      bestByDefinition.set(entry.defId, { entry, gradeIndex, planIndex });
+    }
+  });
+  return [...bestByDefinition.values()]
+    .sort(
+      (a, b) =>
+        b.gradeIndex - a.gradeIndex ||
+        (ITEM_DEFS[b.entry.defId]?.minFloor ?? 1) -
+          (ITEM_DEFS[a.entry.defId]?.minFloor ?? 1) ||
+        a.planIndex - b.planIndex,
+    )
+    .slice(0, 2)
+    .map(({ entry }) => entry);
+};
+
+export const selectMainLootIds = (
+  lootPlan: readonly DungeonLootPlanEntry[],
+) => selectMainLootEntries(lootPlan).map((entry) => entry.defId);
+
+export const newExpeditionPickups = (pickups: readonly ItemPickup[]) =>
+  pickups.filter(
+    (pickup) =>
+      pickup.lootOrigin !== "carried" &&
+      ITEM_DEFS[pickup.defId]?.category !== "key",
+  );
+
 export const INITIAL_DUNGEON_OFFER_SEED = 0x4d2b91a7;
 
 export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
   const random = seededRandom(seed || INITIAL_DUNGEON_OFFER_SEED);
   const themes = shuffleWith(DUNGEON_THEMES, random).slice(0, 6);
+  const middleDifficulties = shuffleWith<DungeonDifficulty>(
+    [2, 3, 4, 5, 6],
+    random,
+  ).slice(0, 4);
   const difficulties = shuffleWith<DungeonDifficulty>(
-    [1, 1, 2, 2, 3, 3],
+    [1, ...middleDifficulties, 7],
     random,
   );
   const usedPrimaryDrops = new Set<string>();
@@ -312,7 +690,7 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
 
   return themes.map((theme, index) => {
     const difficulty = difficulties[index];
-    const rules = DIFFICULTY_RULES[difficulty];
+    const rules = DUNGEON_DIFFICULTY_RULES[difficulty];
     let floorCount = randomBetween(
       rules.minimumFloor,
       rules.maximumFloor,
@@ -326,7 +704,7 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
     const categoryOrder = shuffleWith(theme.lootCategories, random);
 
     categoryOrder.forEach((category) => {
-      if (selectedDrops.length >= 3) return;
+      if (selectedDrops.length >= 2) return;
       const candidates = shuffleWith(
         dropCandidates(category, rules.itemTier),
         random,
@@ -339,14 +717,14 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
       if (candidate) selectedDrops.push(candidate);
     });
 
-    if (selectedDrops.length < 3) {
+    if (selectedDrops.length < 2) {
       const fallbackCandidates = shuffleWith(
         dropCandidates(null, rules.itemTier),
         random,
       );
       fallbackCandidates.forEach((itemId) => {
         if (
-          selectedDrops.length < 3 &&
+          selectedDrops.length < 2 &&
           !selectedDrops.includes(itemId) &&
           (selectedDrops.length > 0 || !usedPrimaryDrops.has(itemId))
         ) {
@@ -364,7 +742,7 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
         random,
       ).find((itemId) => !selectedDrops.includes(itemId));
       if (featuredScroll) {
-        if (selectedDrops.length >= 3) {
+        if (selectedDrops.length >= 2) {
           selectedDrops[selectedDrops.length - 1] = featuredScroll;
         } else {
           selectedDrops.push(featuredScroll);
@@ -373,14 +751,18 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
     }
     if (selectedDrops[0]) usedPrimaryDrops.add(selectedDrops[0]);
 
-    const difficultyScale = Number(
-      (
-        rules.minimumScale +
-        random() * (rules.maximumScale - rules.minimumScale)
-      ).toFixed(2),
-    );
+    const id = `${theme.themeId}-${(seed >>> 0).toString(16)}-${index + 1}`;
+    const difficultyScale = rules.enemyStatMultiplier;
+    const lootPlan = createDungeonLootPlan({
+      planId: id,
+      seed: (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0,
+      difficulty,
+      floorCount,
+      mainDropIds: selectedDrops,
+    });
+    const mainDropIds = selectMainLootIds(lootPlan);
     return {
-      id: `${theme.themeId}-${(seed >>> 0).toString(16)}-${index + 1}`,
+      id,
       themeId: theme.themeId,
       nameKo: theme.nameKo,
       nameEn: theme.nameEn,
@@ -389,11 +771,13 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
       descriptionKo: theme.descriptionKo,
       descriptionEn: theme.descriptionEn,
       difficulty,
+      difficultyGrade: rules.grade,
       difficultyLabelKo: rules.labelKo,
       difficultyLabelEn: rules.labelEn,
       floorCount,
       difficultyScale,
-      mainDropIds: selectedDrops,
+      mainDropIds,
+      lootPlan,
       accent: theme.accent,
     };
   });
@@ -448,11 +832,15 @@ export type CampaignSave = {
   offerSeed: number;
 };
 
-const cloneInstance = (instance: InventoryInstance): InventoryInstance => ({
-  ...instance,
-  statRoll: instance.statRoll ? { ...instance.statRoll } : undefined,
-  traits: (instance.traits ?? []).map((trait) => ({ ...trait })),
-});
+const cloneInstance = (instance: InventoryInstance): InventoryInstance =>
+  normalizeEquipmentInstance(
+    {
+      ...instance,
+      statRoll: instance.statRoll ? { ...instance.statRoll } : undefined,
+      traits: (instance.traits ?? []).map((trait) => ({ ...trait })),
+    },
+    ITEM_DEFS[instance.defId],
+  );
 
 const createThrowableBundleInstance = (
   defId: string,
@@ -727,6 +1115,7 @@ export const companionToPlayer = (companion: Companion): Player => {
     companionId: normalized.id,
     name: normalized.name,
     classId: normalized.classId,
+    professionId: normalized.professionId,
     traits: [...normalized.traits],
     skills: [...normalized.skills],
     skillCooldowns: {},
@@ -796,6 +1185,7 @@ export const playerToCompanion = (player: Player): Companion => {
     id: player.companionId,
     name: player.name || definition.defaultNameKo,
     classId: player.classId,
+    professionId: player.professionId,
     command: "follow",
     x: 0,
     y: 0,

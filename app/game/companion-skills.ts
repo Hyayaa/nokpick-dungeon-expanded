@@ -1,6 +1,9 @@
 import {
+  CompanionClassId,
+  CompanionProfessionId,
   CompanionSkillCooldowns,
   CompanionSkillId,
+  GameSoundId,
 } from "./types";
 
 export type CompanionSkillTarget = "tile" | "enemy" | "ally";
@@ -16,8 +19,9 @@ export type CompanionSkillDefinition = {
   target: CompanionSkillTarget;
   range: number;
   cooldown: number;
-  requiresLineOfSight: boolean;
+  requiresLineOfFire: boolean;
   accent: string;
+  soundId: GameSoundId;
 };
 
 export const COMPANION_SKILLS: Record<
@@ -37,8 +41,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 6,
     cooldown: 5,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#d7a85f",
+    soundId: "skillLightning",
   },
   drivingLeap: {
     id: "drivingLeap",
@@ -53,8 +58,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 6,
     cooldown: 6,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#cf795f",
+    soundId: "skillImpact",
   },
   fireball: {
     id: "fireball",
@@ -69,8 +75,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 10,
     cooldown: 7,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#e36d45",
+    soundId: "skillBlast",
   },
   weaponThrow: {
     id: "weaponThrow",
@@ -85,8 +92,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 8,
     cooldown: 8,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#c8a66b",
+    soundId: "skillArrow",
   },
   arcaneDischarge: {
     id: "arcaneDischarge",
@@ -101,8 +109,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 10,
     cooldown: 4,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#a986d8",
+    soundId: "skillMagic",
   },
   whirlwind: {
     id: "whirlwind",
@@ -117,8 +126,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 0,
     cooldown: 4,
-    requiresLineOfSight: false,
+    requiresLineOfFire: false,
     accent: "#d6c477",
+    soundId: "hitSlash",
   },
   piercingShot: {
     id: "piercingShot",
@@ -133,8 +143,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 10,
     cooldown: 6,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#87b68a",
+    soundId: "skillArrow",
   },
   chainLightning: {
     id: "chainLightning",
@@ -149,8 +160,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 8,
     cooldown: 7,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#d9d86d",
+    soundId: "skillLightning",
   },
   frostNova: {
     id: "frostNova",
@@ -165,8 +177,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 8,
     cooldown: 7,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#75c9d8",
+    soundId: "shatter",
   },
   toxicOrb: {
     id: "toxicOrb",
@@ -181,8 +194,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 8,
     cooldown: 7,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#79ae58",
+    soundId: "skillGas",
   },
   corrosiveFlask: {
     id: "corrosiveFlask",
@@ -197,8 +211,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 8,
     cooldown: 8,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#a5bd50",
+    soundId: "skillGas",
   },
   entanglingRoots: {
     id: "entanglingRoots",
@@ -213,8 +228,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 8,
     cooldown: 8,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#6d9f62",
+    soundId: "skillNature",
   },
   shadowStep: {
     id: "shadowStep",
@@ -229,8 +245,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 8,
     cooldown: 6,
-    requiresLineOfSight: false,
+    requiresLineOfFire: false,
     accent: "#776c9b",
+    soundId: "skillShadow",
   },
   execute: {
     id: "execute",
@@ -245,8 +262,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 1,
     cooldown: 6,
-    requiresLineOfSight: false,
+    requiresLineOfFire: false,
     accent: "#b95f5b",
+    soundId: "skillImpact",
   },
   shieldCharge: {
     id: "shieldCharge",
@@ -261,8 +279,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 4,
     cooldown: 7,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#8196a4",
+    soundId: "skillImpact",
   },
   fieldMedicine: {
     id: "fieldMedicine",
@@ -277,8 +296,9 @@ export const COMPANION_SKILLS: Record<
     target: "ally",
     range: 6,
     cooldown: 9,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#69b77d",
+    soundId: "skillHeal",
   },
   wardingSigil: {
     id: "wardingSigil",
@@ -293,8 +313,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 6,
     cooldown: 9,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#a98bd0",
+    soundId: "skillMagic",
   },
   tripleStrike: {
     id: "tripleStrike",
@@ -309,8 +330,9 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 1,
     cooldown: 5,
-    requiresLineOfSight: false,
+    requiresLineOfFire: false,
     accent: "#d3a45f",
+    soundId: "hitSlash",
   },
   seismicSlam: {
     id: "seismicSlam",
@@ -325,8 +347,9 @@ export const COMPANION_SKILLS: Record<
     target: "tile",
     range: 2,
     cooldown: 8,
-    requiresLineOfSight: false,
+    requiresLineOfFire: false,
     accent: "#aa875d",
+    soundId: "skillBlast",
   },
   lifeDrain: {
     id: "lifeDrain",
@@ -341,14 +364,111 @@ export const COMPANION_SKILLS: Record<
     target: "enemy",
     range: 6,
     cooldown: 7,
-    requiresLineOfSight: true,
+    requiresLineOfFire: true,
     accent: "#a66a9f",
+    soundId: "skillShadow",
   },
 };
 
 export const COMPANION_SKILL_IDS = Object.keys(
   COMPANION_SKILLS,
 ) as CompanionSkillId[];
+
+export type CompanionProfessionDefinition = {
+  id: CompanionProfessionId;
+  nameKo: string;
+  nameEn: string;
+  accent: string;
+  skillPool: readonly CompanionSkillId[];
+};
+
+export const COMPANION_PROFESSIONS: Readonly<
+  Record<CompanionProfessionId, CompanionProfessionDefinition>
+> = {
+  warrior: {
+    id: "warrior",
+    nameKo: "전사",
+    nameEn: "Warrior",
+    accent: "#c99362",
+    skillPool: [
+      "shockLeap",
+      "drivingLeap",
+      "weaponThrow",
+      "whirlwind",
+      "shieldCharge",
+      "tripleStrike",
+      "seismicSlam",
+    ],
+  },
+  rogue: {
+    id: "rogue",
+    nameKo: "도적",
+    nameEn: "Rogue",
+    accent: "#789c79",
+    skillPool: [
+      "weaponThrow",
+      "piercingShot",
+      "toxicOrb",
+      "corrosiveFlask",
+      "shadowStep",
+      "execute",
+      "tripleStrike",
+    ],
+  },
+  mage: {
+    id: "mage",
+    nameKo: "마법사",
+    nameEn: "Mage",
+    accent: "#8e7bc1",
+    skillPool: [
+      "fireball",
+      "arcaneDischarge",
+      "chainLightning",
+      "frostNova",
+      "toxicOrb",
+      "corrosiveFlask",
+      "wardingSigil",
+    ],
+  },
+  cleric: {
+    id: "cleric",
+    nameKo: "성직자",
+    nameEn: "Cleric",
+    accent: "#d0bd72",
+    skillPool: [
+      "frostNova",
+      "entanglingRoots",
+      "shieldCharge",
+      "fieldMedicine",
+      "wardingSigil",
+      "lifeDrain",
+    ],
+  },
+};
+
+export const COMPANION_PROFESSION_IDS = Object.keys(
+  COMPANION_PROFESSIONS,
+) as CompanionProfessionId[];
+
+const DEFAULT_PROFESSION_BY_CLASS: Readonly<
+  Record<CompanionClassId, CompanionProfessionId>
+> = {
+  adventurer: "warrior",
+  warrior: "warrior",
+  huntress: "rogue",
+  mage: "mage",
+  rogue: "rogue",
+  duelist: "warrior",
+  cleric: "cleric",
+};
+
+export const normalizeCompanionProfession = (
+  classId: CompanionClassId,
+  professionId: CompanionProfessionId | undefined,
+): CompanionProfessionId =>
+  professionId && professionId in COMPANION_PROFESSIONS
+    ? professionId
+    : DEFAULT_PROFESSION_BY_CLASS[classId];
 
 const stableSkillRandom = (seedKey: string) => {
   let value = 0x9e3779b9;
@@ -365,9 +485,12 @@ const stableSkillRandom = (seedKey: string) => {
   };
 };
 
-export const createCompanionSkills = (seedKey: string) => {
+export const createCompanionSkills = (
+  professionId: CompanionProfessionId,
+  seedKey: string,
+) => {
   const random = stableSkillRandom(`skills:${seedKey}`);
-  const shuffled = [...COMPANION_SKILL_IDS];
+  const shuffled = [...COMPANION_PROFESSIONS[professionId].skillPool];
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(random() * (index + 1));
     [shuffled[index], shuffled[swapIndex]] = [
@@ -379,17 +502,20 @@ export const createCompanionSkills = (seedKey: string) => {
 };
 
 export const normalizeCompanionSkills = (
+  professionId: CompanionProfessionId,
   seedKey: string,
   skillIds: readonly CompanionSkillId[] | undefined,
 ) => {
+  const skillPool = COMPANION_PROFESSIONS[professionId].skillPool;
   const valid = [...new Set(skillIds ?? [])].filter(
-    (id): id is CompanionSkillId => id in COMPANION_SKILLS,
+    (id): id is CompanionSkillId =>
+      id in COMPANION_SKILLS && skillPool.includes(id),
   );
-  for (const generated of createCompanionSkills(seedKey)) {
+  for (const generated of createCompanionSkills(professionId, seedKey)) {
     if (valid.length >= 2) break;
     if (!valid.includes(generated)) valid.push(generated);
   }
-  for (const fallback of COMPANION_SKILL_IDS) {
+  for (const fallback of skillPool) {
     if (valid.length >= 2) break;
     if (!valid.includes(fallback)) valid.push(fallback);
   }

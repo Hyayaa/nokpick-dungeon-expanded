@@ -4,16 +4,19 @@ export const CAMPAIGN_MINUTES = {
 } as const;
 
 export const MAX_PLAYER_LEVEL = 50;
-// Balance target for the combined equipment + augment progression. Levels
-// unlock augment choices, but never multiply actor statistics on their own.
+// Balance target for the combined equipment + progression curve.
 export const PLANNED_ENDGAME_POWER_MULTIPLIER = 1_000;
 export const LEVEL_XP_REQUIREMENT_MULTIPLIER = 5;
+export const LEVEL_XP_REQUIREMENT_GROWTH = 1.15;
+export const LEVEL_STAT_GROWTH = 1.1;
 
-// Levels grant augment choices rather than raw statistics. The fivefold
-// requirement spaces those choices across a full 40–90 minute run instead of
-// clustering them near the entrance floors.
+// Level two keeps the established 50-XP threshold. Every later requirement is
+// fifteen percent higher than the previous level's requirement.
 export const experienceForNextLevel = (level: number) =>
   level >= MAX_PLAYER_LEVEL
     ? 0
-    : (10 + Math.floor(Math.max(1, level) / 4)) *
-      LEVEL_XP_REQUIREMENT_MULTIPLIER;
+    : Math.ceil(
+        10 *
+          LEVEL_XP_REQUIREMENT_MULTIPLIER *
+          LEVEL_XP_REQUIREMENT_GROWTH ** (Math.max(1, level) - 1),
+      );

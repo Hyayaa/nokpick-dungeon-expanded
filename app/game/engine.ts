@@ -23,13 +23,19 @@ import {
   mapPointKey,
   updateFieldOfView,
 } from "./map";
-import { PLAYER_PICKUP_DURATION } from "./timing";
 import { AUTO_SLOT_CATEGORIES, isWand } from "./magic";
 import {
   COMPANION_SKILLS,
+  normalizeCompanionProfession,
   normalizeCompanionSkills,
   normalizeSkillCooldowns,
 } from "./companion-skills";
+import {
+  companionSkillBlueprint,
+  companionSkillScalar,
+  deriveCompanionSkill,
+  type CompanionSkillModifier,
+} from "./companion-skill-blueprints";
 import {
   EQUIPMENT_TRAITS,
   createEquipmentInstance,
@@ -58,6 +64,7 @@ import {
 } from "./companions";
 import {
   experienceForNextLevel,
+  LEVEL_STAT_GROWTH,
   MAX_PLAYER_LEVEL,
 } from "./progression";
 import {
@@ -68,6 +75,29 @@ import {
   MAX_INVENTORY_SLOTS,
   normalizePlayerInventorySlots,
 } from "./inventory-slots";
+import {
+  cloneGame,
+  cloneGameWithoutTiles,
+  cloneInventoryInstance,
+  presentationStateWithFacing,
+} from "./state";
+import { pushLog } from "./log";
+import {
+  COMPANION_PASSIVE_SLOT_INDEXES,
+  COMPANION_QUICKSLOT_INDEXES,
+  FLEX_EQUIPMENT_KEYS as RING_EQUIPMENT_KEYS,
+} from "./loadout";
+import { random, randomInt } from "./random";
+import {
+  gridDistance as distance,
+  pointEquals,
+  pointInBounds as inBounds,
+} from "./spatial";
+import {
+  hasProjectileLineOfFire,
+  isSkillTargetableTile,
+  isWithinCircularSkillRange,
+} from "./targeting";
 import {
   ActionResult,
   AugmentId,
@@ -107,9 +137,10 @@ const PLAYER_ID = "player";
 export { MAX_INVENTORY_SLOTS } from "./inventory-slots";
 export const HIGH_GRASS_SEED_DROP_CHANCE = 0.05;
 export { MAX_PLAYER_LEVEL } from "./progression";
-const RING_EQUIPMENT_KEYS = ["ring", "ring2", "ring3", "ring4"] as const;
-export const COMPANION_PASSIVE_SLOT_INDEXES = [0, 1] as const;
-export const COMPANION_QUICKSLOT_INDEXES = [2, 3] as const;
+export {
+  COMPANION_PASSIVE_SLOT_INDEXES,
+  COMPANION_QUICKSLOT_INDEXES,
+} from "./loadout";
 export const WAND_RECHARGE_TURNS = 50;
 export const BURNING_DURATION = 8;
 const FIRE_FIELD_DURATION = 6;
@@ -119,7 +150,9 @@ export type ExpeditionRules = {
   dungeonName: string;
   maxFloor: number;
   difficultyScale: number;
+  difficulty?: number;
   mainDropIds: string[];
+  lootPlan?: GameState["lootPlan"];
 };
 
 const DEFAULT_EXPEDITION_RULES: ExpeditionRules = {
@@ -127,7 +160,9 @@ const DEFAULT_EXPEDITION_RULES: ExpeditionRules = {
   dungeonName: "침수된 하수도",
   maxFloor: 3,
   difficultyScale: 1,
+  difficulty: 1,
   mainDropIds: [],
+  lootPlan: [],
 };
 
 const DIRECTIONS: Point[] = [
@@ -140,185 +175,6 @@ const DIRECTIONS: Point[] = [
   { x: -1, y: 1 },
   { x: -1, y: -1 },
 ];
-
-const cloneInventoryInstance = (instance: InventoryInstance) => ({
-  ...instance,
-  statRoll: instance.statRoll ? { ...instance.statRoll } : undefined,
-  traits: (instance.traits ?? []).map((trait) => ({ ...trait })),
-});
-
-type CloneGameOptions = {
-  copyTiles?: boolean;
-};
-
-const cloneGame = (
-  state: GameState,
-  { copyTiles = true }: CloneGameOptions = {},
-): GameState => ({
-  ...state,
-  // Terrain/FOV is by far the largest part of a game state. Inventory-only
-  // actions share this immutable grid and copy it only when an action can
-  // actually mutate terrain or visibility.
-  tiles: copyTiles
-    ? state.tiles.map((row) => row.map((tile) => ({ ...tile })))
-    : state.tiles,
-  player: {
-    ...state.player,
-    traits: [...(state.player.traits ?? [])],
-    skills: normalizeCompanionSkills(
-      state.player.companionId,
-      state.player.skills,
-    ),
-    skillCooldowns: normalizeSkillCooldowns(state.player.skillCooldowns),
-    inventory: { ...state.player.inventory },
-    inventoryInstances: (state.player.inventoryInstances ?? []).map(
-      cloneInventoryInstance,
-    ),
-    inventorySlots: normalizePlayerInventorySlots(state.player),
-    throwableProfiles: Object.fromEntries(
-      Object.entries(state.player.throwableProfiles ?? {}).map(
-        ([defId, instance]) => [defId, cloneInventoryInstance(instance)],
-      ),
-    ),
-    equipment: {
-      ...state.player.equipment,
-      ring2: state.player.equipment.ring2 ?? null,
-      ring3: state.player.equipment.ring3 ?? null,
-      ring4: state.player.equipment.ring4 ?? null,
-    },
-    equipmentInstances: {
-      weapon: state.player.equipmentInstances?.weapon
-        ? cloneInventoryInstance(state.player.equipmentInstances.weapon)
-        : null,
-      armor: state.player.equipmentInstances?.armor
-        ? cloneInventoryInstance(state.player.equipmentInstances.armor)
-        : null,
-      ring: state.player.equipmentInstances?.ring
-        ? cloneInventoryInstance(state.player.equipmentInstances.ring)
-        : null,
-      ring2: state.player.equipmentInstances?.ring2
-        ? cloneInventoryInstance(state.player.equipmentInstances.ring2)
-        : null,
-      ring3: state.player.equipmentInstances?.ring3
-        ? cloneInventoryInstance(state.player.equipmentInstances.ring3)
-        : null,
-      ring4: state.player.equipmentInstances?.ring4
-        ? cloneInventoryInstance(state.player.equipmentInstances.ring4)
-        : null,
-    },
-    statuses: (state.player.statuses ?? []).map((status) => ({ ...status })),
-    autoSlots: [
-      ...(state.player.autoSlots ?? [null, null, null, null]),
-    ].slice(0, 4) as Player["autoSlots"],
-    wandCharges: { ...(state.player.wandCharges ?? {}) },
-    augments: { ...state.player.augments },
-  },
-  companions: (state.companions ?? []).map((companion) => ({
-    ...companion,
-    traits: [...(companion.traits ?? [])],
-    skills: normalizeCompanionSkills(companion.id, companion.skills),
-    skillCooldowns: normalizeSkillCooldowns(companion.skillCooldowns),
-    statuses: (companion.statuses ?? []).map((status) => ({ ...status })),
-    equipment: {
-      ...companion.equipment,
-      ring2: companion.equipment.ring2 ?? null,
-      ring3: companion.equipment.ring3 ?? null,
-      ring4: companion.equipment.ring4 ?? null,
-    },
-    equipmentInstances: {
-      weapon: cloneCompanionInstance(companion.equipmentInstances.weapon),
-      armor: cloneCompanionInstance(companion.equipmentInstances.armor),
-      ring: cloneCompanionInstance(companion.equipmentInstances.ring),
-      ring2: cloneCompanionInstance(companion.equipmentInstances.ring2),
-      ring3: cloneCompanionInstance(companion.equipmentInstances.ring3),
-      ring4: cloneCompanionInstance(companion.equipmentInstances.ring4),
-    },
-    autoSlots: RING_EQUIPMENT_KEYS.map((_, index) => {
-      const slot = companion.autoSlots[index];
-      return slot
-        ? {
-            ...slot,
-            instance: cloneCompanionInstance(slot.instance),
-          }
-        : null;
-    }) as Companion["autoSlots"],
-    priorityTarget: companion.priorityTarget
-      ? { ...companion.priorityTarget }
-      : null,
-    exploreTarget: companion.exploreTarget
-      ? { ...companion.exploreTarget }
-      : null,
-    commandTargetId: companion.commandTargetId ?? null,
-    recoveryProgress: companion.recoveryProgress ?? 0,
-  })),
-  companionTrail: (state.companionTrail ?? []).map((point) => ({ ...point })),
-  enemies: state.enemies.map((enemy) => ({
-    ...enemy,
-    statuses: (enemy.statuses ?? []).map((status) => ({ ...status })),
-  })),
-  groundItems: state.groundItems.map((item) => ({
-    ...item,
-    instance: item.instance
-      ? cloneInventoryInstance(item.instance)
-      : undefined,
-  })),
-  objects: state.objects.map((object) => ({
-    ...object,
-    loot: [...object.loot],
-  })),
-  clouds: (state.clouds ?? []).map((cloud) => ({
-    ...cloud,
-    origin: { ...cloud.origin },
-    tiles: cloud.tiles.map((tile) => ({ ...tile })),
-    tileLifetime:
-      cloud.tileLifetime ??
-      Math.max(3, cloud.turns, ...cloud.tiles.map((tile) => tile.remaining)),
-  })),
-  wards: (state.wards ?? []).map((ward) => ({ ...ward })),
-  logs: [...state.logs],
-  pendingAugmentOffers: state.pendingAugmentOffers.map((offer) => [...offer]),
-  equipmentOffers: (state.equipmentOffers ?? []).map((offer) => ({ ...offer })),
-});
-
-const cloneGameWithoutTiles = (state: GameState) =>
-  cloneGame(state, { copyTiles: false });
-
-const presentationStateWithFacing = (
-  state: GameState,
-  facing: Direction,
-): GameState =>
-  state.player.facing === facing
-    ? state
-    : {
-        ...state,
-        player: {
-          ...state.player,
-          facing,
-        },
-      };
-
-const pushLog = (state: GameState, message: string) => {
-  state.logs = [...state.logs, message].slice(-18);
-};
-
-const random = (state: GameState) => {
-  state.rng = (Math.imul(state.rng, 1664525) + 1013904223) >>> 0;
-  return state.rng / 4294967296;
-};
-
-const randomInt = (state: GameState, min: number, max: number) =>
-  Math.floor(random(state) * (max - min + 1)) + min;
-
-const distance = (a: Point, b: Point) =>
-  Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-
-const pointEquals = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
-
-const inBounds = (state: GameState, point: Point) =>
-  point.x >= 0 &&
-  point.x < state.width &&
-  point.y >= 0 &&
-  point.y < state.height;
 
 const isIndividualInventoryItem = (defId: string) => {
   const definition = ITEM_DEFS[defId];
@@ -554,6 +410,7 @@ const trampleHighGrass = (
   const droppedSeed: GameState["groundItems"][number] = {
     id: `grass-seed-${state.floor}-${state.turn}-${point.x}-${point.y}-${state.rng}`,
     defId,
+    lootOrigin: "grass",
     x: point.x,
     y: point.y,
   };
@@ -943,6 +800,26 @@ const enemyPoolForFloor = (floor: number): EnemyKind[] => {
   return ["crab", "skeleton", "skeleton", "slime"];
 };
 
+export const scaledEnemyStats = (
+  kind: EnemyKind,
+  floor: number,
+  difficultyScale: number,
+) => {
+  const base = ENEMY_STATS[kind];
+  const floorScale = 1 + Math.max(0, floor - 1) * 0.2;
+  const scale = floorScale * Math.max(1, difficultyScale || 1);
+  const scaled = (value: number) =>
+    Math.max(1, Math.round(Math.max(1, value) * scale));
+  return {
+    hp: scaled(base.hp),
+    attack: scaled(base.attack),
+    defense: scaled(base.defense),
+    accuracy: scaled(base.accuracy),
+    evasion: scaled(base.evasion),
+    xp: scaled(base.xp),
+  };
+};
+
 const lootPoolForFloor = (
   floor: number,
   categories: readonly ItemCategory[],
@@ -991,7 +868,11 @@ const plannedDungeonScrollFloors = (state: GameState) => {
 };
 
 export const plannedDungeonScrollCount = (state: GameState) =>
-  plannedDungeonScrollFloors(state).length;
+  state.lootPlan?.length
+    ? state.lootPlan.filter(
+        (entry) => ITEM_DEFS[entry.defId]?.category === "scroll",
+      ).length
+    : plannedDungeonScrollFloors(state).length;
 
 const plannedFloorScrollCount = (state: GameState) =>
   plannedDungeonScrollFloors(state).filter((floor) => floor === state.floor)
@@ -1034,130 +915,157 @@ const populateFloor = (
   flattenOccupiedGrass(alchemyPoint);
 
   let lootIndex = 0;
-  const spawnGroundLoot = (defId: string) => {
+  const spawnGroundLoot = (
+    defId: string,
+    planned?: GameState["lootPlan"][number],
+  ) => {
     const point = chooseAndRemove(state, candidates);
     if (!point) return false;
     state.groundItems.push({
-      id: `loot-${state.floor}-${lootIndex}-${state.rng}`,
+      id: planned?.id ?? `loot-${state.floor}-${lootIndex}-${state.rng}`,
       defId,
-      quantity: spawnedGroundQuantity(defId),
+      quantity: planned?.quantity ?? spawnedGroundQuantity(defId),
+      instance: planned?.instance
+        ? cloneInventoryInstance(planned.instance)
+        : undefined,
+      lootOrigin: "dungeon",
+      dungeonLootId: planned?.id,
       ...point,
     });
     lootIndex += 1;
     flattenOccupiedGrass(point);
     return true;
   };
-
-  type PlannedFloorReward =
-    | { kind: "ground"; defId: string; priority: number }
-    | {
-        kind: "object";
-        defId: string;
-        objectKind: "chest" | "tomb" | "crystalChest";
-        priority: number;
-      };
-  const plannedRewards: PlannedFloorReward[] = [];
-
-  const potionCount = randomInt(state, 1, 3);
-  plannedRewards.push({
-    kind: "ground",
-    defId: "potion_healing",
-    priority: 1,
-  });
-  const healingPotion = new Set(["potion_healing"]);
-  for (let index = 1; index < potionCount; index += 1) {
-    plannedRewards.push({
-      kind: "ground",
-      defId: randomLootId(state, ["potion"], healingPotion),
-      priority: 0,
-    });
-  }
-
-  const featuredScrolls = (state.mainDropIds ?? []).filter(
-    (itemId) => ITEM_DEFS[itemId]?.category === "scroll",
+  const floorLootPlan = (state.lootPlan ?? []).filter(
+    (entry) => entry.floor === state.floor,
   );
-  const spawnedScrolls = new Set<string>();
-  for (let index = 0; index < plannedFloorScrollCount(state); index += 1) {
-    const featured = featuredScrolls[index];
-    const defId =
-      featured && !spawnedScrolls.has(featured)
-        ? featured
-        : randomLootId(state, ["scroll"], spawnedScrolls);
-    if (spawnGroundLoot(defId)) spawnedScrolls.add(defId);
-  }
-
-  const equipmentCount = randomInt(state, 0, 1);
-  for (let index = 0; index < equipmentCount; index += 1) {
-    plannedRewards.push({
-      kind: "ground",
-      defId: randomLootId(state, FLOOR_EQUIPMENT_CATEGORIES),
-      priority: 0,
-    });
-  }
-
-  const mainDropPool = (state.mainDropIds ?? []).filter(
-    (itemId) =>
-      Boolean(ITEM_DEFS[itemId]) && ITEM_DEFS[itemId].category !== "scroll",
+  const plannedEnemyDrops = floorLootPlan.filter(
+    (entry) => entry.source === "enemy",
   );
-  if (mainDropPool.length > 0 && random(state) < 0.72) {
+  if (state.lootPlan?.length) {
+    floorLootPlan
+      .filter((entry) => entry.source === "ground")
+      .forEach((entry) => spawnGroundLoot(entry.defId, entry));
+    floorLootPlan
+      .filter((entry) => entry.source === "object")
+      .forEach((entry, objectIndex) => {
+        const point = chooseAndRemove(state, candidates);
+        if (!point) return;
+        state.objects.push({
+          id: `object-${state.floor}-${objectIndex}-${entry.id}`,
+          kind: entry.objectKind ?? "chest",
+          looted: false,
+          loot: [entry.defId],
+          lootInstances: [
+            entry.instance ? cloneInventoryInstance(entry.instance) : null,
+          ],
+          lootOrigins: ["dungeon"],
+          lootPlanEntryIds: [entry.id],
+          ...point,
+        });
+        flattenOccupiedGrass(point);
+      });
+  } else {
+    type PlannedFloorReward =
+      | { kind: "ground"; defId: string; priority: number }
+      | {
+          kind: "object";
+          defId: string;
+          objectKind: "chest" | "tomb" | "crystalChest";
+          priority: number;
+        };
+    const plannedRewards: PlannedFloorReward[] = [];
+    const potionCount = randomInt(state, 1, 3);
     plannedRewards.push({
       kind: "ground",
-      defId: mainDropPool[randomInt(state, 0, mainDropPool.length - 1)],
-      priority: 2,
+      defId: "potion_healing",
+      priority: 1,
     });
-  }
-
-  const objectCount = randomInt(state, 1, 2);
-  for (let index = 0; index < objectCount; index += 1) {
-    const roll = random(state);
-    const objectKind =
-      roll < 0.58 ? "chest" : roll < 0.82 ? "tomb" : "crystalChest";
-    plannedRewards.push({
-      kind: "object",
-      defId: randomLootId(state, FLOOR_EQUIPMENT_CATEGORIES),
-      objectKind,
-      priority: 0,
-    });
-  }
-
-  // Generate the original floor reward plan, then place exactly one third of
-  // it (rounded, with at least one reward). This preserves the old category
-  // mix while making the campaign economy measurably three times leaner.
-  const rewardCount = Math.max(1, Math.round(plannedRewards.length / 3));
-  const selectedRewards = plannedRewards
-    .map((reward) => ({ reward, tieBreaker: random(state) }))
-    .sort(
-      (a, b) =>
-        b.reward.priority - a.reward.priority ||
-        a.tieBreaker - b.tieBreaker,
-    )
-    .slice(0, rewardCount)
-    .map(({ reward }) => reward);
-  let objectIndex = 0;
-  selectedRewards.forEach((reward) => {
-    if (reward.kind === "ground") {
-      spawnGroundLoot(reward.defId);
-      return;
+    const healingPotion = new Set(["potion_healing"]);
+    for (let index = 1; index < potionCount; index += 1) {
+      plannedRewards.push({
+        kind: "ground",
+        defId: randomLootId(state, ["potion"], healingPotion),
+        priority: 0,
+      });
     }
-    const point = chooseAndRemove(state, candidates);
-    if (!point) return;
-    state.objects.push({
-      id: `object-${state.floor}-${objectIndex}-${state.rng}`,
-      kind: reward.objectKind,
-      looted: false,
-      loot: [reward.defId],
-      ...point,
+    const featuredScrolls = (state.mainDropIds ?? []).filter(
+      (itemId) => ITEM_DEFS[itemId]?.category === "scroll",
+    );
+    const spawnedScrolls = new Set<string>();
+    for (let index = 0; index < plannedFloorScrollCount(state); index += 1) {
+      const featured = featuredScrolls[index];
+      const defId =
+        featured && !spawnedScrolls.has(featured)
+          ? featured
+          : randomLootId(state, ["scroll"], spawnedScrolls);
+      if (spawnGroundLoot(defId)) spawnedScrolls.add(defId);
+    }
+    const equipmentCount = randomInt(state, 0, 1);
+    for (let index = 0; index < equipmentCount; index += 1) {
+      plannedRewards.push({
+        kind: "ground",
+        defId: randomLootId(state, FLOOR_EQUIPMENT_CATEGORIES),
+        priority: 0,
+      });
+    }
+    const mainDropPool = (state.mainDropIds ?? []).filter(
+      (itemId) =>
+        Boolean(ITEM_DEFS[itemId]) && ITEM_DEFS[itemId].category !== "scroll",
+    );
+    if (mainDropPool.length > 0 && random(state) < 0.72) {
+      plannedRewards.push({
+        kind: "ground",
+        defId: mainDropPool[randomInt(state, 0, mainDropPool.length - 1)],
+        priority: 2,
+      });
+    }
+    const objectCount = randomInt(state, 1, 2);
+    for (let index = 0; index < objectCount; index += 1) {
+      const roll = random(state);
+      const objectKind =
+        roll < 0.58 ? "chest" : roll < 0.82 ? "tomb" : "crystalChest";
+      plannedRewards.push({
+        kind: "object",
+        defId: randomLootId(state, FLOOR_EQUIPMENT_CATEGORIES),
+        objectKind,
+        priority: 0,
+      });
+    }
+    const rewardCount = Math.max(1, Math.round(plannedRewards.length / 3));
+    const selectedRewards = plannedRewards
+      .map((reward) => ({ reward, tieBreaker: random(state) }))
+      .sort(
+        (a, b) =>
+          b.reward.priority - a.reward.priority ||
+          a.tieBreaker - b.tieBreaker,
+      )
+      .slice(0, rewardCount)
+      .map(({ reward }) => reward);
+    let objectIndex = 0;
+    selectedRewards.forEach((reward) => {
+      if (reward.kind === "ground") {
+        spawnGroundLoot(reward.defId);
+        return;
+      }
+      const point = chooseAndRemove(state, candidates);
+      if (!point) return;
+      state.objects.push({
+        id: `object-${state.floor}-${objectIndex}-${state.rng}`,
+        kind: reward.objectKind,
+        looted: false,
+        loot: [reward.defId],
+        lootOrigins: ["dungeon"],
+        ...point,
+      });
+      objectIndex += 1;
+      flattenOccupiedGrass(point);
     });
-    objectIndex += 1;
-    flattenOccupiedGrass(point);
-  });
+  }
 
   const pool = enemyPoolForFloor(state.floor);
-  const difficultyScale = Math.max(0.75, state.difficultyScale ?? 1);
-  const difficultyBonus = Math.max(
-    0,
-    Math.round((difficultyScale - 1) * 14),
-  );
+  const difficultyScale = Math.max(1, state.difficultyScale ?? 1);
+  const difficultyBonus = Math.max(0, (state.difficulty - 1) * 2);
   // Larger floors support real encounter groups instead of isolated enemies.
   // Floor one now begins at 22 enemies (previously 9) and later floors scale
   // up without overwhelming the expanded walkable-cell pool.
@@ -1172,20 +1080,18 @@ const populateFloor = (
     const point = chooseAndRemove(state, enemyCells);
     if (!point) break;
     const kind = pool[randomInt(state, 0, pool.length - 1)];
-    const base = ENEMY_STATS[kind];
-    const scale =
-      (1 + Math.max(0, state.floor - 1) * 0.2) * difficultyScale;
-    const maxHp = Math.round(base.hp * scale);
+    const stats = scaledEnemyStats(kind, state.floor, difficultyScale);
+    const plannedDrop = plannedEnemyDrops[index];
     state.enemies.push({
       id: `enemy-${state.floor}-${index}-${state.rng}`,
       kind,
-      hp: maxHp,
-      maxHp,
-      attack: Math.round(base.attack * (0.9 + scale * 0.1)),
-      defense: base.defense + Math.floor((state.floor - 1) / 3),
-      accuracy: base.accuracy + Math.floor((state.floor - 1) / 2),
-      evasion: base.evasion + Math.floor((state.floor - 1) / 2),
-      xp: Math.round(base.xp * scale),
+      hp: stats.hp,
+      maxHp: stats.hp,
+      attack: stats.attack,
+      defense: stats.defense,
+      accuracy: stats.accuracy,
+      evasion: stats.evasion,
+      xp: stats.xp,
       alerted: false,
       sawPlayerLastTurn: false,
       sleeping: true,
@@ -1193,6 +1099,19 @@ const populateFloor = (
       lastSeenPlayer: null,
       searchTurns: 0,
       statuses: [],
+      drop: plannedDrop
+        ? {
+            id: plannedDrop.id,
+            defId: plannedDrop.defId,
+            quantity: plannedDrop.quantity,
+            instance: plannedDrop.instance
+              ? cloneInventoryInstance(plannedDrop.instance)
+              : undefined,
+            lootOrigin: "dungeon",
+          }
+        : state.lootPlan?.length
+          ? null
+          : undefined,
       ...point,
     });
     flattenOccupiedGrass(point);
@@ -1206,6 +1125,7 @@ const makePlayer = (point: Point): Player => {
   companionId: adventurer.id,
   name: adventurer.name,
   classId: adventurer.classId,
+  professionId: adventurer.professionId,
   traits: [...adventurer.traits],
   skills: [...adventurer.skills],
   skillCooldowns: {},
@@ -1299,8 +1219,19 @@ const cloneCompanionForFloor = (
 ): Companion => ({
   ...companion,
   ...point,
+  professionId: normalizeCompanionProfession(
+    companion.classId,
+    companion.professionId,
+  ),
   traits: [...(companion.traits ?? [])],
-  skills: normalizeCompanionSkills(companion.id, companion.skills),
+  skills: normalizeCompanionSkills(
+    normalizeCompanionProfession(
+      companion.classId,
+      companion.professionId,
+    ),
+    companion.id,
+    companion.skills,
+  ),
   skillCooldowns: normalizeSkillCooldowns(companion.skillCooldowns),
   statuses: (companion.statuses ?? []).map((status) => ({ ...status })),
   hp: Math.min(companion.maxHp, companion.hp + 4),
@@ -1349,8 +1280,16 @@ const makeFloorState = (
     ? {
         ...carriedPlayer,
         ...generated.start,
+        professionId: normalizeCompanionProfession(
+          carriedPlayer.classId,
+          carriedPlayer.professionId,
+        ),
         traits: [...(carriedPlayer.traits ?? [])],
         skills: normalizeCompanionSkills(
+          normalizeCompanionProfession(
+            carriedPlayer.classId,
+            carriedPlayer.professionId,
+          ),
           carriedPlayer.companionId,
           carriedPlayer.skills,
         ),
@@ -1445,7 +1384,14 @@ const makeFloorState = (
     dungeonName: expeditionRules.dungeonName,
     maxFloor: expeditionRules.maxFloor,
     difficultyScale: expeditionRules.difficultyScale,
+    difficulty: Math.max(1, Math.min(7, expeditionRules.difficulty ?? 1)),
     mainDropIds: [...expeditionRules.mainDropIds],
+    lootPlan: (expeditionRules.lootPlan ?? []).map((entry) => ({
+      ...entry,
+      instance: entry.instance
+        ? cloneInventoryInstance(entry.instance)
+        : undefined,
+    })),
     turn,
     seed,
     rng: generated.rng,
@@ -1485,7 +1431,7 @@ const makeFloorState = (
   return state;
 };
 
-export function createNewGame(seed = Date.now() >>> 0): GameState {
+export function createNewGame(seed: number): GameState {
   const state = makeFloorState(
     seed,
     1,
@@ -1531,7 +1477,9 @@ export function descendFloor(state: GameState): GameState {
       dungeonName: state.dungeonName,
       maxFloor: state.maxFloor,
       difficultyScale: state.difficultyScale,
+      difficulty: state.difficulty,
       mainDropIds: [...state.mainDropIds],
+      lootPlan: state.lootPlan,
     },
   );
   next.pendingAugmentOffers = [];
@@ -1556,8 +1504,11 @@ export function advanceExpeditionFloor(state: GameState):
 
 type ProgressingCharacter = Pick<
   Player | Companion,
-  "name" | "level" | "xp" | "nextXp"
+  "name" | "level" | "xp" | "nextXp" | "hp" | "maxHp" | "baseAttack"
 >;
+
+const growLevelStat = (value: number) =>
+  Math.round(value * LEVEL_STAT_GROWTH * 1_000_000) / 1_000_000;
 
 const gainCharacterXp = (
   state: GameState,
@@ -1576,6 +1527,12 @@ const gainCharacterXp = (
   ) {
     character.xp -= character.nextXp;
     character.level += 1;
+    character.baseAttack = growLevelStat(character.baseAttack);
+    character.maxHp = Math.max(
+      character.maxHp + 1,
+      Math.round(character.maxHp * LEVEL_STAT_GROWTH),
+    );
+    character.hp = Math.min(character.hp, character.maxHp);
     character.nextXp = experienceForNextLevel(character.level);
     pushLog(
       state,
@@ -1726,7 +1683,7 @@ const removeDefeatedEnemies = (
           (effect) =>
             effect.x === enemy.x &&
             effect.y === enemy.y &&
-            (/^-\d+/.test(effect.text) || effect.text === "무효"),
+            (effect.kind === "damage" || effect.kind === "blocked"),
         )?.sourceId;
     gainXp(state, enemy.xp);
     const momentumHealing = Math.min(
@@ -1743,9 +1700,28 @@ const removeDefeatedEnemies = (
       y: enemy.y,
       text: "처치!",
       color: "#ffd56a",
+      kind: "defeat",
       sourceId: resolvedSourceId,
     });
-    if (allowDrop && random(state) < ENEMY_DROP_CHANCE) {
+    if (allowDrop && enemy.drop) {
+      state.groundItems.push({
+        id: `drop-${enemy.id}-${enemy.drop.id}`,
+        defId: enemy.drop.defId,
+        quantity: enemy.drop.quantity,
+        instance: enemy.drop.instance
+          ? cloneInventoryInstance(enemy.drop.instance)
+          : undefined,
+        lootOrigin: enemy.drop.lootOrigin,
+        dungeonLootId: enemy.drop.id,
+        x: enemy.x,
+        y: enemy.y,
+      });
+    } else if (
+      allowDrop &&
+      enemy.drop === undefined &&
+      !(state.lootPlan?.length) &&
+      random(state) < ENEMY_DROP_CHANCE
+    ) {
       const dropRoll = random(state);
       let accumulatedWeight = 0;
       const drop =
@@ -1757,6 +1733,7 @@ const removeDefeatedEnemies = (
         id: `drop-${enemy.id}`,
         defId: drop.itemId,
         quantity: spawnedGroundQuantity(drop.itemId),
+        lootOrigin: "dungeon",
         x: enemy.x,
         y: enemy.y,
       });
@@ -1862,18 +1839,29 @@ export function pickupGroundItems(
     presentationState,
     motions: [],
     effects: [],
-    pickups: picked.map(({ id, defId, quantity, itemRef, x, y }) => ({
+    pickups: picked.map(({
+      id,
+      defId,
+      quantity,
+      itemRef,
+      lootOrigin,
+      dungeonLootId,
+      x,
+      y,
+    }) => ({
       id,
       defId,
       quantity: quantity ?? 1,
       itemRef,
+      lootOrigin,
+      dungeonLootId,
       x,
       y,
     })),
     consumedTurn: true,
     elapsedTurns,
     interacted: true,
-    interactionDuration: PLAYER_PICKUP_DURATION,
+    interactionKind: "pickup",
   };
 }
 
@@ -1990,6 +1978,7 @@ export function playerStep(
         ...target,
         text: `-${damage}`,
         color: "#fff0a6",
+        kind: "damage",
         sourceId: PLAYER_ID,
       });
       const defeatedIds = removeDefeatedEnemies(
@@ -2062,18 +2051,33 @@ export function playerStep(
       };
     }
     object.looted = true;
-    const acquired: Array<{ defId: string; itemRef: string; quantity: number }> = [];
+    const acquired: Array<{
+      defId: string;
+      itemRef: string;
+      quantity: number;
+      lootOrigin: NonNullable<ItemPickup["lootOrigin"]>;
+      dungeonLootId?: string;
+    }> = [];
     object.loot.forEach((itemId, index) => {
       const quantity = spawnedGroundQuantity(itemId);
+      const lootOrigin = object.lootOrigins?.[index] ?? "dungeon";
+      const dungeonLootId = object.lootPlanEntryIds?.[index] ?? undefined;
+      const preservedInstance = object.lootInstances?.[index] ?? undefined;
       const itemRef = addInventoryItem(
         next,
         itemId,
         `${object.id}-${index}`,
-        undefined,
+        preservedInstance ?? undefined,
         quantity,
       );
       if (itemRef) {
-        acquired.push({ defId: itemId, itemRef, quantity });
+        acquired.push({
+          defId: itemId,
+          itemRef,
+          quantity,
+          lootOrigin,
+          dungeonLootId,
+        });
       } else {
         next.groundItems.push({
           id: `${object.id}-overflow-${index}`,
@@ -2082,6 +2086,11 @@ export function playerStep(
           x: object.x,
           y: object.y,
           manualPickup: true,
+          instance: preservedInstance
+            ? cloneInventoryInstance(preservedInstance)
+            : undefined,
+          lootOrigin,
+          dungeonLootId,
         });
       }
     });
@@ -2105,11 +2114,13 @@ export function playerStep(
         queueEquipmentOffer(next, defId, itemRef);
       }
     });
-    const pickups = acquired.map(({ defId, itemRef, quantity }, index) => ({
+    const pickups = acquired.map(({ defId, itemRef, quantity, lootOrigin, dungeonLootId }, index) => ({
       id: `${object.id}-loot-${index}`,
       defId,
       quantity,
       itemRef,
+      lootOrigin,
+      dungeonLootId,
       x: object.x,
       y: object.y,
     }));
@@ -2334,6 +2345,7 @@ const companionIncapacitatedResult = (
       ? `${resolved.name}의 몸이 얼어붙어 이번 라운드에는 행동할 수 없습니다.`
       : `${resolved.name}이(가) 마비되어 이번 라운드에는 행동할 수 없습니다.`,
   );
+  const elapsedTurns = spendPlayerTime(next, 1);
   return {
     state: next,
     motions: [],
@@ -2345,7 +2357,7 @@ const companionIncapacitatedResult = (
       sourceId: `status-${status.id}`,
     }],
     consumedTurn: true,
-    elapsedTurns: 0,
+    elapsedTurns,
   };
 };
 
@@ -2421,6 +2433,7 @@ export function manualCompanionStep(
         ...target,
         text: `-${damage}`,
         color: "#ffe3a1",
+        kind: "damage",
         sourceId: companion.id,
       });
       pushLog(
@@ -2484,11 +2497,14 @@ export function manualCompanionStep(
     const pickups: ItemPickup[] = [];
     object.loot.forEach((defId, index) => {
       const quantity = spawnedGroundQuantity(defId);
+      const lootOrigin = object.lootOrigins?.[index] ?? "dungeon";
+      const dungeonLootId = object.lootPlanEntryIds?.[index] ?? undefined;
+      const preservedInstance = object.lootInstances?.[index] ?? undefined;
       const itemRef = addInventoryItem(
         next,
         defId,
         `${object.id}-manual-${index}`,
-        undefined,
+        preservedInstance ?? undefined,
         quantity,
       );
       if (itemRef) {
@@ -2497,6 +2513,8 @@ export function manualCompanionStep(
           defId,
           quantity,
           itemRef,
+          lootOrigin,
+          dungeonLootId,
           x: object.x,
           y: object.y,
           sourceId: companion.id,
@@ -2509,6 +2527,11 @@ export function manualCompanionStep(
           x: object.x,
           y: object.y,
           manualPickup: true,
+          instance: preservedInstance
+            ? cloneInventoryInstance(preservedInstance)
+            : undefined,
+          lootOrigin,
+          dungeonLootId,
         });
       }
     });
@@ -2672,6 +2695,8 @@ export function manualCompanionPickup(
       defId: item.defId,
       quantity: item.quantity ?? 1,
       itemRef,
+      lootOrigin: item.lootOrigin,
+      dungeonLootId: item.dungeonLootId,
       x: item.x,
       y: item.y,
       sourceId: companion.id,
@@ -2791,6 +2816,7 @@ const statusDamage = (
         y: actor.y,
         text: `-${amount}`,
         color: status.id === "burning" ? "#ff8a45" : "#8fd56a",
+        kind: "damage",
         sourceId: `status-${status.id}`,
       });
     }
@@ -3106,6 +3132,29 @@ const skillEnemiesInRange = (
   (enemy) => enemy.hp > 0 && distance(enemy, center) <= radius,
 );
 
+const skillAreaTiles = (
+  state: Pick<GameState, "width" | "height">,
+  center: Point,
+  radius: number,
+) => {
+  const boundedRadius = Math.max(0, Math.floor(radius));
+  const tiles: Point[] = [];
+  for (
+    let y = Math.max(0, center.y - boundedRadius);
+    y <= Math.min(state.height - 1, center.y + boundedRadius);
+    y += 1
+  ) {
+    for (
+      let x = Math.max(0, center.x - boundedRadius);
+      x <= Math.min(state.width - 1, center.x + boundedRadius);
+      x += 1
+    ) {
+      if (distance(center, { x, y }) <= boundedRadius) tiles.push({ x, y });
+    }
+  }
+  return tiles;
+};
+
 const skillOccupied = (
   state: GameState,
   point: Point,
@@ -3145,6 +3194,7 @@ const moveSkillActor = (
   actor: SkillActor,
   target: Point,
   motions: Motion[],
+  travelStyle: Motion["travelStyle"] = "walk",
 ) => {
   const from = { x: actor.character.x, y: actor.character.y };
   actor.character.facing = companionDirection(from, target);
@@ -3155,6 +3205,7 @@ const moveSkillActor = (
     from,
     to: { ...target },
     kind: "move",
+    travelStyle,
   });
 };
 
@@ -3208,6 +3259,7 @@ const damageWithSkill = (
     y: enemy.y,
     text: `-${damage}`,
     color,
+    kind: "damage",
     sourceId: actor.motionId,
   });
   return damage;
@@ -3348,16 +3400,28 @@ export function activateCompanionSkill(
   casterId: string,
   skillId: CompanionSkillId,
   target: Point,
+  options: Readonly<{
+    modifiers?: readonly CompanionSkillModifier[];
+  }> = {},
 ): ActionResult {
+  const modifiers = options.modifiers ?? [];
   if (state.gameOver) {
     return { state, motions: [], effects: [], consumedTurn: false };
   }
   const currentActor = resolveSkillActor(state, casterId);
-  const definition = COMPANION_SKILLS[skillId];
+  const definition = COMPANION_SKILLS[skillId]
+    ? modifiers.length
+      ? deriveCompanionSkill(skillId, modifiers)
+      : companionSkillBlueprint(skillId)
+    : null;
   if (!currentActor || !definition || currentActor.character.hp <= 0) {
     return skillFailure(state, "이 스킬을 사용할 원정대원이 없습니다.");
   }
   const assignedSkills = normalizeCompanionSkills(
+    normalizeCompanionProfession(
+      currentActor.character.classId,
+      currentActor.character.professionId,
+    ),
     currentActor.kind === "player"
       ? state.player.companionId
       : (currentActor.character as Companion).id,
@@ -3371,17 +3435,28 @@ export function activateCompanionSkill(
     return skillFailure(state, `${definition.nameKo} 재사용까지 ${cooldown}턴 남았습니다.`);
   }
   const tile = state.tiles[target.y]?.[target.x];
-  if (!tile?.visible) {
-    return skillFailure(state, "현재 시야에 보이는 타일을 선택해야 합니다.");
+  if (!tile) {
+    return skillFailure(state, "던전 안의 타일을 선택해야 합니다.");
   }
-  if (distance(currentActor.character, target) > definition.range) {
+  if (
+    !isWithinCircularSkillRange(
+      currentActor.character,
+      target,
+      definition.range,
+    )
+  ) {
     return skillFailure(state, `${definition.nameKo}의 사거리는 ${definition.range}칸입니다.`);
   }
   if (
-    definition.requiresLineOfSight &&
-    !hasLineOfSight(state.tiles, currentActor.character, target)
+    !isSkillTargetableTile(
+      state,
+      currentActor.character,
+      target,
+      definition.range,
+      definition.requiresLineOfFire,
+    )
   ) {
-    return skillFailure(state, "벽이나 닫힌 문 너머로는 이 스킬을 사용할 수 없습니다.");
+    return skillFailure(state, "벽이나 장애물로 막힌 타일에는 이 스킬을 사용할 수 없습니다.");
   }
   const targetEnemy = state.enemies.find(
     (enemy) => enemy.hp > 0 && pointEquals(enemy, target),
@@ -3404,6 +3479,12 @@ export function activateCompanionSkill(
   if (definition.target === "tile" && tile.terrain === "wall") {
     return skillFailure(state, "벽 타일은 목표로 선택할 수 없습니다.");
   }
+  if (
+    skillId === "weaponThrow" &&
+    !isWalkable(tile.terrain, false)
+  ) {
+    return skillFailure(state, "무기를 회수할 수 있는 바닥 타일을 선택해야 합니다.");
+  }
 
   if (skillId === "whirlwind" && !pointEquals(currentActor.character, target)) {
     return skillFailure(state, "회전 베기는 스킬 사용자의 타일을 선택해야 합니다.");
@@ -3423,7 +3504,7 @@ export function activateCompanionSkill(
       state,
       targetEnemy,
       currentActor.character,
-      2,
+      companionSkillScalar(definition, "pushDistance", 2),
     );
     if (pointEquals(destination, targetEnemy)) {
       return skillFailure(state, "적을 밀어낼 공간이 없어 쇄도 도약을 사용할 수 없습니다.");
@@ -3443,7 +3524,7 @@ export function activateCompanionSkill(
       state,
       targetEnemy,
       currentActor.character,
-      3,
+      companionSkillScalar(definition, "pushDistance", 3),
     );
     if (pointEquals(destination, targetEnemy)) {
       return skillFailure(state, "적을 밀어낼 공간이 없어 방패 돌진을 사용할 수 없습니다.");
@@ -3507,62 +3588,110 @@ export function activateCompanionSkill(
   const effects: CombatEffect[] = [];
   const magicVisuals: MagicVisual[] = [];
   const throws: ItemThrow[] = [];
-  const soundCues: GameSoundCue[] = [];
+  const soundCues: GameSoundCue[] = [
+    { id: definition.soundId, volume: 0.68 },
+  ];
   const attack = skillActorAttack(actor);
   const defense = skillActorDefense(actor);
   let wandSoundId: string | undefined;
+  const skillTravelStyle: Motion["travelStyle"] =
+    definition.travelMode === "none" ? "walk" : definition.travelMode;
+  const skillHasMechanic = (
+    mechanic: (typeof definition.mechanics)[number],
+  ) => definition.mechanics.includes(mechanic);
 
-  if (skillId === "shockLeap") {
-    moveSkillActor(actor, target, motions);
-    const shocked = skillEnemiesInRange(next, target, 1).map((candidate) => ({
+  const skillEffectHandlers: Record<CompanionSkillId, () => void> = {
+    shockLeap: () => {
+    moveSkillActor(actor, target, motions, skillTravelStyle);
+    const shocked = skillEnemiesInRange(
+      next,
+      target,
+      companionSkillScalar(definition, "radius", 1),
+    ).map((candidate) => ({
       candidate,
       damage: damageWithSkill(
         candidate,
-        attack * 1.6,
+        attack * companionSkillScalar(definition, "power", 1.6),
         actor,
         effects,
         "#ffd06f",
       ),
     }));
-    const directlyHitIds = new Set(shocked.map(({ candidate }) => candidate.id));
-    const claimedWaterTiles = new Set<string>();
-    shocked.forEach(({ candidate, damage }) =>
-      conductLightningFromEnemy(
-        next,
-        candidate,
-        damage,
-        effects,
-        magicVisuals,
-        `skill-shock-leap-${actor.motionId}`,
-        directlyHitIds,
-        claimedWaterTiles,
-      ),
-    );
+    if (skillHasMechanic("conductive")) {
+      const directlyHitIds = new Set(shocked.map(({ candidate }) => candidate.id));
+      const claimedWaterTiles = new Set<string>();
+      shocked.forEach(({ candidate, damage }) =>
+        conductLightningFromEnemy(
+          next,
+          candidate,
+          damage,
+          effects,
+          magicVisuals,
+          `skill-shock-leap-${actor.motionId}`,
+          directlyHitIds,
+          claimedWaterTiles,
+        ),
+      );
+    }
     effects.push({ ...target, text: "도약!", color: "#ffd06f", sourceId: actor.motionId });
-  } else if (skillId === "drivingLeap") {
+    },
+    drivingLeap: () => {
     if (enemy) {
       const origin = { x: enemy.x, y: enemy.y };
-      const destination = skillPushDestination(next, enemy, actor.character, 2);
-      damageWithSkill(enemy, attack * 1.3, actor, effects, "#ffb278");
+      const destination = skillPushDestination(
+        next,
+        enemy,
+        actor.character,
+        companionSkillScalar(definition, "pushDistance", 2),
+      );
+      damageWithSkill(
+        enemy,
+        attack * companionSkillScalar(definition, "power", 1.3),
+        actor,
+        effects,
+        "#ffb278",
+      );
       moveSkillEnemy(enemy, destination, motions);
-      moveSkillActor(actor, origin, motions);
+      moveSkillActor(actor, origin, motions, skillTravelStyle);
     } else {
-      moveSkillActor(actor, target, motions);
+      moveSkillActor(actor, target, motions, skillTravelStyle);
       effects.push({ ...target, text: "쇄도!", color: "#ffb278", sourceId: actor.motionId });
     }
-  } else if (skillId === "fireball") {
+    },
+    fireball: () => {
     skillAttackMotion(actor, target, motions);
-    const power = Math.max(3, Math.round(attack * 1.2));
-    skillEnemiesInRange(next, target, 1).forEach((candidate) => {
+    const power = Math.max(
+      3,
+      Math.round(attack * companionSkillScalar(definition, "power", 1.2)),
+    );
+    const radius = companionSkillScalar(definition, "radius", 1);
+    skillEnemiesInRange(next, target, radius).forEach((candidate) => {
       damageWithSkill(candidate, power, actor, effects, "#ff8553");
-      addStatus(candidate.statuses, "burning", 4, 2);
+      if (skillHasMechanic("status")) {
+        addStatus(
+          candidate.statuses,
+          "burning",
+          companionSkillScalar(definition, "statusTurns", 4),
+          2,
+        );
+      }
     });
-    createImmediateSkillCloud(next, "fire", target, 1, 5, 2);
+    if (skillHasMechanic("cloud")) {
+      createImmediateSkillCloud(
+        next,
+        "fire",
+        target,
+        radius,
+        companionSkillScalar(definition, "durationTurns", 5),
+        2,
+      );
+    }
     magicVisuals.push(
       { id: `skill-fireball-${next.turn}`, kind: "bolt", from: actor.character, to: target, color: "#ff6b35", secondaryColor: "#ffd27a", sourceId: actor.motionId },
       { id: `skill-fireburst-${next.turn}`, kind: "burst", from: target, to: target, color: "#ff8a45", secondaryColor: "#ffd27a", sourceId: actor.motionId },
     );
-  } else if (skillId === "weaponThrow") {
+    },
+    weaponThrow: () => {
     const weaponId = actor.character.equipment.weapon!;
     const weaponInstance = actor.character.equipmentInstances.weapon;
     const weaponPower = Math.max(
@@ -3571,7 +3700,13 @@ export function activateCompanionSkill(
     );
     skillAttackMotion(actor, target, motions);
     if (enemy) {
-      damageWithSkill(enemy, weaponPower * 5, actor, effects, "#f4d28f");
+      damageWithSkill(
+        enemy,
+        weaponPower * companionSkillScalar(definition, "power", 5),
+        actor,
+        effects,
+        "#f4d28f",
+      );
     }
     throws.push({
       id: `skill-weapon-${actor.motionId}-${next.turn}`,
@@ -3593,10 +3728,12 @@ export function activateCompanionSkill(
       defId: weaponId,
       quantity: 1,
       instance: droppedInstance,
+      lootOrigin: "carried",
       x: target.x,
       y: target.y,
     });
-  } else if (skillId === "arcaneDischarge") {
+    },
+    arcaneDischarge: () => {
     const wand = actorWands(next, actor)
       .filter((instance) => (instance.charges ?? instance.maxCharges ?? 0) > 0)
       .sort(
@@ -3612,7 +3749,13 @@ export function activateCompanionSkill(
     wand.charges = 0;
     skillAttackMotion(actor, target, motions);
     if (enemy) {
-      damageWithSkill(enemy, magic * charges, actor, effects, skillMagicColor(wand.defId));
+      damageWithSkill(
+        enemy,
+        magic * charges * companionSkillScalar(definition, "power", 1),
+        actor,
+        effects,
+        skillMagicColor(wand.defId),
+      );
     }
     magicVisuals.push({
       id: `skill-discharge-${actor.motionId}-${next.turn}`,
@@ -3624,18 +3767,36 @@ export function activateCompanionSkill(
       sourceId: actor.motionId,
     });
     wandSoundId = wand.defId;
-  } else if (skillId === "whirlwind") {
+    },
+    whirlwind: () => {
     skillAttackMotion(actor, target, motions);
-    skillEnemiesInRange(next, actor.character, 1).forEach((candidate) =>
-      damageWithSkill(candidate, attack * 1.4, actor, effects, "#ffe1a1"),
+    skillEnemiesInRange(
+      next,
+      actor.character,
+      companionSkillScalar(definition, "radius", 1),
+    ).forEach((candidate) =>
+      damageWithSkill(
+        candidate,
+        attack * companionSkillScalar(definition, "power", 1.4),
+        actor,
+        effects,
+        "#ffe1a1",
+      ),
     );
-  } else if (skillId === "piercingShot") {
+    },
+    piercingShot: () => {
     skillAttackMotion(actor, target, motions);
     const line = new Set(skillLinePoints(actor.character, target).map(mapPointKey));
     next.enemies
       .filter((candidate) => line.has(mapPointKey(candidate)))
       .forEach((candidate) =>
-        damageWithSkill(candidate, attack * 1.8, actor, effects, "#bfe8a7"),
+        damageWithSkill(
+          candidate,
+          attack * companionSkillScalar(definition, "power", 1.8),
+          actor,
+          effects,
+          "#bfe8a7",
+        ),
       );
     magicVisuals.push({
       id: `skill-pierce-${actor.motionId}-${next.turn}`,
@@ -3646,11 +3807,15 @@ export function activateCompanionSkill(
       secondaryColor: "#f7f1c5",
       sourceId: actor.motionId,
     });
-  } else if (skillId === "chainLightning") {
+    },
+    chainLightning: () => {
     skillAttackMotion(actor, target, motions);
     const chained: Enemy[] = enemy ? [enemy] : [];
     let current = enemy;
-    while (chained.length < 3) {
+    while (
+      skillHasMechanic("chain") &&
+      chained.length < companionSkillScalar(definition, "targetCount", 3)
+    ) {
       if (!current) break;
       const currentTarget = current;
       const nextTarget = next.enemies
@@ -3658,7 +3823,8 @@ export function activateCompanionSkill(
           (candidate) =>
             candidate.hp > 0 &&
             !chained.some((hit) => hit.id === candidate.id) &&
-            distance(candidate, currentTarget) <= 3,
+            distance(candidate, currentTarget) <=
+              companionSkillScalar(definition, "chainRange", 3),
         )
         .sort(
           (a, b) =>
@@ -3675,7 +3841,11 @@ export function activateCompanionSkill(
         candidate.id,
         damageWithSkill(
           candidate,
-          attack * (index === 0 ? 1.5 : 1),
+          attack * companionSkillScalar(
+            definition,
+            index === 0 ? "power" : "secondaryPower",
+            index === 0 ? 1.5 : 1,
+          ),
           actor,
           effects,
           "#fff27c",
@@ -3703,71 +3873,182 @@ export function activateCompanionSkill(
         sourceId: actor.motionId,
       });
     }
-    const directlyHitIds = new Set(chained.map((candidate) => candidate.id));
-    const claimedWaterTiles = new Set<string>();
-    chained.forEach((candidate) =>
-      conductLightningFromEnemy(
-        next,
+    if (skillHasMechanic("conductive")) {
+      const directlyHitIds = new Set(chained.map((candidate) => candidate.id));
+      const claimedWaterTiles = new Set<string>();
+      chained.forEach((candidate) =>
+        conductLightningFromEnemy(
+          next,
+          candidate,
+          chainDamage.get(candidate.id) ?? attack,
+          effects,
+          magicVisuals,
+          `skill-chain-${actor.motionId}`,
+          directlyHitIds,
+          claimedWaterTiles,
+        ),
+      );
+    }
+    },
+    frostNova: () => {
+    skillAttackMotion(actor, target, motions);
+    const radius = companionSkillScalar(definition, "radius", 1);
+    skillEnemiesInRange(next, target, radius).forEach((candidate) => {
+      damageWithSkill(
         candidate,
-        chainDamage.get(candidate.id) ?? attack,
+        attack * companionSkillScalar(definition, "power", 1.1),
+        actor,
         effects,
-        magicVisuals,
-        `skill-chain-${actor.motionId}`,
-        directlyHitIds,
-        claimedWaterTiles,
-      ),
-    );
-  } else if (skillId === "frostNova") {
-    skillAttackMotion(actor, target, motions);
-    skillEnemiesInRange(next, target, 1).forEach((candidate) => {
-      damageWithSkill(candidate, attack * 1.1, actor, effects, "#8ee9ff");
-      addStatus(candidate.statuses, "frozen", 2, 1);
+        "#8ee9ff",
+      );
+      if (skillHasMechanic("status")) {
+        addStatus(
+          candidate.statuses,
+          "frozen",
+          companionSkillScalar(definition, "statusTurns", 2),
+          1,
+        );
+      }
     });
-    createImmediateSkillCloud(next, "frost", target, 1, 4, 1);
+    if (skillHasMechanic("cloud")) {
+      createImmediateSkillCloud(
+        next,
+        "frost",
+        target,
+        radius,
+        companionSkillScalar(definition, "durationTurns", 4),
+        1,
+      );
+    }
     magicVisuals.push({ id: `skill-frost-${next.turn}`, kind: "burst", from: target, to: target, color: "#8ee9ff", secondaryColor: "#ffffff", sourceId: actor.motionId });
-  } else if (skillId === "toxicOrb") {
+    },
+    toxicOrb: () => {
     skillAttackMotion(actor, target, motions);
-    createCloud(next, "toxic", target, 6, 2, 2, 2);
+    if (skillHasMechanic("cloud")) {
+      createCloud(
+        next,
+        "toxic",
+        target,
+        companionSkillScalar(definition, "durationTurns", 6),
+        2,
+        companionSkillScalar(definition, "radius", 2),
+        2,
+      );
+    }
     magicVisuals.push({ id: `skill-toxic-${next.turn}`, kind: "cloud", from: actor.character, to: target, color: "#79ae58", secondaryColor: "#cce379", sourceId: actor.motionId });
-  } else if (skillId === "corrosiveFlask") {
+    },
+    corrosiveFlask: () => {
     skillAttackMotion(actor, target, motions);
-    createCloud(next, "corrosive", target, 6, 2, 2, 2);
+    if (skillHasMechanic("cloud")) {
+      createCloud(
+        next,
+        "corrosive",
+        target,
+        companionSkillScalar(definition, "durationTurns", 6),
+        2,
+        companionSkillScalar(definition, "radius", 2),
+        2,
+      );
+    }
     magicVisuals.push({ id: `skill-corrosion-${next.turn}`, kind: "cloud", from: actor.character, to: target, color: "#a5bd50", secondaryColor: "#e0df75", sourceId: actor.motionId });
-  } else if (skillId === "entanglingRoots") {
+    },
+    entanglingRoots: () => {
     skillAttackMotion(actor, target, motions);
-    skillEnemiesInRange(next, target, 2).forEach((candidate) => {
-      damageWithSkill(candidate, attack * 0.8, actor, effects, "#81bc6c");
-      addStatus(candidate.statuses, "rooted", 3, 1);
+    skillEnemiesInRange(
+      next,
+      target,
+      companionSkillScalar(definition, "radius", 2),
+    ).forEach((candidate) => {
+      damageWithSkill(
+        candidate,
+        attack * companionSkillScalar(definition, "power", 0.8),
+        actor,
+        effects,
+        "#81bc6c",
+      );
+      if (skillHasMechanic("status")) {
+        addStatus(
+          candidate.statuses,
+          "rooted",
+          companionSkillScalar(definition, "statusTurns", 3),
+          1,
+        );
+      }
     });
     magicVisuals.push({ id: `skill-roots-${next.turn}`, kind: "burst", from: target, to: target, color: "#6d9f62", secondaryColor: "#b8d789", sourceId: actor.motionId });
-  } else if (skillId === "shadowStep") {
-    moveSkillActor(actor, target, motions);
-    skillEnemiesInRange(next, target, 1).forEach((candidate) =>
-      damageWithSkill(candidate, attack * 1.7, actor, effects, "#c7a8ff"),
+    },
+    shadowStep: () => {
+    moveSkillActor(actor, target, motions, skillTravelStyle);
+    skillEnemiesInRange(
+      next,
+      target,
+      companionSkillScalar(definition, "radius", 1),
+    ).forEach((candidate) =>
+      damageWithSkill(
+        candidate,
+        attack * companionSkillScalar(definition, "power", 1.7),
+        actor,
+        effects,
+        "#c7a8ff",
+      ),
     );
-    soundCues.push({ id: "teleport", volume: 0.58 });
-  } else if (skillId === "execute") {
+    },
+    execute: () => {
     skillAttackMotion(actor, target, motions);
     if (enemy) {
-      const multiplier = enemy.hp / Math.max(1, enemy.maxHp) <= 0.4 ? 4 : 1.5;
+      const multiplier =
+        skillHasMechanic("threshold") &&
+        enemy.hp / Math.max(1, enemy.maxHp) <=
+        companionSkillScalar(definition, "thresholdRatio", 0.4)
+          ? companionSkillScalar(definition, "secondaryPower", 4)
+          : companionSkillScalar(definition, "power", 1.5);
       damageWithSkill(enemy, attack * multiplier, actor, effects, "#ff9387");
     }
-  } else if (skillId === "shieldCharge") {
+    },
+    shieldCharge: () => {
     if (enemy) {
       const origin = { x: enemy.x, y: enemy.y };
-      const destination = skillPushDestination(next, enemy, actor.character, 3);
-      damageWithSkill(enemy, Math.max(attack, defense * 1.8), actor, effects, "#b8ced8");
-      addStatus(enemy.statuses, "paralyzed", 2, 1);
+      const destination = skillPushDestination(
+        next,
+        enemy,
+        actor.character,
+        companionSkillScalar(definition, "pushDistance", 3),
+      );
+      damageWithSkill(
+        enemy,
+        Math.max(
+          attack * companionSkillScalar(definition, "power", 1),
+          defense * companionSkillScalar(definition, "secondaryPower", 1.8),
+        ),
+        actor,
+        effects,
+        "#b8ced8",
+      );
+      if (skillHasMechanic("status")) {
+        addStatus(
+          enemy.statuses,
+          "paralyzed",
+          companionSkillScalar(definition, "statusTurns", 2),
+          1,
+        );
+      }
       moveSkillEnemy(enemy, destination, motions);
-      moveSkillActor(actor, origin, motions);
+      moveSkillActor(actor, origin, motions, skillTravelStyle);
     } else {
-      moveSkillActor(actor, target, motions);
+      moveSkillActor(actor, target, motions, skillTravelStyle);
       effects.push({ ...target, text: "돌진!", color: "#b8ced8", sourceId: actor.motionId });
     }
-  } else if (skillId === "fieldMedicine" && ally) {
+    },
+    fieldMedicine: () => {
+      if (!ally) return;
     skillInteractMotion(actor, ally, motions);
     const previousHp = ally.hp;
-    ally.hp = Math.min(ally.maxHp, ally.hp + Math.ceil(ally.maxHp * 0.5));
+    ally.hp = Math.min(
+      ally.maxHp,
+      ally.hp + Math.ceil(
+        ally.maxHp * companionSkillScalar(definition, "healRatio", 0.5),
+      ),
+    );
     effects.push({
       x: ally.x,
       y: ally.y,
@@ -3775,40 +4056,76 @@ export function activateCompanionSkill(
       color: "#78e38f",
       sourceId: actor.motionId,
     });
-    soundCues.push({ id: "drink", volume: 0.44 });
-  } else if (skillId === "wardingSigil") {
+    },
+    wardingSigil: () => {
     skillAttackMotion(actor, target, motions);
     next.wards.push({
       id: `skill-ward-${actor.motionId}-${next.turn}-${next.wards.length}`,
       x: target.x,
       y: target.y,
-      turns: 6,
+      turns: companionSkillScalar(definition, "durationTurns", 6),
       power: Math.max(2, Math.round(actor.character.level / 2) + 2),
     });
     magicVisuals.push({ id: `skill-ward-visual-${next.turn}`, kind: "burst", from: target, to: target, color: "#b99cff", secondaryColor: "#ffffff", sourceId: actor.motionId });
-  } else if (skillId === "tripleStrike") {
-    for (let strike = 0; strike < 3; strike += 1) {
+    },
+    tripleStrike: () => {
+    const hitCount = companionSkillScalar(definition, "hitCount", 3);
+    for (let strike = 0; strike < hitCount; strike += 1) {
       skillAttackMotion(actor, target, motions);
       if (enemy) {
-        damageWithSkill(enemy, attack * 0.75, actor, effects, strike === 2 ? "#fff0a6" : "#e8d09b");
+        damageWithSkill(
+          enemy,
+          attack * companionSkillScalar(definition, "power", 0.75),
+          actor,
+          effects,
+          strike === hitCount - 1 ? "#fff0a6" : "#e8d09b",
+        );
       }
     }
-  } else if (skillId === "seismicSlam") {
+    },
+    seismicSlam: () => {
     skillAttackMotion(actor, target, motions);
-    skillEnemiesInRange(next, target, 2).forEach((candidate) => {
-      damageWithSkill(candidate, attack * 1.25, actor, effects, "#d4ad76");
-      addStatus(candidate.statuses, "paralyzed", 1, 1);
+    skillEnemiesInRange(
+      next,
+      target,
+      companionSkillScalar(definition, "radius", 2),
+    ).forEach((candidate) => {
+      damageWithSkill(
+        candidate,
+        attack * companionSkillScalar(definition, "power", 1.25),
+        actor,
+        effects,
+        "#d4ad76",
+      );
+      addStatus(
+        candidate.statuses,
+        "paralyzed",
+        companionSkillScalar(definition, "statusTurns", 1),
+        1,
+      );
     });
     magicVisuals.push({ id: `skill-quake-${next.turn}`, kind: "burst", from: target, to: target, color: "#b98b58", secondaryColor: "#e1c08a", sourceId: actor.motionId });
-  } else if (skillId === "lifeDrain") {
+    },
+    lifeDrain: () => {
     skillAttackMotion(actor, target, motions);
     if (enemy) {
       const before = Math.max(0, enemy.hp);
-      const dealt = Math.min(before, damageWithSkill(enemy, attack * 1.5, actor, effects, "#c879c3"));
+      const dealt = Math.min(
+        before,
+        damageWithSkill(
+          enemy,
+          attack * companionSkillScalar(definition, "power", 1.5),
+          actor,
+          effects,
+          "#c879c3",
+        ),
+      );
       const previousHp = actor.character.hp;
       actor.character.hp = Math.min(
         actor.character.maxHp,
-        actor.character.hp + Math.ceil(dealt / 2),
+        actor.character.hp + Math.ceil(
+          dealt * companionSkillScalar(definition, "healRatio", 0.5),
+        ),
       );
       effects.push({
         x: actor.character.x,
@@ -3820,6 +4137,60 @@ export function activateCompanionSkill(
       magicVisuals.push({ id: `skill-drain-${next.turn}`, kind: "beam", from: enemy, to: actor.character, color: "#c879c3", secondaryColor: "#6f315f", sourceId: actor.motionId });
     } else {
       magicVisuals.push({ id: `skill-drain-empty-${next.turn}`, kind: "beam", from: target, to: actor.character, color: "#c879c3", secondaryColor: "#6f315f", sourceId: actor.motionId });
+    }
+    },
+  };
+  skillEffectHandlers[skillId]();
+
+  const specialEffectTargets = (
+    specialEffect: { target: "target" | "area"; radius?: number },
+  ) => specialEffect.target === "area"
+    ? skillEnemiesInRange(
+        next,
+        target,
+        specialEffect.radius ?? companionSkillScalar(definition, "radius", 1),
+      )
+    : enemy && enemy.hp > 0
+      ? [enemy]
+      : [];
+  for (const specialEffect of definition.specialEffects) {
+    if (specialEffect.kind === "damage") {
+      specialEffectTargets(specialEffect).forEach((candidate) => {
+        damageWithSkill(
+          candidate,
+          attack * specialEffect.power,
+          actor,
+          effects,
+          definition.accent,
+        );
+      });
+    } else if (specialEffect.kind === "status") {
+      specialEffectTargets(specialEffect).forEach((candidate) => {
+        addStatus(
+          candidate.statuses,
+          specialEffect.statusId,
+          specialEffect.turns,
+          specialEffect.potency ?? 1,
+        );
+      });
+    } else {
+      const previousHp = actor.character.hp;
+      actor.character.hp = Math.min(
+        actor.character.maxHp,
+        actor.character.hp + Math.ceil(
+          actor.character.maxHp * specialEffect.ratio,
+        ),
+      );
+      const restored = actor.character.hp - previousHp;
+      if (restored > 0) {
+        effects.push({
+          x: actor.character.x,
+          y: actor.character.y,
+          text: `+${restored}`,
+          color: definition.accent,
+          sourceId: actor.motionId,
+        });
+      }
     }
   }
 
@@ -3837,6 +4208,8 @@ export function activateCompanionSkill(
   const defeatedIds = removeDefeatedEnemies(next, effects, true, actor.motionId);
   updatePlayerFieldOfView(next);
   pushLog(next, `${actor.character.name}이(가) ${definition.nameKo}을(를) 사용했습니다.`);
+  const visualRadius = companionSkillScalar(definition, "radius", 0);
+  const areaCenter = definition.areaAnchor === "caster" ? castFrom : target;
   return {
     state: next,
     motions,
@@ -3845,13 +4218,45 @@ export function activateCompanionSkill(
     consumedTurn: true,
     elapsedTurns,
     throws,
-    magicVisuals,
+    magicVisuals: [],
     skillVisuals: [{
       id: `skill-particles-${actor.motionId}-${skillId}-${next.turn}`,
       skillId,
       from: castFrom,
       to: { ...target },
       accent: definition.accent,
+      travelMode: definition.travelMode,
+      impactMode: definition.impactMode,
+      radius: visualRadius,
+      footprintOrigin:
+        skillHasMechanic("area") && visualRadius > 0
+          ? { ...areaCenter }
+          : undefined,
+      affectedTiles:
+        skillHasMechanic("area") && visualRadius > 0
+          ? skillAreaTiles(next, areaCenter, visualRadius)
+          : undefined,
+      rank: 1 + modifiers.length,
+      variants: modifiers.length
+        ? modifiers.map((modifier) => modifier.id)
+        : undefined,
+      semanticOverride: modifiers.some(
+        (modifier) =>
+          modifier.travelMode !== undefined ||
+          modifier.impactMode !== undefined ||
+          modifier.areaAnchor !== undefined,
+      ),
+      accentOverride: modifiers.some(
+        (modifier) => modifier.accent !== undefined,
+      ),
+      paths: skillId === "chainLightning"
+        ? magicVisuals
+            .filter((visual) => visual.kind === "bolt")
+            .map((visual) => ({
+              from: { x: visual.from.x, y: visual.from.y },
+              to: { x: visual.to.x, y: visual.to.y },
+            }))
+        : undefined,
       sourceId: actor.motionId,
     }],
     wandSoundId,
@@ -4031,6 +4436,7 @@ const tickPlayerStatuses = (state: GameState, effects: CombatEffect[]) => {
           y: state.player.y,
           text: `-${damage}`,
           color: status.id === "burning" ? "#ff8a45" : "#8fd56a",
+          kind: "damage",
           sourceId: `status-${status.id}`,
         });
       }
@@ -4150,7 +4556,9 @@ const resolveCompanionMovePlans = (
       ) ||
       hardBlocked.has(destinationKey) ||
       reservedDestinations.has(destinationKey) ||
-      (startingOccupant && startingOccupant.id !== plan.companion.id)
+      (startingOccupant &&
+        startingOccupant.id !== plan.companion.id &&
+        !accepted.has(startingOccupant.id))
     ) {
       continue;
     }
@@ -4266,7 +4674,7 @@ const activateCompanionRangedSlot = (
         definition.category === "missile") &&
       distance(companion, target) <=
         (definition.category === "wand" ? 10 : 8) &&
-      hasLineOfSight(state.tiles, companion, target)
+      hasProjectileLineOfFire(state, companion, target)
     );
   };
   const slotIndex = preferredSlotIndex === undefined
@@ -4340,6 +4748,7 @@ const activateCompanionRangedSlot = (
         definition.category === "wand"
           ? companionWandColor(slot.defId)
           : "#e7d19b",
+      kind: "damage",
       sourceId: companion.id,
     });
     if (slot.defId === "wand_frost") {
@@ -4420,6 +4829,7 @@ const activateCompanionRangedSlot = (
         quantity: 1,
         recoversThrowableCharge: true,
         recoversItemRef: profile.id,
+        lootOrigin: "carried",
         x: target.x,
         y: target.y,
       });
@@ -4568,12 +4978,12 @@ export function activateCompanionQuickslot(
   const maximumRange = definition.category === "wand" ? 10 : 8;
   const tile = state.tiles[target.y]?.[target.x];
   if (
-    !tile?.visible ||
+    !tile ||
     distance(source, target) > maximumRange ||
-    !hasLineOfSight(state.tiles, source, target)
+    !hasProjectileLineOfFire(state, source, target)
   ) {
     const next = cloneGameWithoutTiles(state);
-    pushLog(next, `${definition.name}의 사거리 안에서 보이는 타일을 선택해야 합니다.`);
+    pushLog(next, `${definition.name}의 사거리 안에서 막히지 않은 타일을 선택해야 합니다.`);
     return { state: next, motions: [], effects: [], consumedTurn: false };
   }
 
@@ -4679,6 +5089,8 @@ const pickupGroundItemsForCompanion = (
       quantity,
       itemRef,
       sourceId: companion.id,
+      lootOrigin: item.lootOrigin,
+      dungeonLootId: item.dungeonLootId,
       x: item.x,
       y: item.y,
     });
@@ -4713,6 +5125,7 @@ const nextCompanionStepToward = (
   target: Point,
   reservedDestinations: ReadonlySet<string>,
   canUnlock: boolean,
+  allowOccupiedTarget = false,
 ) => {
   const blocked = companionMovementBlockedSet(
     state,
@@ -4720,6 +5133,7 @@ const nextCompanionStepToward = (
     reservedDestinations,
   );
   const targetKey = mapPointKey(target);
+  if (allowOccupiedTarget) blocked.delete(targetKey);
   const targetTerrain = state.tiles[target.y]?.[target.x]?.terrain;
   if (!targetTerrain) return null;
 
@@ -4833,6 +5247,7 @@ const companionMeleeAttack = (
       y: target.y,
       text: `-${damage}`,
       color: "#ffe3a1",
+      kind: "damage",
       sourceId: companion.id,
     });
     pushLog(
@@ -4902,6 +5317,7 @@ const runCompanionActions = (
           y: companion.y,
           text: "전투 불능!",
           color: "#d8a0a0",
+          kind: "defeat",
           sourceId: "status",
         });
         pushLog(state, `${companion.name}이(가) 상태이상 피해로 쓰러졌습니다.`);
@@ -5028,6 +5444,7 @@ const runCompanionActions = (
       destinationTarget,
       reservedDestinations,
       (state.player.inventory.iron_key ?? 0) > 0,
+      true,
     );
     queueMove(companion, destination);
   }
@@ -5148,6 +5565,7 @@ export const advanceHungerAndRecovery = (
         y: state.player.y,
         text: amount > 0 ? `+${amount}` : `${amount}`,
         color: amount > 0 ? "#78df8b" : "#c97863",
+        kind: amount > 0 ? "healing" : "damage",
         sourceId: "hunger",
       });
     },
@@ -5162,6 +5580,7 @@ export const advanceHungerAndRecovery = (
         y: companion.y,
         text: amount > 0 ? `+${amount}` : `${amount}`,
         color: amount > 0 ? "#78df8b" : "#c97863",
+        kind: amount > 0 ? "healing" : "damage",
         sourceId: "hunger",
       });
     });
@@ -5171,6 +5590,7 @@ export const advanceHungerAndRecovery = (
         y: companion.y,
         text: "전투 불능!",
         color: "#d8a0a0",
+        kind: "defeat",
         sourceId: "hunger",
       });
       pushLog(state, `${companion.name}이(가) 굶주림으로 쓰러졌습니다.`);
@@ -5207,6 +5627,7 @@ export function runEnemyTurn(
         y: target.y,
         text: `-${ward.power}`,
         color: "#b99cff",
+        kind: "damage",
         sourceId: ward.id,
       });
     }
@@ -5227,6 +5648,7 @@ export function runEnemyTurn(
           y: companion.y,
           text: "전투 불능!",
           color: "#d8a0a0",
+          kind: "defeat",
           sourceId: "status",
         });
         pushLog(next, `${companion.name}이(가) 상태이상 피해로 쓰러졌습니다.`);
@@ -5360,6 +5782,7 @@ export function runEnemyTurn(
             y: allyTarget.y,
             text: `-${amount}`,
             color: "#d5adff",
+            kind: "damage",
             sourceId: enemy.id,
           });
           pushLog(
@@ -5467,6 +5890,7 @@ export function runEnemyTurn(
           y: next.player.y,
           text: options.playerInvincible ? "무효" : `-${damage}`,
           color: options.playerInvincible ? "#8ce7ff" : "#ff6969",
+          kind: options.playerInvincible ? "blocked" : "damage",
           sourceId: enemy.id,
         });
       } else {
@@ -5526,6 +5950,7 @@ export function runEnemyTurn(
           y: adjacentCompanion.y,
           text: `-${damage}`,
           color: "#ff8d7c",
+          kind: "damage",
           sourceId: enemy.id,
         });
         pushLog(
@@ -5538,6 +5963,7 @@ export function runEnemyTurn(
             y: adjacentCompanion.y,
             text: "전투 불능!",
             color: "#d8a0a0",
+            kind: "defeat",
             sourceId: enemy.id,
           });
           pushLog(
@@ -5765,6 +6191,9 @@ export function performAlchemy(
       definition,
       () => random(next),
     );
+    if (!traitId) {
+      return { state, motions: [], effects: [], consumedTurn: false };
+    }
     const trait = EQUIPMENT_TRAITS[traitId];
     pushLog(
       next,
@@ -5825,7 +6254,13 @@ const damageEnemiesInRange = (
     ) {
       const amount = damage(enemy);
       enemy.hp -= amount;
-      effects.push({ x: enemy.x, y: enemy.y, text: `-${amount}`, color: "#9deaff" });
+      effects.push({
+        x: enemy.x,
+        y: enemy.y,
+        text: `-${amount}`,
+        color: "#9deaff",
+        kind: "damage",
+      });
     }
   });
   return removeDefeatedEnemies(state, effects, false);
@@ -7462,6 +7897,7 @@ export function zapWand(
       y: enemy.y,
       text: `-${resolvedAmount}`,
       color,
+      kind: "damage",
       sourceId: `wand-${defId}`,
     });
     return resolvedAmount;
@@ -7778,6 +8214,7 @@ export function throwItem(
       ...landing,
       text: `-${amount}`,
       color: "#ffd27c",
+      kind: "damage",
       sourceId: `throw-${defId}`,
     });
     pushLog(next, `${definition.name}이(가) ${getEnemyLabel(enemy)}에게 적중했습니다.`);
@@ -7871,6 +8308,7 @@ export function throwItem(
           : removed.instance
           ? cloneInventoryInstance(removed.instance)
           : undefined,
+      lootOrigin: "carried",
       ...landing,
     });
   } else {
@@ -7924,6 +8362,7 @@ export function discardItem(state: GameState, itemRef: string): ActionResult {
     instance: removed.instance
       ? cloneInventoryInstance(removed.instance)
       : undefined,
+    lootOrigin: "carried",
     x: next.player.x,
     y: next.player.y,
     manualPickup: true,
@@ -8013,19 +8452,21 @@ export function developerSpawnEnemy(
     pushLog(next, "[개발자] 플레이어 근처에 소환할 빈 공간이 없습니다.");
     return next;
   }
-  const base = ENEMY_STATS[kind];
-  const scale = 1 + Math.max(0, next.floor - 1) * 0.2;
-  const maxHp = Math.round(base.hp * scale);
+  const stats = scaledEnemyStats(
+    kind,
+    next.floor,
+    next.difficultyScale,
+  );
   next.enemies.push({
     id: `developer-${kind}-${next.turn}-${next.rng}-${next.enemies.length}`,
     kind,
-    hp: maxHp,
-    maxHp,
-    attack: Math.round(base.attack * (0.9 + scale * 0.1)),
-    defense: base.defense + Math.floor((next.floor - 1) / 3),
-    accuracy: base.accuracy + Math.floor((next.floor - 1) / 2),
-    evasion: base.evasion + Math.floor((next.floor - 1) / 2),
-    xp: Math.round(base.xp * scale),
+    hp: stats.hp,
+    maxHp: stats.hp,
+    attack: stats.attack,
+    defense: stats.defense,
+    accuracy: stats.accuracy,
+    evasion: stats.evasion,
+    xp: stats.xp,
     alerted: true,
     sawPlayerLastTurn: true,
     sleeping: false,
@@ -8033,6 +8474,7 @@ export function developerSpawnEnemy(
     lastSeenPlayer: { ...next.player },
     searchTurns: 0,
     statuses: [],
+    drop: null,
     ...destination,
   });
   pushLog(next, `[개발자] ${ENEMY_SPRITES[kind].label} 소환 완료.`);

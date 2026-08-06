@@ -1,15 +1,27 @@
 import {
+  ITEM_GRADES,
+  ITEM_GRADE_COLORS,
+  isItemGrade,
+  itemGradeIndex,
+  itemGradeMultiplier,
+  legacyQualityToGrade,
+  normalizeItemGrade,
+  rollItemGrade,
+} from "./item-grade";
+import {
   EquipmentStatRoll,
   EquipmentTrait,
   EquipmentTraitId,
   InventoryInstance,
   ItemCategory,
   ItemDefinition,
+  ItemGrade,
 } from "./types";
 
 export type EquipmentTraitDefinition = {
   id: EquipmentTraitId;
   name: string;
+  nameEn: string;
   description: string;
   accent: string;
 };
@@ -21,8 +33,17 @@ export type EquipmentStatProfile = {
   speed: number;
   moveSpeed: number;
   attackSpeed: number;
-  quality: number;
+  grade: ItemGrade;
+  gradeMultiplier: number;
   upgradeLevel: number;
+};
+
+export type EquipmentTraitSummary = EquipmentTraitDefinition & {
+  grade: ItemGrade;
+  gradeColor: string;
+  power: number;
+  description: string;
+  descriptionEn: string;
 };
 
 export const EQUIPMENT_TRAITS: Record<
@@ -32,37 +53,43 @@ export const EQUIPMENT_TRAITS: Record<
   keen: {
     id: "keen",
     name: "예리함",
-    description: "공격력 +1",
+    nameEn: "Keen",
+    description: "등급에 따라 공격력이 증가합니다",
     accent: "#ef9d69",
   },
   guarded: {
     id: "guarded",
     name: "수호",
-    description: "방어력 +1",
+    nameEn: "Guarded",
+    description: "등급에 따라 방어력이 증가합니다",
     accent: "#78b8da",
   },
   swift: {
     id: "swift",
     name: "신속",
-    description: "이동·공격 속도 +5%",
+    nameEn: "Swift",
+    description: "등급에 따라 이동·공격 속도가 증가합니다",
     accent: "#91d6a1",
   },
   focused: {
     id: "focused",
     name: "집중",
-    description: "마력 +1",
+    nameEn: "Focused",
+    description: "등급에 따라 마력이 증가합니다",
     accent: "#c69bea",
   },
   charged: {
     id: "charged",
     name: "충전",
-    description: "지팡이 최대 충전 +1",
+    nameEn: "Charged",
+    description: "등급에 따라 지팡이 최대 충전량이 증가합니다",
     accent: "#f1d374",
   },
   balanced: {
     id: "balanced",
     name: "균형",
-    description: "공격력·방어력 +1",
+    nameEn: "Balanced",
+    description: "등급에 따라 공격력과 방어력이 증가합니다",
     accent: "#e5c88d",
   },
 };
@@ -80,16 +107,44 @@ export const isUpgradeableEquipment = (
   definition: ItemDefinition | undefined,
 ) => Boolean(definition && UPGRADEABLE_ITEM_CATEGORIES.has(definition.category));
 
-const clamp = (value: number, minimum: number, maximum: number) =>
-  Math.max(minimum, Math.min(maximum, value));
+const roundStat = (value: number) => Math.round(value * 100) / 100;
 
-const traitRank = (
+/** Enchantments double in strength at every F-S grade step. */
+export const enchantmentGradePower = (grade: ItemGrade) =>
+  2 ** itemGradeIndex(normalizeItemGrade(grade));
+
+const legacyRankToGrade = (rank: unknown): ItemGrade => {
+  const numeric = typeof rank === "number" && Number.isFinite(rank)
+    ? Math.max(1, Math.min(3, Math.round(rank)))
+    : 1;
+  return (["F", "C", "S"] as const)[numeric - 1];
+};
+
+const traitGrade = (
+  trait: Partial<EquipmentTrait> & {
+    id: EquipmentTraitId;
+    rank?: number;
+  },
+  fallback: ItemGrade,
+) => isItemGrade(trait.grade)
+  ? trait.grade
+  : typeof trait.rank === "number"
+    ? legacyRankToGrade(trait.rank)
+    : fallback;
+
+const traitPower = (
   instance: InventoryInstance | null | undefined,
   id: EquipmentTraitId,
-) =>
-  (instance?.traits ?? [])
+) => {
+  const fallback = normalizeItemGrade(instance?.grade);
+  return (instance?.traits ?? [])
     .filter((trait) => trait.id === id)
-    .reduce((total, trait) => total + trait.rank, 0);
+    .reduce(
+      (total, trait) =>
+        total + enchantmentGradePower(traitGrade(trait, fallback)),
+      0,
+    );
+};
 
 const baseMagic = (definition: ItemDefinition) => {
   if (definition.category === "wand") {
@@ -140,104 +195,237 @@ export function equipmentStatProfile(
     magic: 0,
     speed: 0,
   };
+  const grade = instance
+    ? normalizeItemGrade(instance.grade)
+    : "F";
+  const gradeMultiplier = itemGradeMultiplier(grade);
   const upgradeLevel = instance?.upgradeLevel ?? 0;
   const upgrades = upgradeBonuses(definition, upgradeLevel);
-  const keen = traitRank(instance, "keen");
-  const guarded = traitRank(instance, "guarded");
-  const focused = traitRank(instance, "focused");
-  const balanced = traitRank(instance, "balanced");
-  const swift = traitRank(instance, "swift");
-  const moveSpeed = Math.max(
-    0.25,
-    (definition.moveSpeed ?? 1) * (1 + swift * 0.05),
-  );
-  const attackSpeed = Math.max(
-    0.25,
-    (definition.attackSpeed ?? 1) * (1 + swift * 0.05),
-  );
+  const keen = traitPower(instance, "keen");
+  const guarded = traitPower(instance, "guarded");
+  const focused = traitPower(instance, "focused");
+  const balanced = traitPower(instance, "balanced");
+  const swift = traitPower(instance, "swift");
+  const baseMoveSpeed = 1 + ((definition.moveSpeed ?? 1) - 1) * gradeMultiplier;
+  const baseAttackSpeed = 1 +
+    ((definition.attackSpeed ?? 1) - 1) * gradeMultiplier;
+  const moveSpeed = Math.max(0.25, baseMoveSpeed * (1 + swift * 0.05));
+  const attackSpeed = Math.max(0.25, baseAttackSpeed * (1 + swift * 0.05));
   return {
     attack: Math.max(
       0,
-      baseAttack(definition) +
-        roll.attack +
-        upgrades.attack +
-        keen +
-        balanced,
+      roundStat(
+        baseAttack(definition) * gradeMultiplier +
+          roll.attack +
+          upgrades.attack +
+          keen +
+          balanced,
+      ),
     ),
     defense: Math.max(
       0,
-      (definition.defense ?? 0) +
-        roll.defense +
-        upgrades.defense +
-        guarded +
-        balanced,
+      roundStat(
+        (definition.defense ?? 0) * gradeMultiplier +
+          roll.defense +
+          upgrades.defense +
+          guarded +
+          balanced,
+      ),
     ),
     magic: Math.max(
       0,
-      baseMagic(definition) + roll.magic + upgrades.magic + focused,
+      roundStat(
+        baseMagic(definition) * gradeMultiplier +
+          roll.magic +
+          upgrades.magic +
+          focused,
+      ),
     ),
     speed: Math.max(
       0,
-      Math.round(
-        ((moveSpeed - 1) * 10 +
+      roundStat(
+        (moveSpeed - 1) * 10 +
           (attackSpeed - 1) * 10 +
           roll.speed +
-          2) *
-          10,
-      ) / 10,
+          2,
+      ),
     ),
-    moveSpeed,
-    attackSpeed,
-    quality: clamp(instance?.quality ?? 3, 1, 5),
+    moveSpeed: roundStat(moveSpeed),
+    attackSpeed: roundStat(attackSpeed),
+    grade,
+    gradeMultiplier,
     upgradeLevel,
   };
 }
 
 const availableTraits = (definition: ItemDefinition): EquipmentTraitId[] => {
-  const common: EquipmentTraitId[] = ["swift"];
-  if (["weapon", "missile", "ring"].includes(definition.category)) {
-    common.push("keen");
+  switch (definition.category) {
+    case "weapon":
+    case "missile":
+      return definition.slot
+        ? ["keen", "balanced", "swift"]
+        : ["keen", "swift"];
+    case "armor":
+      return ["guarded", "balanced", "swift"];
+    case "wand":
+      return ["focused", "charged", "swift"];
+    case "artifact":
+      return ["focused", "guarded", "swift"];
+    case "ring":
+      return ["balanced", "keen", "guarded", "focused", "swift"];
+    default:
+      return ["swift"];
   }
-  if (["armor", "artifact", "ring"].includes(definition.category)) {
-    common.push("guarded");
-  }
-  if (["wand", "artifact", "ring"].includes(definition.category)) {
-    common.push("focused");
-  }
-  if (definition.category === "wand") common.push("charged");
-  if (definition.slot) common.push("balanced");
-  return common;
 };
 
-const makeStatRoll = (
-  definition: ItemDefinition,
-  quality: number,
+const defaultTrait = (definition: ItemDefinition) => availableTraits(definition)[0];
+
+const emptyStatRoll = (): EquipmentStatRoll => ({
+  attack: 0,
+  defense: 0,
+  magic: 0,
+  speed: 0,
+});
+
+const S_ENCHANTMENT_CHANCE: Record<ItemGrade, number> = {
+  F: 0.002,
+  E: 0.005,
+  D: 0.01,
+  C: 0.02,
+  B: 0.04,
+  A: 0.07,
+  S: 0.1,
+};
+
+const ENCHANTMENT_GRADE_RATIO: Record<ItemGrade, number> = {
+  F: 0.35,
+  E: 0.45,
+  D: 0.55,
+  C: 0.65,
+  B: 0.75,
+  A: 0.83,
+  S: 0.9,
+};
+
+/**
+ * Later enchantments always favor lower grades. A better item flattens that
+ * curve, while the S endpoint remains exactly 0.2% on F gear and 10% on S.
+ */
+export function enchantmentGradeChances(
+  itemGrade: ItemGrade,
+): Record<ItemGrade, number> {
+  const normalizedGrade = normalizeItemGrade(itemGrade);
+  const sChance = S_ENCHANTMENT_CHANCE[normalizedGrade];
+  const ratio = ENCHANTMENT_GRADE_RATIO[normalizedGrade];
+  const ordinaryGrades = ITEM_GRADES.slice(0, -1);
+  const weights = ordinaryGrades.map((_, index) => ratio ** index);
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const result = {} as Record<ItemGrade, number>;
+  ordinaryGrades.forEach((grade, index) => {
+    result[grade] = ((1 - sChance) * weights[index]) / total;
+  });
+  result.S = sChance;
+  return result;
+}
+
+export function rollEnchantmentGrade(
+  itemGrade: ItemGrade,
   random: () => number,
-): EquipmentStatRoll => {
-  const qualityDelta = quality <= 1 ? -1 : quality >= 5 ? 1 : 0;
-  const jitter = () => (random() < 0.22 ? 1 : 0);
+): ItemGrade {
+  const chances = enchantmentGradeChances(itemGrade);
+  let roll = Math.max(0, Math.min(0.999999999, random()));
+  for (const grade of ITEM_GRADES) {
+    roll -= chances[grade];
+    if (roll < 0) return grade;
+  }
+  return "S";
+}
+
+const chargedBonus = (grade: ItemGrade) =>
+  enchantmentGradePower(grade);
+
+const applyChargedTrait = (
+  instance: InventoryInstance,
+  definition: ItemDefinition,
+  grade: ItemGrade,
+) => {
+  if (definition.category !== "wand") return;
+  instance.maxCharges = (instance.maxCharges ?? 3) + chargedBonus(grade);
+  instance.charges = Math.min(
+    instance.maxCharges,
+    (instance.charges ?? 0) + chargedBonus(grade),
+  );
+};
+
+type LegacyEquipmentTrait = Partial<EquipmentTrait> & {
+  id?: EquipmentTraitId;
+  rank?: number;
+};
+
+type LegacyEquipmentInstance = Omit<InventoryInstance, "traits"> & {
+  quality?: number;
+  traits?: LegacyEquipmentTrait[];
+};
+
+export function normalizeEquipmentInstance(
+  source: InventoryInstance,
+  definition?: ItemDefinition,
+): InventoryInstance {
+  const legacy = source as unknown as LegacyEquipmentInstance;
+  const grade = isItemGrade(legacy.grade)
+    ? legacy.grade
+    : legacyQualityToGrade(legacy.quality);
+  const candidates = definition ? availableTraits(definition) : [];
+  const normalizedTraits = (legacy.traits ?? []).flatMap((trait, index) => {
+    if (!trait.id || (candidates.length && !candidates.includes(trait.id))) {
+      return [];
+    }
+    const traitGradeValue = index === 0
+      ? grade
+      : isItemGrade(trait.grade)
+        ? trait.grade
+        : legacyRankToGrade(trait.rank);
+    return [{ id: trait.id, grade: traitGradeValue } satisfies EquipmentTrait];
+  });
+  if (definition && isUpgradeableEquipment(definition) && !normalizedTraits.length) {
+    normalizedTraits.push({ id: defaultTrait(definition), grade });
+  }
+  if (normalizedTraits[0]) normalizedTraits[0].grade = grade;
+  const rest = { ...source } as InventoryInstance & { quality?: number };
+  delete rest.quality;
   return {
-    attack:
-      ["weapon", "missile"].includes(definition.category)
-        ? qualityDelta + jitter()
-        : definition.category === "ring"
-          ? qualityDelta + (random() < 0.35 ? 1 : 0)
-          : 0,
-    defense:
-      definition.category === "armor"
-        ? qualityDelta + jitter()
-        : definition.category === "ring"
-          ? qualityDelta + (random() < 0.3 ? 1 : 0)
-          : definition.category === "artifact" && random() < 0.3
-            ? 1
-            : 0,
-    magic:
-      ["wand", "artifact"].includes(definition.category)
-        ? qualityDelta + jitter()
-        : definition.category === "ring"
-          ? qualityDelta + (random() < 0.35 ? 1 : 0)
-          : 0,
-    speed: Math.floor(random() * 3) - 1,
+    ...rest,
+    grade,
+    statRoll: source.statRoll ? { ...source.statRoll } : emptyStatRoll(),
+    traits: normalizedTraits,
+  };
+}
+
+const createBaseEquipmentInstance = (
+  definition: ItemDefinition,
+  id: string,
+  grade: ItemGrade,
+  cursed: boolean,
+): InventoryInstance => {
+  const maxCharges = definition.category === "wand" || definition.category === "missile"
+    ? definition.category === "wand" ? 3 : 1
+    : undefined;
+  const maxDurability = definition.category === "missile" ? 10 : undefined;
+  return {
+    id,
+    defId: definition.id,
+    cursed,
+    charges: maxCharges,
+    maxCharges,
+    baseMaxCharges:
+      definition.category === "missile" ? maxCharges : undefined,
+    rechargeProgress: definition.category === "wand" ? 0 : undefined,
+    durability: maxDurability,
+    maxDurability,
+    grade,
+    upgradeLevel: 0,
+    statRoll: emptyStatRoll(),
+    traits: [],
   };
 };
 
@@ -245,65 +433,49 @@ export function createEquipmentInstance(
   definition: ItemDefinition,
   id: string,
   random: () => number,
-  options: { allowCurse?: boolean } = {},
+  options: {
+    allowCurse?: boolean;
+    grade?: ItemGrade;
+    preferredFirstTrait?: EquipmentTraitId;
+  } = {},
 ): InventoryInstance {
-  const quality = clamp(1 + Math.floor(random() * 5), 1, 5);
-  const maxCharges =
-    definition.category === "wand"
-      ? 3 + (quality === 5 ? 1 : 0)
-      : definition.category === "missile"
-        ? 1
-        : undefined;
-  const maxDurability = definition.category === "missile" ? 10 : undefined;
-  const instance: InventoryInstance = {
+  const grade = options.grade ?? rollItemGrade(random);
+  const instance = createBaseEquipmentInstance(
+    definition,
     id,
-    defId: definition.id,
-    cursed: (options.allowCurse ?? true) && random() < 0.14,
-    charges: maxCharges,
-    maxCharges,
-    baseMaxCharges:
-      definition.category === "missile" ? maxCharges : undefined,
-    rechargeProgress: definition.category === "wand" ? 0 : undefined,
-    durability: maxDurability,
-    maxDurability,
-    quality,
-    upgradeLevel: 0,
-    statRoll: makeStatRoll(definition, quality, random),
-    traits: [],
-  };
-  if (random() < 0.34) {
-    enchantEquipmentInstance(instance, definition, random);
+    normalizeItemGrade(grade),
+    (options.allowCurse ?? true) && random() < 0.14,
+  );
+  const candidates = availableTraits(definition);
+  const preferred = options.preferredFirstTrait;
+  const traitId = preferred && candidates.includes(preferred)
+    ? preferred
+    : candidates[Math.floor(random() * candidates.length)] ?? defaultTrait(definition);
+  instance.traits = [{ id: traitId, grade: instance.grade! }];
+  if (traitId === "charged") {
+    applyChargedTrait(instance, definition, instance.grade!);
   }
   return instance;
 }
 
 export function createPlainEquipmentInstance(
   definition: ItemDefinition,
-  id: string,
+  id = `plain-${definition.id}`,
+  grade: ItemGrade = "C",
 ): InventoryInstance {
-  const maxCharges =
-    definition.category === "wand"
-      ? 3
-      : definition.category === "missile"
-        ? 1
-        : undefined;
-  const maxDurability = definition.category === "missile" ? 10 : undefined;
-  return {
+  const normalizedGrade = normalizeItemGrade(grade);
+  const instance = createBaseEquipmentInstance(
+    definition,
     id,
-    defId: definition.id,
-    cursed: false,
-    charges: maxCharges,
-    maxCharges,
-    baseMaxCharges:
-      definition.category === "missile" ? maxCharges : undefined,
-    rechargeProgress: definition.category === "wand" ? 0 : undefined,
-    durability: maxDurability,
-    maxDurability,
-    quality: 3,
-    upgradeLevel: 0,
-    statRoll: { attack: 0, defense: 0, magic: 0, speed: 0 },
-    traits: [],
-  };
+    normalizedGrade,
+    false,
+  );
+  const traitId = defaultTrait(definition);
+  instance.traits = [{ id: traitId, grade: normalizedGrade }];
+  if (traitId === "charged") {
+    applyChargedTrait(instance, definition, normalizedGrade);
+  }
+  return instance;
 }
 
 export function enchantEquipmentInstance(
@@ -313,41 +485,18 @@ export function enchantEquipmentInstance(
   preferred?: EquipmentTraitId,
 ) {
   if (!isUpgradeableEquipment(definition)) return null;
+  const normalized = normalizeEquipmentInstance(instance, definition);
+  Object.assign(instance, normalized);
   const traits = instance.traits ?? (instance.traits = []);
   const candidates = availableTraits(definition);
-  const traitId =
-    preferred && candidates.includes(preferred)
-      ? preferred
-      : candidates[Math.floor(random() * candidates.length)];
-  const existing = traits.find((trait) => trait.id === traitId);
-  if (existing) {
-    if (existing.rank >= 3) {
-      const alternative = candidates.find(
-        (candidate) =>
-          !traits.some((trait) => trait.id === candidate && trait.rank >= 3),
-      );
-      if (!alternative) return null;
-      traits.push({ id: alternative, rank: 1 });
-      if (alternative === "charged") {
-        instance.maxCharges = (instance.maxCharges ?? 3) + 1;
-        instance.charges = Math.min(
-          instance.maxCharges,
-          (instance.charges ?? 0) + 1,
-        );
-      }
-      return alternative;
-    }
-    existing.rank += 1;
-  } else {
-    traits.push({ id: traitId, rank: 1 });
-  }
-  if (traitId === "charged") {
-    instance.maxCharges = (instance.maxCharges ?? 3) + 1;
-    instance.charges = Math.min(
-      instance.maxCharges,
-      (instance.charges ?? 0) + 1,
-    );
-  }
+  const traitId = preferred && candidates.includes(preferred)
+    ? preferred
+    : candidates[Math.floor(random() * candidates.length)] ?? defaultTrait(definition);
+  const grade = traits.length === 0
+    ? normalizeItemGrade(instance.grade)
+    : rollEnchantmentGrade(normalizeItemGrade(instance.grade), random);
+  traits.push({ id: traitId, grade });
+  if (traitId === "charged") applyChargedTrait(instance, definition, grade);
   return traitId;
 }
 
@@ -355,16 +504,58 @@ export function upgradeEquipmentInstance(
   instance: InventoryInstance,
   amount = 1,
 ) {
-  instance.upgradeLevel = Math.max(
-    0,
-    (instance.upgradeLevel ?? 0) + amount,
-  );
+  const grade = normalizeItemGrade(instance.grade);
+  instance.upgradeLevel = Math.max(0, (instance.upgradeLevel ?? 0) + amount);
+  instance.grade = grade;
 }
+
+const formatPower = (value: number) =>
+  value.toFixed(value % 1 ? 2 : 0).replace(/0$/, "");
+
+const traitDescriptions = (id: EquipmentTraitId, grade: ItemGrade) => {
+  const power = enchantmentGradePower(grade);
+  const value = formatPower(power);
+  const speed = formatPower(power * 5);
+  const charges = chargedBonus(grade);
+  switch (id) {
+    case "keen":
+      return { ko: `공격력 +${value}`, en: `Attack +${value}` };
+    case "guarded":
+      return { ko: `방어력 +${value}`, en: `Defense +${value}` };
+    case "focused":
+      return { ko: `마력 +${value}`, en: `Magic +${value}` };
+    case "balanced":
+      return {
+        ko: `공격력·방어력 +${value}`,
+        en: `Attack and defense +${value}`,
+      };
+    case "swift":
+      return {
+        ko: `이동·공격 속도 +${speed}%`,
+        en: `Move and attack speed +${speed}%`,
+      };
+    case "charged":
+      return {
+        ko: `지팡이 최대 충전 +${charges}`,
+        en: `Maximum wand charges +${charges}`,
+      };
+  }
+};
 
 export const equipmentTraitSummary = (
   instance: InventoryInstance | null | undefined,
-) =>
-  (instance?.traits ?? []).map((trait: EquipmentTrait) => ({
-    ...EQUIPMENT_TRAITS[trait.id],
-    rank: trait.rank,
-  }));
+): EquipmentTraitSummary[] => {
+  const fallback = normalizeItemGrade(instance?.grade);
+  return (instance?.traits ?? []).map((trait) => {
+    const grade = traitGrade(trait, fallback);
+    const descriptions = traitDescriptions(trait.id, grade);
+    return {
+      ...EQUIPMENT_TRAITS[trait.id],
+      grade,
+      gradeColor: ITEM_GRADE_COLORS[grade],
+      power: enchantmentGradePower(grade),
+      description: descriptions.ko,
+      descriptionEn: descriptions.en,
+    };
+  });
+};

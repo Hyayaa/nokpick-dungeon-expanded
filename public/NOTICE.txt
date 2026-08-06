@@ -1,6 +1,6 @@
 Shattered Web Dungeon is an unofficial, modified web prototype.
 
-Shattered Pixel Dungeon code, graphic assets, and sound effects:
+Shattered Pixel Dungeon code, graphic assets, sound effects, and music:
 Copyright (C) 2014-2026 Evan Debenham.
 
 Pixel Dungeon original code and art:

@@ -1,85 +1,28 @@
 import type {
   CloudKind,
-  CompanionSkillId,
-  CompanionSkillVisual,
-  Point,
-} from "./types";
-
-export type PixelEffectLayer = "ground" | "actor" | "overlay";
-
-type PixelEffectBase = {
-  id: string;
-  layer: PixelEffectLayer;
-  startedAt: number;
-  duration: number;
-  color: string;
-  worldPixelSize?: number;
-  clipBounds?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-};
-
-export type PixelParticleEffect = PixelEffectBase & {
-  kind: "particle";
-  x: number;
-  y: number;
-  velocityX: number;
-  velocityY: number;
-  gravity: number;
-  drag: number;
-  size: number;
-};
-
-export type PixelRingEffect = PixelEffectBase & {
-  kind: "ring";
-  x: number;
-  y: number;
-  startRadius: number;
-  endRadius: number;
-  aspectY: number;
-  pixelSize: number;
-  segments: number;
-};
-
-export type PixelScreenFlashEffect = PixelEffectBase & {
-  kind: "screenFlash";
-  strength: number;
-};
-
-export type PixelWaterFrontierEffect = PixelEffectBase & {
-  kind: "waterFrontier";
-  worldPixelSize: number;
-  expansionDuration: number;
-  holdDuration: number;
-  fadeDuration: number;
-  rings: Uint16Array[];
-  edgeRings: Uint16Array[];
-};
-
-export type PixelEffect =
-  | PixelParticleEffect
-  | PixelRingEffect
-  | PixelScreenFlashEffect
-  | PixelWaterFrontierEffect;
-
-export type PixelEffectViewport = {
-  screenX: (worldX: number) => number;
-  screenY: (worldY: number) => number;
-  zoom: number;
-  width: number;
-  height: number;
-};
-
-export type PixelCameraShake = {
-  id: string;
-  startedAt: number;
-  duration: number;
-  amplitude: number;
-  seed: number;
-};
+} from "../game/types";
+import { retainInPlace } from "./animation-runtime";
+import { PIXEL_EFFECT_CELLS_PER_TILE } from "./pixel-effect-types";
+import type {
+  PixelCameraShake,
+  PixelEffect,
+  PixelEffectLayer,
+  PixelEffectViewport,
+  PixelParticleEffect,
+} from "./pixel-effect-types";
+export type {
+  PixelCameraShake,
+  PixelClipBounds,
+  PixelEffect,
+  PixelEffectBase,
+  PixelEffectLayer,
+  PixelEffectViewport,
+  PixelParticleEffect,
+  PixelRingEffect,
+  PixelScreenFlashEffect,
+  PixelWaterFrontierEffect,
+} from "./pixel-effect-types";
+export { createCompanionSkillEffects } from "./skill-particle-recipes";
 
 type EffectOrigin = {
   idPrefix: string;
@@ -132,8 +75,14 @@ const gridPixel = (
   size: 1 | 2 = 1,
 ) => {
   pixels.push({
-    x: Math.max(0, Math.min(16 - size, Math.round(x))),
-    y: Math.max(0, Math.min(16 - size, Math.round(y))),
+    x: Math.max(
+      0,
+      Math.min(PIXEL_EFFECT_CELLS_PER_TILE - size, Math.round(x)),
+    ),
+    y: Math.max(
+      0,
+      Math.min(PIXEL_EFFECT_CELLS_PER_TILE - size, Math.round(y)),
+    ),
     size,
     color,
     alpha: Math.max(0, Math.min(1, alpha)),
@@ -263,7 +212,7 @@ export function createDustEffects(
   random: () => number = Math.random,
   tileSize = 48,
 ): PixelEffect[] {
-  const worldPixelSize = tileSize / 16;
+  const worldPixelSize = tileSize / PIXEL_EFFECT_CELLS_PER_TILE;
   const tileX = Math.floor(origin.x / tileSize) * tileSize;
   const tileY = Math.floor(origin.y / tileSize) * tileSize;
   const clipBounds = {
@@ -291,7 +240,7 @@ export function createDustEffects(
       velocityY: -worldPixelSize * (5 + random() * 7),
       gravity: worldPixelSize * (15 + random() * 7),
       drag: 0.38,
-      size: index % 5 === 0 ? 2 : 1,
+      cellSize: index % 5 === 0 ? 2 : 1,
       color: COLORS.dust[Math.floor(random() * COLORS.dust.length)],
       startedAt: origin.startedAt + random() * 30,
       duration: 360 + random() * 220,
@@ -384,7 +333,7 @@ export function createWaterRippleEffects(
   tileSize = 48,
 ): PixelEffect[] {
   if (waterTiles.length === 0) return [];
-  const pixelsPerTile = 16;
+  const pixelsPerTile = PIXEL_EFFECT_CELLS_PER_TILE;
   const worldPixelSize = tileSize / pixelsPerTile;
   let minimumTileX = waterTiles[0].x;
   let maximumTileX = waterTiles[0].x;
@@ -512,7 +461,7 @@ export function createHitEffects(
   random: () => number = Math.random,
   tileSize = 48,
 ): PixelEffect[] {
-  const worldPixelSize = tileSize / 16;
+  const worldPixelSize = tileSize / PIXEL_EFFECT_CELLS_PER_TILE;
   const tileX = Math.floor(origin.x / tileSize) * tileSize;
   const tileY = Math.floor(origin.y / tileSize) * tileSize;
   const clipBounds = {
@@ -540,7 +489,7 @@ export function createHitEffects(
       velocityY: Math.sin(angle) * speed - 10,
       gravity: worldPixelSize * 22,
       drag: 0.14,
-      size: index % 4 === 0 ? 2 : 1,
+      cellSize: index % 4 === 0 ? 2 : 1,
       color:
         origin.color ??
         palette[Math.floor(random() * palette.length)],
@@ -592,7 +541,7 @@ export function createEnchantEffects(
   random: () => number = Math.random,
   tileSize = 48,
 ): PixelEffect[] {
-  const worldPixelSize = tileSize / 16;
+  const worldPixelSize = tileSize / PIXEL_EFFECT_CELLS_PER_TILE;
   const tileX = Math.floor(origin.x / tileSize) * tileSize;
   const tileY = Math.floor(origin.y / tileSize) * tileSize;
   const clipBounds = { x: tileX, y: tileY, width: tileSize, height: tileSize };
@@ -609,7 +558,7 @@ export function createEnchantEffects(
       velocityY: Math.sin(angle) * speed - worldPixelSize * 5,
       gravity: worldPixelSize * 5,
       drag: 0.18,
-      size: index % 6 === 0 ? 2 : 1,
+      cellSize: index % 6 === 0 ? 2 : 1,
       color: COLORS.enchant[index % COLORS.enchant.length],
       startedAt: origin.startedAt + random() * 70,
       duration: 420 + random() * 220,
@@ -659,7 +608,7 @@ export function createLevelUpEffects(
         velocityY: -(42 + random() * 72) + Math.sin(angle) * 12,
         gravity: 12 + random() * 15,
         drag: 0.08,
-        size: index % 7 === 0 ? 3 : index % 3 === 0 ? 2 : 1,
+        cellSize: index % 3 === 0 ? 2 : 1,
         color: COLORS.level[index % COLORS.level.length],
         startedAt: origin.startedAt + random() * 170,
         duration: 720 + random() * 520,
@@ -676,7 +625,7 @@ export function createLevelUpEffects(
       startRadius: 3 + index * 2,
       endRadius: 30 + index * 9,
       aspectY: 0.46,
-      pixelSize: 1.5,
+      pixelSize: 2,
       segments: 28,
       color: COLORS.level[index],
       startedAt: origin.startedAt + delay,
@@ -695,280 +644,45 @@ export function createLevelUpEffects(
   return effects;
 }
 
-const SKILL_EFFECT_RADII: Partial<Record<CompanionSkillId, number>> = {
-  shockLeap: 1,
-  fireball: 1,
-  whirlwind: 1,
-  frostNova: 1,
-  entanglingRoots: 2,
-  shadowStep: 1,
-  seismicSlam: 2,
-};
-
-const SKILL_EFFECT_PALETTES: Partial<
-  Record<CompanionSkillId, readonly [string, string, string, string]>
-> = {
-  fireball: ["#fff4bd", "#ffd45f", "#ff8246", "#d9452f"],
-  arcaneDischarge: ["#ffffff", "#dfc5ff", "#a986d8", "#7056a8"],
-  chainLightning: ["#ffffff", "#fff69b", "#aeeaff", "#6bbde7"],
-  frostNova: ["#ffffff", "#d9f8ff", "#8ee9ff", "#67aeca"],
-  toxicOrb: ["#e4f29b", "#a9d56e", "#79ae58", "#426d3d"],
-  corrosiveFlask: ["#f1ec9c", "#c8d95e", "#8db542", "#57712f"],
-  entanglingRoots: ["#d6e59a", "#9bc878", "#6d9f62", "#4d6f3e"],
-  shadowStep: ["#f1e9ff", "#c7a8ff", "#776c9b", "#3d355d"],
-  fieldMedicine: ["#ffffff", "#baf7c7", "#69cf85", "#3c8f57"],
-  wardingSigil: ["#ffffff", "#ddc9ff", "#a98bd0", "#6f519a"],
-  seismicSlam: ["#fff0c4", "#dfbd83", "#aa875d", "#6f5137"],
-  lifeDrain: ["#ffe0f8", "#d68bc9", "#a66a9f", "#643c67"],
-};
-
-const STRONG_SKILL_FLASHES = new Set<CompanionSkillId>([
-  "shockLeap",
-  "fireball",
-  "arcaneDischarge",
-  "chainLightning",
-  "frostNova",
-  "seismicSlam",
-]);
-
-const skillRandom = (seed: string) => {
-  let value = 0x811c9dc5;
-  for (const character of seed) {
-    value ^= character.charCodeAt(0);
-    value = Math.imul(value, 0x01000193);
-  }
-  return () => {
-    value += 0x6d2b79f5;
-    let mixed = value;
-    mixed = Math.imul(mixed ^ (mixed >>> 15), mixed | 1);
-    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 0x100000000;
-  };
-};
-
-const skillLineTiles = (from: Point, to: Point) => {
-  const steps = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y));
-  if (steps === 0) return [{ ...from }];
-  const points: Point[] = [];
-  const seen = new Set<string>();
-  for (let index = 0; index <= steps; index += 1) {
-    const point = {
-      x: Math.round(from.x + ((to.x - from.x) * index) / steps),
-      y: Math.round(from.y + ((to.y - from.y) * index) / steps),
-    };
-    const key = `${point.x},${point.y}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    points.push(point);
-  }
-  return points;
-};
-
-const skillAreaTiles = (center: Point, radius: number) => {
-  const points: Point[] = [];
-  for (let y = center.y - radius; y <= center.y + radius; y += 1) {
-    for (let x = center.x - radius; x <= center.x + radius; x += 1) {
-      if (Math.max(Math.abs(x - center.x), Math.abs(y - center.y)) <= radius) {
-        points.push({ x, y });
-      }
-    }
-  }
-  return points;
-};
-
-/**
- * Builds manual-skill particles on a logical 16×16 pixel grid per dungeon
- * tile. Every moving mark is clipped to its own tile; long casts therefore
- * travel as a sequence of crisp tile-local sparks instead of blurry vectors.
- */
-export function createCompanionSkillEffects(
-  visual: CompanionSkillVisual,
-  startedAt: number,
-  tileSize = 48,
-): PixelEffect[] {
-  const worldPixelSize = tileSize / 16;
-  const random = skillRandom(`${visual.id}:${visual.skillId}`);
-  const palette =
-    SKILL_EFFECT_PALETTES[visual.skillId] ??
-    (["#ffffff", "#fff0b8", visual.accent, "#6d604d"] as const);
-  const tileBounds = (point: Point) => ({
-    x: point.x * tileSize,
-    y: point.y * tileSize,
-    width: tileSize,
-    height: tileSize,
-  });
-  const tileCenter = (point: Point) => ({
-    x: (point.x + 0.5) * tileSize,
-    y: (point.y + 0.5) * tileSize,
-  });
-  const effects: PixelEffect[] = [];
-  const pushBurst = (
-    point: Point,
-    count: number,
-    delay: number,
-    strength: number,
-    idLabel: string,
-  ) => {
-    const center = tileCenter(point);
-    const clipBounds = tileBounds(point);
-    for (let index = 0; index < count; index += 1) {
-      const angle =
-        (index / Math.max(1, count)) * Math.PI * 2 +
-        (random() - 0.5) * 0.38;
-      const speed = worldPixelSize * (8 + random() * 14) * strength;
-      effects.push({
-        id: `${visual.id}-${idLabel}-particle-${index}`,
-        kind: "particle",
-        layer: index % 5 === 0 ? "overlay" : "actor",
-        x:
-          center.x +
-          (Math.floor(random() * 5) - 2) * worldPixelSize,
-        y:
-          center.y +
-          (Math.floor(random() * 5) - 2) * worldPixelSize,
-        velocityX: Math.cos(angle) * speed,
-        velocityY: Math.sin(angle) * speed - worldPixelSize * 3 * strength,
-        gravity:
-          visual.skillId === "fieldMedicine" ||
-          visual.skillId === "entanglingRoots"
-            ? -worldPixelSize * 3
-            : worldPixelSize * 10,
-        drag: 0.16,
-        size: index % 6 === 0 ? 2 : 1,
-        color: palette[index % palette.length],
-        startedAt: startedAt + delay + random() * 45,
-        duration: 330 + random() * 220,
-        worldPixelSize,
-        clipBounds,
-      });
-    }
-    [0, 70].forEach((ringDelay, index) => {
-      effects.push({
-        id: `${visual.id}-${idLabel}-ring-${index}`,
-        kind: "ring",
-        layer: "actor",
-        x: center.x,
-        y: center.y,
-        startRadius: worldPixelSize * (1 + index),
-        endRadius: tileSize * (index === 0 ? 0.34 : 0.47),
-        aspectY: visual.skillId === "seismicSlam" ? 0.42 : 0.82,
-        pixelSize: index === 0 ? 2 : 1,
-        segments: index === 0 ? 16 : 24,
-        color: palette[index],
-        startedAt: startedAt + delay + ringDelay,
-        duration: 340 + index * 90,
-        worldPixelSize,
-        clipBounds,
-      });
-    });
-  };
-
-  pushBurst(visual.from, 12, 0, 0.72, "cast");
-
-  const lineTiles = skillLineTiles(visual.from, visual.to);
-  const directionLength = Math.max(
-    1,
-    Math.hypot(visual.to.x - visual.from.x, visual.to.y - visual.from.y),
-  );
-  const direction = {
-    x: (visual.to.x - visual.from.x) / directionLength,
-    y: (visual.to.y - visual.from.y) / directionLength,
-  };
-  lineTiles.slice(1).forEach((point, pathIndex) => {
-    const clipBounds = tileBounds(point);
-    const center = tileCenter(point);
-    for (let index = 0; index < 4; index += 1) {
-      const side = (random() - 0.5) * worldPixelSize * 5;
-      effects.push({
-        id: `${visual.id}-trail-${pathIndex}-${index}`,
-        kind: "particle",
-        layer: "actor",
-        x: center.x - direction.y * side,
-        y: center.y + direction.x * side,
-        velocityX:
-          direction.x * worldPixelSize * (11 + random() * 8) -
-          direction.y * side,
-        velocityY:
-          direction.y * worldPixelSize * (11 + random() * 8) +
-          direction.x * side,
-        gravity: 0,
-        drag: 0.28,
-        size: index === 0 ? 2 : 1,
-        color: palette[(pathIndex + index) % palette.length],
-        startedAt: startedAt + 60 + pathIndex * 22 + index * 12,
-        duration: 210 + random() * 120,
-        worldPixelSize,
-        clipBounds,
-      });
-    }
-  });
-
-  const impactDelay = 135 + Math.min(190, Math.max(0, lineTiles.length - 1) * 22);
-  const radius = SKILL_EFFECT_RADII[visual.skillId] ?? 0;
-  const areaTiles = skillAreaTiles(visual.to, radius);
-  areaTiles.forEach((point, areaIndex) => {
-    if (point.x === visual.to.x && point.y === visual.to.y) return;
-    const center = tileCenter(point);
-    const clipBounds = tileBounds(point);
-    for (let index = 0; index < 4; index += 1) {
-      const angle = random() * Math.PI * 2;
-      const speed = worldPixelSize * (5 + random() * 7);
-      effects.push({
-        id: `${visual.id}-area-${areaIndex}-${index}`,
-        kind: "particle",
-        layer: index === 0 ? "overlay" : "actor",
-        x:
-          center.x +
-          (Math.floor(random() * 9) - 4) * worldPixelSize,
-        y:
-          center.y +
-          (Math.floor(random() * 9) - 4) * worldPixelSize,
-        velocityX: Math.cos(angle) * speed,
-        velocityY: Math.sin(angle) * speed - worldPixelSize * 2,
-        gravity: worldPixelSize * 6,
-        drag: 0.24,
-        size: index === 0 ? 2 : 1,
-        color: palette[(areaIndex + index) % palette.length],
-        startedAt: startedAt + impactDelay + random() * 95,
-        duration: 300 + random() * 210,
-        worldPixelSize,
-        clipBounds,
-      });
-    }
-  });
-
-  pushBurst(visual.to, radius > 0 ? 24 : 20, impactDelay, 1.1, "impact");
-  if (STRONG_SKILL_FLASHES.has(visual.skillId)) {
-    effects.push({
-      id: `${visual.id}-flash`,
-      kind: "screenFlash",
-      layer: "overlay",
-      color: palette[1],
-      strength: 0.075,
-      startedAt: startedAt + impactDelay,
-      duration: 260,
-    });
-  }
-  return effects;
-}
 
 export const prunePixelEffects = (
   effects: PixelEffect[],
   now: number,
 ) =>
-  effects.filter(
+  retainInPlace(
+    effects,
     (effect) => now < effect.startedAt + effect.duration,
   );
 
+export type PixelEffectBuckets = Record<PixelEffectLayer, PixelEffect[]>;
+
+export const createPixelEffectBuckets = (): PixelEffectBuckets => ({
+  ground: [],
+  actor: [],
+  overlay: [],
+});
+
+export const syncPixelEffectBuckets = (
+  effects: readonly PixelEffect[],
+  buckets: PixelEffectBuckets,
+) => {
+  buckets.ground.length = 0;
+  buckets.actor.length = 0;
+  buckets.overlay.length = 0;
+  for (const effect of effects) buckets[effect.layer].push(effect);
+  return buckets;
+};
+
 export function drawPixelEffects(
   context: CanvasRenderingContext2D,
-  effects: PixelEffect[],
+  effects: readonly PixelEffect[],
   now: number,
   viewport: PixelEffectViewport,
-  layer: PixelEffectLayer,
+  layer?: PixelEffectLayer,
 ) {
+  context.save();
   for (const effect of effects) {
-    if (effect.layer !== layer || now < effect.startedAt) continue;
+    if ((layer && effect.layer !== layer) || now < effect.startedAt) continue;
     const progress = Math.max(
       0,
       Math.min(1, (now - effect.startedAt) / effect.duration),
@@ -1056,8 +770,8 @@ export function drawPixelEffects(
           worldPixelSize / 2
         : value;
     const beginClippedEffect = () => {
+      if (!effect.clipBounds) return false;
       context.save();
-      if (!effect.clipBounds) return;
       context.beginPath();
       context.rect(
         Math.round(viewport.screenX(effect.clipBounds.x)),
@@ -1066,6 +780,7 @@ export function drawPixelEffects(
         Math.ceil(effect.clipBounds.height * viewport.zoom),
       );
       context.clip();
+      return true;
     };
     if (effect.kind === "ring") {
       const radius =
@@ -1077,11 +792,20 @@ export function drawPixelEffects(
           effect.pixelSize * worldPixelSize * viewport.zoom,
         ),
       );
-      beginClippedEffect();
+      const clipped = beginClippedEffect();
       context.globalAlpha = fade * (0.72 + Math.sin(progress * Math.PI) * 0.28);
       context.fillStyle = effect.color;
+      const startAngle = effect.startAngle ?? 0;
+      const configuredSweep = effect.sweepAngle ?? Math.PI * 2;
+      const sweepAngle = effect.revealProgress
+        ? configuredSweep * easeOut(progress)
+        : configuredSweep;
+      const isFullRing = Math.abs(sweepAngle) >= Math.PI * 2 - 0.0001;
+      const denominator = isFullRing
+        ? effect.segments
+        : Math.max(1, effect.segments - 1);
       for (let segment = 0; segment < effect.segments; segment += 1) {
-        const angle = (segment / effect.segments) * Math.PI * 2;
+        const angle = startAngle + (segment / denominator) * sweepAngle;
         const worldX = snapWorldPixel(
           effect.x + Math.cos(angle) * radius,
         );
@@ -1098,7 +822,7 @@ export function drawPixelEffects(
           pixelSize,
         );
       }
-      context.restore();
+      if (clipped) context.restore();
       continue;
     }
 
@@ -1116,9 +840,9 @@ export function drawPixelEffects(
     const y = viewport.screenY(worldY);
     const pixelSize = Math.max(
       1,
-      Math.round(effect.size * worldPixelSize * viewport.zoom),
+      Math.round(effect.cellSize * worldPixelSize * viewport.zoom),
     );
-    beginClippedEffect();
+    const clipped = beginClippedEffect();
     context.globalAlpha = fade;
     context.fillStyle = effect.color;
     context.fillRect(
@@ -1127,7 +851,7 @@ export function drawPixelEffects(
       pixelSize,
       pixelSize,
     );
-    if (effect.size >= 2 && progress < 0.48) {
+    if (effect.cellSize >= 2 && progress < 0.48) {
       const trailWorldX = snapWorldPixel(
         worldX - effect.velocityX * 0.025,
       );
@@ -1142,15 +866,19 @@ export function drawPixelEffects(
         pixelSize,
       );
     }
-    context.restore();
+    if (clipped) context.restore();
   }
+  context.restore();
 }
 
 export const pruneCameraShakes = (
   shakes: PixelCameraShake[],
   now: number,
 ) =>
-  shakes.filter((shake) => now < shake.startedAt + shake.duration);
+  retainInPlace(
+    shakes,
+    (shake) => now < shake.startedAt + shake.duration,
+  );
 
 export function cameraShakeOffset(
   shakes: PixelCameraShake[],

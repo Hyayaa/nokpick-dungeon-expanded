@@ -1,4 +1,4 @@
-import { Motion } from "./types";
+import { ActionInteractionKind, Motion } from "../game/types";
 
 export const MIN_ACTION_DURATION = 112;
 // 160ms / 1.3: faster presentation only; the movement-speed stat is unchanged.
@@ -10,10 +10,19 @@ export const ENEMY_ATTACK_DURATION = 160;
 // not leave the player standing still for 57ms at the end of every tile.
 export const COMPANION_MOVE_DURATION = PLAYER_MOVE_DURATION;
 export const COMPANION_ATTACK_DURATION = 240;
+export const SKILL_LEAP_DURATION = 260;
+export const SKILL_TELEPORT_DURATION = 220;
+export const SKILL_CHARGE_DURATION = 160;
 export const PLAYER_INTERACTION_DURATION = 360;
 export const PLAYER_PICKUP_DURATION = 50;
 export const ATTACK_START_DELAY = 70;
 export const ATTACK_SEQUENCE_GAP = 45;
+
+export const durationForInteraction = (
+  kind: ActionInteractionKind | undefined,
+) => kind === "pickup"
+  ? PLAYER_PICKUP_DURATION
+  : PLAYER_INTERACTION_DURATION;
 
 export type ScheduledMotion = {
   motion: Motion;
@@ -36,6 +45,9 @@ export const durationForMotion = (motion: Motion) => {
       : ENEMY_ATTACK_DURATION;
   }
   if (motion.kind === "move") {
+    if (motion.travelStyle === "leap") return SKILL_LEAP_DURATION;
+    if (motion.travelStyle === "teleport") return SKILL_TELEPORT_DURATION;
+    if (motion.travelStyle === "charge") return SKILL_CHARGE_DURATION;
     if (motion.id.startsWith("companion-")) {
       return COMPANION_MOVE_DURATION;
     }
@@ -47,6 +59,19 @@ export const durationForMotion = (motion: Motion) => {
     return PLAYER_INTERACTION_DURATION;
   }
   return MIN_ACTION_DURATION;
+};
+
+export const impactDelayForMotion = (motion: Motion) => {
+  const duration = durationForMotion(motion);
+  if (motion.kind !== "move") return duration * 0.52;
+  if (motion.travelStyle === "teleport") return duration * 0.62;
+  if (
+    motion.travelStyle === "leap" ||
+    motion.travelStyle === "charge"
+  ) {
+    return Math.max(0, duration - 10);
+  }
+  return duration;
 };
 
 export function createTurnMotionTimeline(

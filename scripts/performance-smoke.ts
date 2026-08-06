@@ -9,6 +9,8 @@ import {
   runEnemyTurn,
   setCompanionCommand,
 } from "../app/game/engine";
+import { companionSkillBlueprint } from "../app/game/companion-skill-blueprints";
+import { COMPANION_SKILL_IDS } from "../app/game/companion-skills";
 import { COMPANION_CLASS_IDS } from "../app/game/companions";
 import {
   createDungeonRenderCache,
@@ -16,12 +18,18 @@ import {
   overlayFrameAt,
   syncDungeonRenderCache,
   terrainFrameAt,
-} from "../app/game/render-cache";
+} from "../app/presentation/render-cache";
 import {
   fogMasksForTile,
   terrainVisual,
   wallOverlayVisual,
-} from "../app/game/render";
+} from "../app/presentation/render";
+import { retainInPlace } from "../app/presentation/animation-runtime";
+import {
+  createPixelEffectBuckets,
+  syncPixelEffectBuckets,
+} from "../app/presentation/pixel-effects";
+import { createCompanionSkillEffects } from "../app/presentation/skill-particle-recipes";
 
 const besidePlayer = (state: ReturnType<typeof createNewGame>) => {
   const dx = state.player.x + 1 < state.width ? 1 : -1;
@@ -33,11 +41,49 @@ const besidePlayer = (state: ReturnType<typeof createNewGame>) => {
   };
 };
 
+const animationRecords = [1, 2, 3, 4];
+const animationRecordsIdentity = animationRecords;
+assert.equal(retainInPlace(animationRecords, (value) => value % 2 === 0), animationRecordsIdentity);
+assert.deepEqual(animationRecords, [2, 4]);
+const pixelEffectBuckets = createPixelEffectBuckets();
+const bucketedPixelEffects = [
+  {
+    id: "ground",
+    kind: "particle" as const,
+    layer: "ground" as const,
+    x: 0,
+    y: 0,
+    velocityX: 0,
+    velocityY: 0,
+    gravity: 0,
+    drag: 0,
+    cellSize: 1,
+    color: "#fff",
+    startedAt: 0,
+    duration: 1,
+  },
+  {
+    id: "overlay",
+    kind: "screenFlash" as const,
+    layer: "overlay" as const,
+    color: "#fff",
+    strength: 1,
+    startedAt: 0,
+    duration: 1,
+  },
+];
+syncPixelEffectBuckets(bucketedPixelEffects, pixelEffectBuckets);
+assert.equal(pixelEffectBuckets.ground[0], bucketedPixelEffects[0]);
+assert.equal(pixelEffectBuckets.actor.length, 0);
+assert.equal(pixelEffectBuckets.overlay[0], bucketedPixelEffects[1]);
+
 const cacheState = createNewGame(0xcac4e);
 const cache = createDungeonRenderCache();
 syncDungeonRenderCache(cache, cacheState);
 assert.equal(cache.tileRebuilds, 1);
 assert.equal(cache.fogRevision, 1);
+assert.equal(cache.terrainRebuilds, 1);
+assert.equal(cache.visibilityRebuilds, 1);
 
 for (let y = 0; y < cacheState.height; y += 1) {
   for (let x = 0; x < cacheState.width; x += 1) {
@@ -91,6 +137,62 @@ assert.equal(cache.tileRebuilds, 1);
 assert.equal(cache.fogRevision, fogRevisionBeforeQuickSlot);
 assert.equal(cache.tileCacheHits, 1);
 
+const visibilityOnlyState = {
+  ...autoSlotState,
+  tiles: autoSlotState.tiles.map((row) => row.map((tile) => ({ ...tile }))),
+};
+const visibilityTile =
+  visibilityOnlyState.tiles[visibilityOnlyState.player.y][
+    visibilityOnlyState.player.x
+  ];
+const wasVisible = Boolean(
+  visibilityTile.visibleMask || visibilityTile.visible,
+);
+visibilityTile.visible = !wasVisible;
+visibilityTile.visibleMask = wasVisible ? 0 : 15;
+const terrainRebuildsBeforeVisibility = cache.terrainRebuilds;
+const visibilityRebuildsBeforeVisibility = cache.visibilityRebuilds;
+syncDungeonRenderCache(cache, visibilityOnlyState);
+assert.equal(
+  cache.terrainRebuilds,
+  terrainRebuildsBeforeVisibility,
+  "FOV-only state changes must not rebuild terrain atlas lookups",
+);
+assert.equal(
+  cache.visibilityRebuilds,
+  visibilityRebuildsBeforeVisibility + 1,
+  "FOV-only state changes must rebuild visibility exactly once",
+);
+
+let companionSortState = developerRecruitCompanion(
+  visibilityOnlyState,
+  COMPANION_CLASS_IDS[0],
+);
+companionSortState = developerRecruitCompanion(
+  companionSortState,
+  COMPANION_CLASS_IDS[1],
+);
+companionSortState = {
+  ...companionSortState,
+  tiles: visibilityOnlyState.tiles,
+};
+companionSortState.companions[0].y = companionSortState.player.y + 1;
+companionSortState.companions[1].y = companionSortState.player.y - 1;
+const tileRebuildsBeforeCompanions = cache.tileRebuilds;
+syncDungeonRenderCache(cache, companionSortState);
+assert.equal(
+  cache.tileRebuilds,
+  tileRebuildsBeforeCompanions,
+  "actor-only state changes must not rebuild tile caches",
+);
+assert.deepEqual(
+  cache.sortedCompanions.map(({ id }) => id),
+  [...companionSortState.companions]
+    .sort((a, b) => a.y - b.y || a.x - b.x)
+    .map(({ id }) => id),
+  "companion render order must be cached when the actor collection changes",
+);
+
 const movementState = createNewGame(0x50eed);
 movementState.enemies = [];
 movementState.objects = [];
@@ -107,7 +209,7 @@ assert.notEqual(
   "movement/FOV changes must produce a new tile-grid revision",
 );
 syncDungeonRenderCache(cache, movement.state);
-assert.equal(cache.tileRebuilds, 2);
+assert.equal(cache.tileRebuilds, tileRebuildsBeforeCompanions + 1);
 
 const attackState = createNewGame(0xa77ac);
 attackState.objects = [];
@@ -164,12 +266,16 @@ assert.equal(
 
 const benchmark = (iterations: number, action: () => unknown) => {
   for (let index = 0; index < 25; index += 1) action();
-  const startedAt = performance.now();
-  for (let index = 0; index < iterations; index += 1) action();
-  const totalMs = performance.now() - startedAt;
+  const totals = Array.from({ length: 7 }, () => {
+    const startedAt = performance.now();
+    for (let index = 0; index < iterations; index += 1) action();
+    return performance.now() - startedAt;
+  }).sort((a, b) => a - b);
+  const totalMs = totals[Math.floor(totals.length / 2)];
   return {
     totalMs: Number(totalMs.toFixed(2)),
     perActionMs: Number((totalMs / iterations).toFixed(3)),
+    samples: totals.length,
   };
 };
 
@@ -200,6 +306,32 @@ for (const companion of companionPerformanceState.companions) {
 const companionTiming = benchmark(120, () =>
   runEnemyTurn(companionPerformanceState),
 );
+const skillVisuals = COMPANION_SKILL_IDS.map((skillId, index) => {
+  const blueprint = companionSkillBlueprint(skillId);
+  return {
+    id: `particle-performance-${skillId}`,
+    skillId,
+    from: { x: 2, y: 2 },
+    to: { x: 8, y: 6 },
+    travelMode: blueprint.travelMode,
+    impactMode: blueprint.impactMode,
+    radius: blueprint.scalars.radius ?? 0,
+    accent: blueprint.accent,
+    startedAt: index,
+  };
+});
+const particleCounts = skillVisuals.map((visual) =>
+  createCompanionSkillEffects(visual, visual.startedAt, 48).length,
+);
+const particleTiming = benchmark(100, () => {
+  for (const visual of skillVisuals) {
+    createCompanionSkillEffects(visual, visual.startedAt, 48);
+  }
+});
+assert.ok(
+  Math.max(...particleCounts) <= 256,
+  `one skill emitted ${Math.max(...particleCounts)} simultaneous effects`,
+);
 assert.ok(
   attackTiming.perActionMs < 4,
   `attack-state update regressed to ${attackTiming.perActionMs}ms/action`,
@@ -210,16 +342,26 @@ assert.ok(
 );
 assert.ok(
   companionTiming.perActionMs < 12,
-  `six-companion AI/FOV regressed to ${companionTiming.perActionMs}ms/turn`,
+  `registered-companion AI/FOV regressed to ${companionTiming.perActionMs}ms/turn`,
+);
+assert.ok(
+  particleTiming.perActionMs < 10,
+  `the complete skill-particle catalog regressed to ${particleTiming.perActionMs}ms/pass`,
 );
 
 console.log(
   JSON.stringify({
     map: `${cacheState.width}x${cacheState.height}`,
     tileRebuilds: cache.tileRebuilds,
+    terrainRebuilds: cache.terrainRebuilds,
+    visibilityRebuilds: cache.visibilityRebuilds,
     tileCacheHits: cache.tileCacheHits,
+    companionClasses: COMPANION_CLASS_IDS.length,
+    companionSkills: COMPANION_SKILL_IDS.length,
+    maximumSkillEffects: Math.max(...particleCounts),
     attack500: attackTiming,
     pickup500: pickupTiming,
     companion120: companionTiming,
+    particleCatalog100: particleTiming,
   }),
 );

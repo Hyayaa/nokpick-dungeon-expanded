@@ -252,7 +252,7 @@ static int launcher_main(void) {
   static wchar_t local_url[128];
   wsprintfW(
     local_url,
-    L"http://127.0.0.1:%u/?local=%u",
+    L"http://127.0.0.1:%u/?local=%u&audio=2",
     (unsigned int)local_port,
     (unsigned int)local_port
   );
@@ -351,15 +351,13 @@ static int launcher_main(void) {
     return 1;
   }
 
-  MessageBoxW(
-    NULL,
-    L"브라우저에서 게임이 실행 중입니다.\n\n"
-    L"게임을 끝낼 때 이 창의 [확인]을 누르면 로컬 서버도 함께 종료됩니다.",
-    L"녹픽던 웹 던전 — 실행 중",
-    MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND
-  );
-
-  stop_process_tree(server_process.dwProcessId);
+  /*
+   * Do not tie the audio server to a modal acknowledgement. The previous
+   * launcher killed Node as soon as the user dismissed its "running" dialog,
+   * leaving the already-rendered game visible while every lazy MP3/OGG request
+   * failed. The local page now owns server lifetime through heartbeat/close
+   * endpoints, so the launcher can exit without interrupting the game.
+   */
   CloseHandle(server_process.hProcess);
   WSACleanup();
   return 0;

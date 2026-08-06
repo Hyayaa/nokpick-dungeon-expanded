@@ -1,22 +1,39 @@
 import { fogMasksForTile, terrainVisual, wallOverlayVisual } from "./render";
-import { Enemy, GameState } from "./types";
+import { Companion, Enemy, GameState, Terrain } from "../game/types";
 
 const EMPTY_FRAME = -1;
+const TERRAIN_CODE: Record<Terrain, number> = {
+  wall: 1,
+  floor: 2,
+  grass: 3,
+  highGrass: 4,
+  water: 5,
+  entrance: 6,
+  exit: 7,
+  door: 8,
+  openDoor: 9,
+  lockedDoor: 10,
+};
 
 export type DungeonRenderCache = {
   state: GameState | null;
   tiles: GameState["tiles"] | null;
   enemies: GameState["enemies"] | null;
+  companions: GameState["companions"] | null;
   width: number;
   height: number;
   terrainFrames: Int16Array;
   overlayFrames: Int16Array;
+  terrainKeys: Uint16Array;
   visibleMasks: Uint8Array;
   discoveredMasks: Uint8Array;
   sortedEnemies: Enemy[];
+  sortedCompanions: Companion[];
   fogRevision: number;
   stateSyncs: number;
   tileRebuilds: number;
+  terrainRebuilds: number;
+  visibilityRebuilds: number;
   tileCacheHits: number;
 };
 
@@ -25,16 +42,21 @@ export function createDungeonRenderCache(): DungeonRenderCache {
     state: null,
     tiles: null,
     enemies: null,
+    companions: null,
     width: 0,
     height: 0,
     terrainFrames: new Int16Array(),
     overlayFrames: new Int16Array(),
+    terrainKeys: new Uint16Array(),
     visibleMasks: new Uint8Array(),
     discoveredMasks: new Uint8Array(),
     sortedEnemies: [],
+    sortedCompanions: [],
     fogRevision: 0,
     stateSyncs: 0,
     tileRebuilds: 0,
+    terrainRebuilds: 0,
+    visibilityRebuilds: 0,
     tileCacheHits: 0,
   };
 }
@@ -42,6 +64,7 @@ export function createDungeonRenderCache(): DungeonRenderCache {
 function allocateTileBuffers(cache: DungeonRenderCache, size: number) {
   cache.terrainFrames = new Int16Array(size);
   cache.overlayFrames = new Int16Array(size);
+  cache.terrainKeys = new Uint16Array(size);
   cache.visibleMasks = new Uint8Array(size);
   cache.discoveredMasks = new Uint8Array(size);
 }
@@ -67,6 +90,12 @@ export function syncDungeonRenderCache(
     cache.enemies = state.enemies;
     cache.sortedEnemies = [...state.enemies].sort((a, b) => a.y - b.y);
   }
+  if (cache.companions !== state.companions) {
+    cache.companions = state.companions;
+    cache.sortedCompanions = [...state.companions].sort(
+      (a, b) => a.y - b.y || a.x - b.x,
+    );
+  }
 
   if (
     cache.tiles === state.tiles &&
@@ -78,33 +107,72 @@ export function syncDungeonRenderCache(
   }
 
   const size = state.width * state.height;
-  if (
+  const dimensionsChanged =
     cache.width !== state.width ||
     cache.height !== state.height ||
-    cache.terrainFrames.length !== size
-  ) {
+    cache.terrainFrames.length !== size;
+  if (dimensionsChanged) {
     allocateTileBuffers(cache, size);
   }
   cache.width = state.width;
   cache.height = state.height;
   cache.tiles = state.tiles;
 
+  let terrainChanged = dimensionsChanged;
+  if (!terrainChanged) {
+    for (let y = 0; y < state.height && !terrainChanged; y += 1) {
+      for (let x = 0; x < state.width; x += 1) {
+        const index = x + y * state.width;
+        const tile = state.tiles[y][x];
+        const key = (TERRAIN_CODE[tile.terrain] << 8) | (tile.variant & 0xff);
+        if (cache.terrainKeys[index] !== key) {
+          terrainChanged = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (terrainChanged) {
+    for (let y = 0; y < state.height; y += 1) {
+      for (let x = 0; x < state.width; x += 1) {
+        const index = x + y * state.width;
+        const tile = state.tiles[y][x];
+        cache.terrainKeys[index] =
+          (TERRAIN_CODE[tile.terrain] << 8) | (tile.variant & 0xff);
+        cache.terrainFrames[index] =
+          terrainVisual(state, x, y) ?? EMPTY_FRAME;
+        cache.overlayFrames[index] =
+          wallOverlayVisual(state, x, y) ?? EMPTY_FRAME;
+      }
+    }
+    cache.terrainRebuilds += 1;
+  }
+
+  let visibilityChanged = dimensionsChanged;
   for (let y = 0; y < state.height; y += 1) {
     for (let x = 0; x < state.width; x += 1) {
       const index = x + y * state.width;
-      const terrainFrame = terrainVisual(state, x, y);
-      const overlayFrame = wallOverlayVisual(state, x, y);
+      const terrainFrame = frameAt(cache.terrainFrames, cache, x, y);
+      const overlayFrame = frameAt(cache.overlayFrames, cache, x, y);
       const fogFrame = terrainFrame ?? overlayFrame;
       const masks = fogMasksForTile(state.tiles[y][x], fogFrame);
-      cache.terrainFrames[index] = terrainFrame ?? EMPTY_FRAME;
-      cache.overlayFrames[index] = overlayFrame ?? EMPTY_FRAME;
+      if (
+        cache.visibleMasks[index] !== masks.visibleMask ||
+        cache.discoveredMasks[index] !== masks.discoveredMask
+      ) {
+        visibilityChanged = true;
+      }
       cache.visibleMasks[index] = masks.visibleMask;
       cache.discoveredMasks[index] = masks.discoveredMask;
     }
   }
 
   cache.tileRebuilds += 1;
-  cache.fogRevision += 1;
+  if (visibilityChanged) {
+    cache.visibilityRebuilds += 1;
+    cache.fogRevision += 1;
+  }
   return cache;
 }
 

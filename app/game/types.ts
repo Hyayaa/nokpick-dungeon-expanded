@@ -46,6 +46,8 @@ export type ItemCategory =
 
 export type EquipSlot = "weapon" | "armor" | "ring";
 
+export type ItemGrade = "F" | "E" | "D" | "C" | "B" | "A" | "S";
+
 export type CoreEquipmentSlot = "weapon" | "armor";
 export type FlexSlotIndex = 0 | 1 | 2 | 3;
 
@@ -201,7 +203,7 @@ export type EquipmentTraitId =
 
 export type EquipmentTrait = {
   id: EquipmentTraitId;
-  rank: number;
+  grade: ItemGrade;
 };
 
 export type EquipmentStatRoll = {
@@ -221,10 +223,32 @@ export type InventoryInstance = {
   rechargeProgress?: number;
   durability?: number;
   maxDurability?: number;
-  quality?: number;
+  grade?: ItemGrade;
   upgradeLevel?: number;
   statRoll?: EquipmentStatRoll;
   traits?: EquipmentTrait[];
+};
+
+export type LootOrigin = "dungeon" | "grass" | "carried" | "developer";
+
+export type DungeonLootSource = "ground" | "object" | "enemy";
+
+export type DungeonLootPlanEntry = {
+  id: string;
+  floor: number;
+  source: DungeonLootSource;
+  defId: string;
+  quantity: number;
+  objectKind?: Exclude<DungeonObjectKind, "alchemy">;
+  instance?: InventoryInstance;
+};
+
+export type EnemyDrop = {
+  id: string;
+  defId: string;
+  quantity: number;
+  instance?: InventoryInstance;
+  lootOrigin: LootOrigin;
 };
 
 export type GroundItem = Point & {
@@ -235,6 +259,8 @@ export type GroundItem = Point & {
   recoversThrowableCharge?: boolean;
   recoversItemRef?: string;
   instance?: InventoryInstance;
+  lootOrigin?: LootOrigin;
+  dungeonLootId?: string;
 };
 
 export type DungeonObjectKind =
@@ -248,6 +274,9 @@ export type DungeonObject = Point & {
   kind: DungeonObjectKind;
   looted: boolean;
   loot: string[];
+  lootInstances?: Array<InventoryInstance | null>;
+  lootOrigins?: LootOrigin[];
+  lootPlanEntryIds?: Array<string | null>;
 };
 
 export type ItemPickup = Point & {
@@ -256,6 +285,8 @@ export type ItemPickup = Point & {
   quantity?: number;
   itemRef?: string;
   sourceId?: string;
+  lootOrigin?: LootOrigin;
+  dungeonLootId?: string;
 };
 
 export type ItemThrow = {
@@ -272,6 +303,24 @@ export type CompanionSkillVisual = {
   from: Point;
   to: Point;
   accent: string;
+  travelMode: "none" | "leap" | "teleport" | "charge";
+  impactMode:
+    | "burst"
+    | "shockwave"
+    | "fragments"
+    | "thrust"
+    | "slash"
+    | "healing"
+    | "sigil"
+    | "drain";
+  radius: number;
+  footprintOrigin?: Point;
+  affectedTiles?: Point[];
+  rank?: number;
+  variants?: string[];
+  semanticOverride?: boolean;
+  accentOverride?: boolean;
+  paths?: Array<{ from: Point; to: Point }>;
   sourceId?: string;
 };
 
@@ -294,6 +343,7 @@ export type Enemy = Point & {
   lastSeenPlayer: Point | null;
   searchTurns: number;
   statuses: StatusEffect[];
+  drop?: EnemyDrop | null;
 };
 
 export type Equipment = {
@@ -319,6 +369,12 @@ export type CompanionClassId =
   | "mage"
   | "rogue"
   | "duelist"
+  | "cleric";
+
+export type CompanionProfessionId =
+  | "warrior"
+  | "rogue"
+  | "mage"
   | "cleric";
 
 export type CompanionTraitId =
@@ -401,6 +457,7 @@ export type Companion = Point & {
   id: string;
   name: string;
   classId: CompanionClassId;
+  professionId: CompanionProfessionId;
   command: CompanionCommand;
   hp: number;
   maxHp: number;
@@ -457,6 +514,7 @@ export type Player = Point & {
   companionId: string;
   name: string;
   classId: CompanionClassId;
+  professionId: CompanionProfessionId;
   traits: CompanionTraitId[];
   skills: CompanionSkillId[];
   skillCooldowns: CompanionSkillCooldowns;
@@ -507,7 +565,9 @@ export type GameState = {
   dungeonName: string;
   maxFloor: number;
   difficultyScale: number;
+  difficulty: number;
   mainDropIds: string[];
+  lootPlan: DungeonLootPlanEntry[];
   turn: number;
   seed: number;
   rng: number;
@@ -519,16 +579,28 @@ export type GameState = {
 
 export type MotionKind = "move" | "attack" | "interact" | "hit";
 
+export type MotionTravelStyle = "walk" | "leap" | "teleport" | "charge";
+
 export type Motion = {
   id: string;
   from: Point;
   to: Point;
   kind: MotionKind;
+  travelStyle?: MotionTravelStyle;
 };
+
+export type CombatEffectKind =
+  | "damage"
+  | "blocked"
+  | "defeat"
+  | "healing"
+  | "miss"
+  | "notice";
 
 export type CombatEffect = Point & {
   text: string;
   color: string;
+  kind?: CombatEffectKind;
   sourceId?: string;
 };
 
@@ -557,13 +629,25 @@ export type GameSoundId =
   | "shatter"
   | "descend"
   | "healthWarn"
-  | "equip";
+  | "equip"
+  | "uiClick"
+  | "skillArrow"
+  | "skillBlast"
+  | "skillGas"
+  | "skillHeal"
+  | "skillImpact"
+  | "skillLightning"
+  | "skillMagic"
+  | "skillNature"
+  | "skillShadow";
 
 export type GameSoundCue = {
   id: GameSoundId;
   volume?: number;
   atResolution?: boolean;
 };
+
+export type ActionInteractionKind = "default" | "pickup";
 
 export type ActionResult = {
   state: GameState;
@@ -584,7 +668,7 @@ export type ActionResult = {
   interacted?: boolean;
   enchanted?: boolean;
   alchemyOpened?: boolean;
-  interactionDuration?: number;
+  interactionKind?: ActionInteractionKind;
   reachedExit?: boolean;
   soundCues?: GameSoundCue[];
 };
