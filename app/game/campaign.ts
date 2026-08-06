@@ -39,6 +39,7 @@ import {
   ItemPickup,
   ItemGrade,
   Player,
+  ShopState,
 } from "./types";
 
 export type DungeonId = string;
@@ -947,13 +948,14 @@ export type ExpeditionStats = {
 };
 
 export type CampaignSave = {
-  version: 5;
+  version: 6;
   warehouse: WarehouseState;
   companions: Companion[];
   expeditions: number;
   completedExpeditions: number;
   gold: number;
   offerSeed: number;
+  shop: ShopState;
 };
 
 const cloneInstance = (instance: InventoryInstance): InventoryInstance =>

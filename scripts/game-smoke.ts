@@ -87,6 +87,18 @@ import {
   takeLoadoutFromWarehouse,
 } from "../app/game/campaign";
 import {
+  BLACKSMITH_UPGRADE_COST,
+  SHOP_STOCK_SIZE,
+  buyShopListing,
+  createShopState,
+  listSmithyCandidates,
+  sellWarehouseItem,
+  shopSalePrice,
+  smithyNextGrade,
+  smithyUpgradeCost,
+  upgradeCampaignEquipmentGrade,
+} from "../app/game/commerce";
+import {
   COMPANION_CLASSES,
   COMPANION_CLASS_IDS,
   COMPANION_TRAIT_IDS,
@@ -456,7 +468,7 @@ const createPreparationTransferFixture = () => {
   );
   return {
     campaign: {
-      version: 5 as const,
+      version: 6 as const,
       warehouse: {
         stacks: { potion_healing: 3 },
         instances: [sword, ring],
@@ -473,6 +485,7 @@ const createPreparationTransferFixture = () => {
       completedExpeditions: 0,
       gold: 0,
       offerSeed: 1,
+      shop: createShopState(1),
     },
     loadout: {
       stacks: {},
@@ -631,6 +644,164 @@ assert.equal(returnedSharedStack.changed, true);
 assert.equal(returnedSharedStack.campaign.companions[0].autoSlots[2], null);
 assert.equal(returnedSharedStack.campaign.companions[1].autoSlots[2], null);
 assert.equal(returnedSharedStack.loadout.stacks.potion_healing, undefined);
+
+const deterministicShop = createShopState(0x5a17c0de, 3);
+assert.equal(
+  deterministicShop.stock.length,
+  SHOP_STOCK_SIZE,
+  "each shop refresh must prepare the fixed twelve-listing stock",
+);
+assert.deepEqual(
+  deterministicShop,
+  createShopState(0x5a17c0de, 3),
+  "shop stock must be deterministic for one persisted refresh seed",
+);
+assert.ok(
+  deterministicShop.stock.every(
+    (listing) =>
+      listing.itemId !== "gold" &&
+      ITEM_DEFS[listing.itemId]?.category !== "key" &&
+      listing.quantity > 0 &&
+      listing.unitPrice > 0,
+  ),
+  "shop stock must contain only positive, tradable item listings",
+);
+assert.equal(
+  deterministicShop.stock.filter((listing) =>
+    isUpgradeableEquipment(ITEM_DEFS[listing.itemId])
+  ).length,
+  SHOP_STOCK_SIZE / 2,
+  "each refresh must mix six equipment listings with six supply listings",
+);
+assert.ok(
+  deterministicShop.stock
+    .filter((listing) => listing.instance)
+    .every((listing) => listing.instance?.cursed === false),
+  "the guild shop must not sell cursed equipment",
+);
+assert.notDeepEqual(
+  deterministicShop.stock.map((listing) => listing.id),
+  createShopState(0x5a17c0df, 4).stock.map((listing) => listing.id),
+  "returning from an expedition must be able to replace the complete shop cycle",
+);
+
+const stackSaleFixture = createPreparationTransferFixture();
+const stackSalePrice = shopSalePrice(ITEM_DEFS.potion_healing);
+const stackSale = sellWarehouseItem(stackSaleFixture.campaign, 2);
+assert.equal(stackSale.changed, true);
+assert.equal(stackSale.goldDelta, stackSalePrice);
+assert.equal(stackSale.campaign.warehouse.stacks.potion_healing, 2);
+assert.equal(
+  stackSaleFixture.campaign.warehouse.stacks.potion_healing,
+  3,
+  "selling one stacked item must not mutate the saved campaign input",
+);
+assert.equal(stackSale.campaign.shop.buyback.length, 1);
+assert.equal(
+  stackSale.campaign.shop.buyback[0].unitPrice,
+  stackSalePrice,
+  "a sold item must enter buyback at exactly the gold paid to the player",
+);
+const stackBuyback = buyShopListing(
+  stackSale.campaign,
+  "buyback",
+  stackSale.campaign.shop.buyback[0].id,
+);
+assert.equal(stackBuyback.changed, true);
+assert.equal(stackBuyback.campaign.warehouse.stacks.potion_healing, 3);
+assert.equal(stackBuyback.campaign.gold, stackSaleFixture.campaign.gold);
+assert.equal(
+  stackBuyback.campaign.shop.buyback.length,
+  0,
+  "buying back the sold unit must remove that exact buyback listing",
+);
+
+const equipmentSaleFixture = createPreparationTransferFixture();
+const soldEquipmentId = equipmentSaleFixture.sword.id;
+const equipmentSale = sellWarehouseItem(equipmentSaleFixture.campaign, 0);
+assert.equal(equipmentSale.changed, true);
+assert.equal(
+  equipmentSale.campaign.warehouse.instances.some(
+    (instance) => instance.id === soldEquipmentId,
+  ),
+  false,
+  "selling individual equipment must transfer its unique instance out of storage",
+);
+assert.equal(
+  equipmentSale.campaign.shop.buyback[0].instance?.id,
+  soldEquipmentId,
+  "buyback must preserve the exact sold equipment instance",
+);
+
+const stockPurchaseFixture = createPreparationTransferFixture();
+stockPurchaseFixture.campaign.gold = 2_000_000;
+const purchasedListing = stockPurchaseFixture.campaign.shop.stock[0];
+const purchasedStackBefore = (
+  stockPurchaseFixture.campaign.warehouse.stacks as Record<string, number>
+)[purchasedListing.itemId] ?? 0;
+const stockPurchase = buyShopListing(
+  stockPurchaseFixture.campaign,
+  "stock",
+  purchasedListing.id,
+);
+assert.equal(stockPurchase.changed, true);
+assert.equal(
+  stockPurchase.campaign.gold,
+  stockPurchaseFixture.campaign.gold - purchasedListing.unitPrice,
+  "buying shop stock must deduct its persisted listing price",
+);
+assert.ok(
+  purchasedListing.instance
+    ? stockPurchase.campaign.warehouse.instances.some(
+        (instance) => instance.id === purchasedListing.instance?.id,
+      )
+    : (stockPurchase.campaign.warehouse.stacks[purchasedListing.itemId] ?? 0) >
+      purchasedStackBefore,
+  "purchased stock must move into the warehouse",
+);
+
+assert.deepEqual(
+  BLACKSMITH_UPGRADE_COST,
+  { F: 1_600, E: 5_000, D: 16_000, C: 50_000, B: 160_000, A: 500_000 },
+  "blacksmith costs must follow the dungeon gold curve through the S upgrade",
+);
+assert.equal(smithyNextGrade("A"), "S");
+assert.equal(smithyNextGrade("S"), null);
+assert.equal(smithyUpgradeCost("S"), null);
+const smithyFixture = createPreparationTransferFixture();
+smithyFixture.sword.grade = "F";
+smithyFixture.sword.traits = [
+  { id: "keen", grade: "F" },
+  { id: "swift", grade: "C" },
+];
+smithyFixture.campaign.gold = 2_000;
+const smithyCandidate = listSmithyCandidates(smithyFixture.campaign).find(
+  (candidate) => candidate.instance.id === smithyFixture.sword.id,
+);
+assert.ok(smithyCandidate, "the smithy must list warehouse equipment");
+const smithyUpgrade = upgradeCampaignEquipmentGrade(
+  smithyFixture.campaign,
+  smithyCandidate!.target,
+);
+assert.equal(smithyUpgrade.changed, true);
+assert.equal(smithyUpgrade.cost, 1_600);
+const smithyUpgradedSword = smithyUpgrade.campaign.warehouse.instances.find(
+  (instance) => instance.id === smithyFixture.sword.id,
+);
+assert.equal(smithyUpgradedSword?.grade, "E");
+assert.deepEqual(
+  smithyUpgradedSword?.traits,
+  [
+    { id: "keen", grade: "E" },
+    { id: "swift", grade: "C" },
+  ],
+  "raising equipment grade must raise its first trait while preserving later enchantment grades",
+);
+assert.equal(
+  smithyFixture.sword.grade,
+  "F",
+  "smithy upgrades must not mutate the original campaign equipment",
+);
 
 assert.match(
   campaignHtml,

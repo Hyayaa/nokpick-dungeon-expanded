@@ -229,6 +229,22 @@ export type InventoryInstance = {
   traits?: EquipmentTrait[];
 };
 
+export type ShopListing = {
+  id: string;
+  itemId: string;
+  quantity: number;
+  unitPrice: number;
+  instance: InventoryInstance | null;
+};
+
+export type ShopState = {
+  version: 1;
+  refreshSeed: number;
+  nextListingSerial: number;
+  stock: ShopListing[];
+  buyback: ShopListing[];
+};
+
 export type LootOrigin = "dungeon" | "grass" | "carried" | "developer";
 
 export type DungeonLootSource = "ground" | "object" | "enemy";
