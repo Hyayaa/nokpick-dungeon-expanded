@@ -243,6 +243,15 @@ export type DungeonLootPlanEntry = {
   instance?: InventoryInstance;
 };
 
+export type DungeonGoldSource = "ground" | "enemy";
+
+export type DungeonGoldPlanEntry = {
+  id: string;
+  floor: number;
+  source: DungeonGoldSource;
+  amount: number;
+};
+
 export type EnemyDrop = {
   id: string;
   defId: string;
@@ -344,6 +353,7 @@ export type Enemy = Point & {
   searchTurns: number;
   statuses: StatusEffect[];
   drop?: EnemyDrop | null;
+  goldDrop?: number;
 };
 
 export type Equipment = {
@@ -568,6 +578,8 @@ export type GameState = {
   difficulty: number;
   mainDropIds: string[];
   lootPlan: DungeonLootPlanEntry[];
+  goldPlan: DungeonGoldPlanEntry[];
+  goldCollected: number;
   turn: number;
   seed: number;
   rng: number;

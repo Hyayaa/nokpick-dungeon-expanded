@@ -121,6 +121,7 @@ import {
   createStarterCompanionRoster,
   depositPlayerInventory,
   formatElapsedTime,
+  formatGold,
   generateDungeonOffers,
   INITIAL_DUNGEON_OFFER_SEED,
   mergeReturningCompanions,
@@ -4190,11 +4191,12 @@ function EquipmentComparisonModal({
 
 const createDefaultCampaign = (): CampaignSave => {
   return {
-    version: 4,
+    version: 5,
     warehouse: createInitialWarehouse(),
     companions: createStarterCompanionRoster(COMPANION_CLASS_IDS),
     expeditions: 0,
     completedExpeditions: 0,
+    gold: 0,
     offerSeed: INITIAL_DUNGEON_OFFER_SEED,
   };
 };
@@ -4209,10 +4211,11 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
       companions?: Companion[];
       expeditions?: number;
       completedExpeditions?: number;
+      gold?: number;
       offerSeed?: number;
     };
     if (
-      ![1, 2, 3, 4].includes(parsed.version ?? 0) ||
+      ![1, 2, 3, 4, 5].includes(parsed.version ?? 0) ||
       !parsed.warehouse ||
       !Array.isArray(parsed.companions) ||
       (parsed.version === 1 && !parsed.hero)
@@ -4281,11 +4284,15 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
       ? restoredCompanions
       : createStarterCompanionRoster(COMPANION_CLASS_IDS);
     return {
-      version: 4,
+      version: 5,
       warehouse: restoredWarehouse,
       companions,
       expeditions: Math.max(0, parsed.expeditions ?? 0),
       completedExpeditions: Math.max(0, parsed.completedExpeditions ?? 0),
+      gold:
+        typeof parsed.gold === "number" && Number.isFinite(parsed.gold)
+          ? Math.max(0, Math.floor(parsed.gold))
+          : 0,
       offerSeed:
         typeof parsed.offerSeed === "number" &&
         Number.isFinite(parsed.offerSeed)
@@ -4313,6 +4320,7 @@ const uiAudioControlAt = (target: EventTarget | null) => {
 function CampaignHeader({
   warehouseCount,
   expeditions,
+  gold,
   onOpenWarehouse,
   onOpenCompendium,
   onOpenSettings,
@@ -4320,6 +4328,7 @@ function CampaignHeader({
 }: {
   warehouseCount: number;
   expeditions: number;
+  gold: number;
   onOpenWarehouse: () => void;
   onOpenCompendium: () => void;
   onOpenSettings: () => void;
@@ -4340,6 +4349,8 @@ function CampaignHeader({
         <span><small>완료한 원정</small><strong>{expeditions}</strong></span>
         <i />
         <span><small>보관 중인 물품</small><strong>{warehouseCount}</strong></span>
+        <i />
+        <span><small>보유 골드</small><strong>{formatGold(gold)}</strong></span>
       </div>
       <nav className="campaign-header-actions" aria-label="거점 메뉴">
         <button type="button" onClick={onOpenCompendium}>도감</button>
@@ -4513,6 +4524,7 @@ function HubScreen({
       <CampaignHeader
         warehouseCount={storedCount}
         expeditions={campaign.completedExpeditions}
+        gold={campaign.gold}
         onOpenWarehouse={onOpenWarehouse}
         onOpenCompendium={onOpenCompendium}
         onOpenSettings={onOpenSettings}
@@ -5238,6 +5250,7 @@ function ResultsScreen({
           <article><small>도달 층</small><b>{result.stats.deepestFloor}</b><span>/{dungeon.floorCount}층</span></article>
           <article><small>소요 턴</small><b>{result.stats.turns}</b><span>턴</span></article>
           <article><small>회수 물품</small><b>{result.stats.recoveredItems}</b><span>개</span></article>
+          <article className="gold-metric"><small>획득 골드</small><b>{formatGold(result.stats.goldFound + result.stats.completionGold)}</b><span>파밍 {formatGold(result.stats.goldFound)} + 수고비 {formatGold(result.stats.completionGold)}</span></article>
         </div>
         <section className="results-loot-grid" aria-label="이번 원정에서 새로 얻은 아이템">
           <header>
@@ -5506,6 +5519,8 @@ function DungeonRun({
           ),
         ),
         recoveredItems: 0,
+        goldFound: state.goldCollected,
+        completionGold: 0,
         loot: Object.entries(runStatsRef.current.loot).map(
           ([itemId, quantity]) => ({ itemId, quantity }),
         ),
@@ -8874,6 +8889,11 @@ function DungeonRun({
             <strong>{String(game.turn).padStart(3, "0")}</strong>
           </span>
           <i />
+          <span>
+            <small>{text("골드", "Gold")}</small>
+            <strong>{formatGold(game.goldCollected)}</strong>
+          </span>
+          <i />
           <span className="seed-value">
             <small>{text("시드", "Seed")}</small>
             <strong>{game.seed.toString(16).toUpperCase().padStart(8, "0")}</strong>
@@ -9952,6 +9972,7 @@ export default function DungeonGame() {
         difficulty: dungeon.difficulty,
         mainDropIds: [...dungeon.mainDropIds],
         lootPlan: dungeon.lootPlan,
+        goldPlan: dungeon.goldPlan,
       },
       player,
       companions,
@@ -9989,6 +10010,10 @@ export default function DungeonGame() {
           : rolledOfferSeed;
       setCampaign((current) => {
         const deposited = depositPlayerInventory(current.warehouse, finalGame.player);
+        const goldFound = Math.max(0, Math.floor(finalGame.goldCollected));
+        const completionGold = outcome === "completed"
+          ? finishedDungeon.completionGold
+          : 0;
         const next: CampaignSave = {
           ...current,
           warehouse: deposited.warehouse,
@@ -9998,12 +10023,18 @@ export default function DungeonGame() {
           ),
           completedExpeditions:
             current.completedExpeditions + (outcome === "completed" ? 1 : 0),
+          gold: current.gold + goldFound + completionGold,
           offerSeed: nextOfferSeed,
         };
         setExpeditionResult({
           dungeon: finishedDungeon,
           outcome,
-          stats: { ...stats, recoveredItems: deposited.recoveredItems },
+          stats: {
+            ...stats,
+            recoveredItems: deposited.recoveredItems,
+            goldFound,
+            completionGold,
+          },
         });
         return next;
       });

@@ -304,6 +304,10 @@ const CATALOG: CatalogEntry[] = [
   ["phantom_meat", "유령 고기", "food", 443, { satiation: 70, minFloor: 3 }],
 
   // utility and quest items
+  ["gold", "골드", "misc", 35, {
+    accent: "#ffd35a",
+    description: "원정에서 모은 금화입니다. 가방 칸을 차지하지 않고 원정대 자금에 더해집니다.",
+  }],
   ["ankh", "앙크", "misc", 48],
   ["blessed_ankh", "축복받은 앙크", "misc", 48],
   ["dew_vial", "이슬병", "misc", 480],

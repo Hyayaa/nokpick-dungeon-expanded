@@ -31,6 +31,7 @@ import {
 import {
   Companion,
   CompanionClassId,
+  DungeonGoldPlanEntry,
   DungeonLootPlanEntry,
   DungeonObjectKind,
   InventoryInstance,
@@ -61,6 +62,9 @@ export type DungeonDefinition = {
   difficultyScale: number;
   mainDropIds: string[];
   lootPlan: DungeonLootPlanEntry[];
+  goldPlan: DungeonGoldPlanEntry[];
+  completionGold: number;
+  goldTarget: number;
   accent: string;
 };
 
@@ -76,6 +80,9 @@ type DungeonTheme = Omit<
   | "difficultyScale"
   | "mainDropIds"
   | "lootPlan"
+  | "goldPlan"
+  | "completionGold"
+  | "goldTarget"
 > & {
   themeId: string;
   lootCategories: ItemCategory[];
@@ -370,6 +377,7 @@ const dropCandidates = (
     .filter(
       (definition) =>
         definition.category !== "key" &&
+        definition.id !== "gold" &&
         (!category || definition.category === category) &&
         (definition.minFloor ?? 1) <= maximumTier,
     )
@@ -426,6 +434,100 @@ const pickTieredFloorLoot = (
 
 const plannedEnemyCount = (floor: number, difficulty: DungeonDifficulty) =>
   Math.min(18 + floor * 4 + (difficulty - 1) * 2, 52);
+
+export const DUNGEON_GOLD_TARGETS: Record<DungeonDifficulty, number> = {
+  1: 1_000,
+  2: 3_200,
+  3: 10_000,
+  4: 32_000,
+  5: 100_000,
+  6: 320_000,
+  7: 1_000_000,
+};
+
+export const formatGold = (amount: number) => {
+  const normalized = Number.isFinite(amount)
+    ? Math.max(0, Math.floor(amount))
+    : 0;
+  return String(normalized).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+};
+
+const splitGoldBudget = (
+  budget: number,
+  slotCount: number,
+  random: () => number,
+) => {
+  const count = Math.max(1, Math.min(Math.floor(budget), slotCount));
+  const weights = Array.from({ length: count }, () => 0.7 + random() * 0.6);
+  const weightTotal = weights.reduce((total, weight) => total + weight, 0);
+  const distributable = budget - count;
+  const amounts = weights.map(
+    (weight) => 1 + Math.floor((distributable * weight) / weightTotal),
+  );
+  let remainder = budget - amounts.reduce((total, amount) => total + amount, 0);
+  const remainderOrder = shuffleWith(
+    Array.from({ length: count }, (_, index) => index),
+    random,
+  );
+  for (let index = 0; remainder > 0; index += 1) {
+    amounts[remainderOrder[index % remainderOrder.length]] += 1;
+    remainder -= 1;
+  }
+  return amounts;
+};
+
+const createDungeonGoldPlan = ({
+  planId,
+  seed,
+  difficulty,
+  floorCount,
+}: {
+  planId: string;
+  seed: number;
+  difficulty: DungeonDifficulty;
+  floorCount: number;
+}) => {
+  const random = seededRandom(seed ^ 0xc2b2ae35);
+  const goldTarget = DUNGEON_GOLD_TARGETS[difficulty];
+  const completionGold = Math.round(goldTarget * 0.2);
+  const groundBudget = Math.round(goldTarget * 0.3);
+  const enemyBudget = goldTarget - completionGold - groundBudget;
+  const groundFloors = Array.from({ length: floorCount }, (_, index) => index + 1)
+    .flatMap((floor) => [floor, ...(random() < 0.35 ? [floor] : [])]);
+  const enemyFloors = Array.from({ length: floorCount }, (_, index) => index + 1)
+    .flatMap((floor) =>
+      Array.from(
+        {
+          length: Math.max(
+            2,
+            Math.round(plannedEnemyCount(floor, difficulty) * 0.12),
+          ),
+        },
+        () => floor,
+      ),
+    );
+  const groundAmounts = splitGoldBudget(
+    groundBudget,
+    groundFloors.length,
+    random,
+  );
+  const enemyAmounts = splitGoldBudget(enemyBudget, enemyFloors.length, random);
+  const goldPlan: DungeonGoldPlanEntry[] = [
+    ...groundFloors.map((floor, index) => ({
+      id: `${planId}-gold-ground-${index + 1}`,
+      floor,
+      source: "ground" as const,
+      amount: groundAmounts[index],
+    })),
+    ...enemyFloors.map((floor, index) => ({
+      id: `${planId}-gold-enemy-${index + 1}`,
+      floor,
+      source: "enemy" as const,
+      amount: enemyAmounts[index],
+    })),
+  ];
+  return { goldPlan, completionGold, goldTarget };
+};
 
 const pickEnemyDrop = (random: () => number) => {
   const roll = random();
@@ -592,6 +694,15 @@ const createDungeonLootPlan = ({
         ),
       );
 
+    if (floor === 2) {
+      const runestones = dropCandidates("stone", rules.itemTier);
+      appendEntry(
+        floor,
+        "ground",
+        runestones[Math.floor(random() * runestones.length)],
+      );
+    }
+
     for (
       let enemyIndex = 0;
       enemyIndex < plannedEnemyCount(floor, difficulty);
@@ -669,6 +780,7 @@ export const newExpeditionPickups = (pickups: readonly ItemPickup[]) =>
   pickups.filter(
     (pickup) =>
       pickup.lootOrigin !== "carried" &&
+      pickup.defId !== "gold" &&
       ITEM_DEFS[pickup.defId]?.category !== "key",
   );
 
@@ -760,6 +872,12 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
       floorCount,
       mainDropIds: selectedDrops,
     });
+    const { goldPlan, completionGold, goldTarget } = createDungeonGoldPlan({
+      planId: id,
+      seed: (seed ^ Math.imul(index + 1, 0x85ebca6b)) >>> 0,
+      difficulty,
+      floorCount,
+    });
     const mainDropIds = selectMainLootIds(lootPlan);
     return {
       id,
@@ -778,6 +896,9 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
       difficultyScale,
       mainDropIds,
       lootPlan,
+      goldPlan,
+      completionGold,
+      goldTarget,
       accent: theme.accent,
     };
   });
@@ -820,15 +941,18 @@ export type ExpeditionStats = {
   turns: number;
   elapsedSeconds: number;
   recoveredItems: number;
+  goldFound: number;
+  completionGold: number;
   loot: ExpeditionLootEntry[];
 };
 
 export type CampaignSave = {
-  version: 4;
+  version: 5;
   warehouse: WarehouseState;
   companions: Companion[];
   expeditions: number;
   completedExpeditions: number;
+  gold: number;
   offerSeed: number;
 };
 

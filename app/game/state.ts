@@ -192,6 +192,7 @@ export const cloneGame = (
   // Floor placement clones an entry's instance before gameplay can mutate it,
   // so ordinary actions can safely share this potentially large list.
   lootPlan: state.lootPlan ?? [],
+  goldPlan: state.goldPlan ?? [],
   pendingAugmentOffers: state.pendingAugmentOffers.map((offer) => [...offer]),
   equipmentOffers: (state.equipmentOffers ?? []).map((offer) => ({ ...offer })),
 });

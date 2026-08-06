@@ -153,6 +153,7 @@ export type ExpeditionRules = {
   difficulty?: number;
   mainDropIds: string[];
   lootPlan?: GameState["lootPlan"];
+  goldPlan?: GameState["goldPlan"];
 };
 
 const DEFAULT_EXPEDITION_RULES: ExpeditionRules = {
@@ -163,6 +164,7 @@ const DEFAULT_EXPEDITION_RULES: ExpeditionRules = {
   difficulty: 1,
   mainDropIds: [],
   lootPlan: [],
+  goldPlan: [],
 };
 
 const DIRECTIONS: Point[] = [
@@ -294,7 +296,9 @@ const canAddInventoryItem = (player: Player, defId: string) =>
 export const canPickupGroundItem = (
   state: GameState,
   item: GameState["groundItems"][number],
-) => item.recoversThrowableCharge
+) => item.defId === "gold"
+  ? true
+  : item.recoversThrowableCharge
   ? Boolean(
       item.recoversItemRef &&
         (() => {
@@ -939,6 +943,9 @@ const populateFloor = (
   const floorLootPlan = (state.lootPlan ?? []).filter(
     (entry) => entry.floor === state.floor,
   );
+  const floorGoldPlan = (state.goldPlan ?? []).filter(
+    (entry) => entry.floor === state.floor,
+  );
   const plannedEnemyDrops = floorLootPlan.filter(
     (entry) => entry.source === "enemy",
   );
@@ -1063,6 +1070,22 @@ const populateFloor = (
     });
   }
 
+  floorGoldPlan
+    .filter((entry) => entry.source === "ground")
+    .forEach((entry) => {
+      const point = chooseAndRemove(state, candidates);
+      if (!point) return;
+      state.groundItems.push({
+        id: entry.id,
+        defId: "gold",
+        quantity: entry.amount,
+        lootOrigin: "dungeon",
+        dungeonLootId: entry.id,
+        ...point,
+      });
+      flattenOccupiedGrass(point);
+    });
+
   const pool = enemyPoolForFloor(state.floor);
   const difficultyScale = Math.max(1, state.difficultyScale ?? 1);
   const difficultyBonus = Math.max(0, (state.difficulty - 1) * 2);
@@ -1075,6 +1098,7 @@ const populateFloor = (
       distance(point, state.player) > 6 &&
       state.tiles[point.y][point.x].terrain !== "water",
   );
+  const firstSpawnedEnemyIndex = state.enemies.length;
 
   for (let index = 0; index < enemyCount; index += 1) {
     const point = chooseAndRemove(state, enemyCells);
@@ -1116,6 +1140,22 @@ const populateFloor = (
     });
     flattenOccupiedGrass(point);
   }
+
+  const spawnedEnemies = state.enemies.slice(firstSpawnedEnemyIndex);
+  const unassignedGoldEnemies = [...spawnedEnemies];
+  floorGoldPlan
+    .filter((entry) => entry.source === "enemy")
+    .forEach((entry) => {
+      const candidatesForDrop = unassignedGoldEnemies.length
+        ? unassignedGoldEnemies
+        : spawnedEnemies;
+      if (!candidatesForDrop.length) return;
+      const targetIndex = randomInt(state, 0, candidatesForDrop.length - 1);
+      const [target] = unassignedGoldEnemies.length
+        ? unassignedGoldEnemies.splice(targetIndex, 1)
+        : [candidatesForDrop[targetIndex]];
+      target.goldDrop = (target.goldDrop ?? 0) + entry.amount;
+    });
 };
 
 const makePlayer = (point: Point): Player => {
@@ -1392,6 +1432,8 @@ const makeFloorState = (
         ? cloneInventoryInstance(entry.instance)
         : undefined,
     })),
+    goldPlan: (expeditionRules.goldPlan ?? []).map((entry) => ({ ...entry })),
+    goldCollected: 0,
     turn,
     seed,
     rng: generated.rng,
@@ -1480,8 +1522,10 @@ export function descendFloor(state: GameState): GameState {
       difficulty: state.difficulty,
       mainDropIds: [...state.mainDropIds],
       lootPlan: state.lootPlan,
+      goldPlan: state.goldPlan,
     },
   );
+  next.goldCollected = state.goldCollected;
   next.pendingAugmentOffers = [];
   next.equipmentOffers = (state.equipmentOffers ?? [])
     .filter((offer) => offer.expiresTurn > state.turn)
@@ -1703,6 +1747,16 @@ const removeDefeatedEnemies = (
       kind: "defeat",
       sourceId: resolvedSourceId,
     });
+    if ((enemy.goldDrop ?? 0) > 0) {
+      state.groundItems.push({
+        id: `gold-drop-${enemy.id}`,
+        defId: "gold",
+        quantity: enemy.goldDrop,
+        lootOrigin: "dungeon",
+        x: enemy.x,
+        y: enemy.y,
+      });
+    }
     if (allowDrop && enemy.drop) {
       state.groundItems.push({
         id: `drop-${enemy.id}-${enemy.drop.id}`,
@@ -1780,6 +1834,13 @@ export function pickupGroundItems(
   const next = cloneGameWithoutTiles(state);
   const presentationState = state;
   const picked = found.flatMap((item) => {
+    if (item.defId === "gold") {
+      const quantity = Math.max(0, Math.floor(item.quantity ?? 0));
+      if (quantity <= 0) return [];
+      next.goldCollected += quantity;
+      pushLog(next, `골드 ${quantity.toLocaleString("ko-KR")}개를 주웠습니다.`);
+      return [{ ...item, quantity, itemRef: item.id }];
+    }
     const recoveredCharge =
       item.recoversThrowableCharge && item.recoversItemRef
       ? restoreThrowableCharge(next, item.recoversItemRef, item.quantity ?? 1)
@@ -1831,7 +1892,7 @@ export function pickupGroundItems(
   const elapsedTurns = spendPlayerTime(next, 1);
   if (!autoEquipBetter) {
     picked.forEach(({ defId, itemRef }) => {
-      queueEquipmentOffer(next, defId, itemRef);
+      if (defId !== "gold") queueEquipmentOffer(next, defId, itemRef);
     });
   }
   return {
@@ -2674,6 +2735,27 @@ export function manualCompanionPickup(
   const next = cloneGameWithoutTiles(state);
   const pickups: ItemPickup[] = [];
   for (const item of found) {
+    if (item.defId === "gold") {
+      const quantity = Math.max(0, Math.floor(item.quantity ?? 0));
+      if (quantity <= 0) continue;
+      next.goldCollected += quantity;
+      pickups.push({
+        id: item.id,
+        defId: item.defId,
+        quantity,
+        itemRef: item.id,
+        lootOrigin: item.lootOrigin,
+        dungeonLootId: item.dungeonLootId,
+        x: item.x,
+        y: item.y,
+        sourceId: companion.id,
+      });
+      pushLog(
+        next,
+        `${companion.name}이(가) 골드 ${quantity.toLocaleString("ko-KR")}개를 주웠습니다.`,
+      );
+      continue;
+    }
     const recoveredCharge =
       item.recoversThrowableCharge && item.recoversItemRef
         ? restoreThrowableCharge(next, item.recoversItemRef, item.quantity ?? 1)
@@ -5047,6 +5129,12 @@ const pickupGroundItemsForCompanion = (
   if (!found.length) return false;
 
   const picked = found.flatMap((item) => {
+    if (item.defId === "gold") {
+      const quantity = Math.max(0, Math.floor(item.quantity ?? 0));
+      if (quantity <= 0) return [];
+      state.goldCollected += quantity;
+      return [{ item, itemRef: item.id, quantity }];
+    }
     const recoveredCharge =
       item.recoversThrowableCharge && item.recoversItemRef
       ? restoreThrowableCharge(state, item.recoversItemRef, item.quantity ?? 1)
@@ -5062,7 +5150,7 @@ const pickupGroundItemsForCompanion = (
             item.instance,
             item.quantity ?? 1,
           );
-    return itemRef ? [{ item, itemRef }] : [];
+    return itemRef ? [{ item, itemRef, quantity: item.quantity ?? 1 }] : [];
   });
   if (!picked.length) return false;
 
@@ -5070,17 +5158,18 @@ const pickupGroundItemsForCompanion = (
   state.groundItems = state.groundItems.filter(
     (item) => !pickedIds.has(item.id),
   );
-  picked.forEach(({ item, itemRef }) => {
-    const quantity = item.quantity ?? 1;
+  picked.forEach(({ item, itemRef, quantity }) => {
     pushLog(
       state,
-      item.recoversThrowableCharge
+      item.defId === "gold"
+        ? `${companion.name}이(가) 골드 ${quantity.toLocaleString("ko-KR")}개를 주웠습니다.`
+        : item.recoversThrowableCharge
         ? `${companion.name}이(가) ${ITEM_DEFS[item.defId].name}을(를) 회수해 충전을 회복했습니다.`
         : quantity > 1
         ? `${companion.name}이(가) ${ITEM_DEFS[item.defId].name} ${quantity}개를 주웠습니다.`
         : `${companion.name}이(가) ${ITEM_DEFS[item.defId].name}을(를) 주웠습니다.`,
     );
-    if (!item.recoversThrowableCharge) {
+    if (!item.recoversThrowableCharge && item.defId !== "gold") {
       queueEquipmentOffer(state, item.defId, itemRef);
     }
     pickups.push({

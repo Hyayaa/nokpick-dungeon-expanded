@@ -16,6 +16,7 @@ import {
   assignPlayerItem,
   canAssignCompanionItem,
   canAssignPlayerItem,
+  canPickupGroundItem,
   chooseAugment,
   createExpeditionGame,
   createNewGame,
@@ -70,6 +71,7 @@ import {
 import {
   DUNGEON_DEFINITIONS,
   DUNGEON_DIFFICULTY_RULES,
+  DUNGEON_GOLD_TARGETS,
   applyLoadoutToPlayer,
   cloneWarehouse,
   companionToPlayer,
@@ -454,7 +456,7 @@ const createPreparationTransferFixture = () => {
   );
   return {
     campaign: {
-      version: 4 as const,
+      version: 5 as const,
       warehouse: {
         stacks: { potion_healing: 3 },
         instances: [sword, ring],
@@ -469,6 +471,7 @@ const createPreparationTransferFixture = () => {
       companions,
       expeditions: 0,
       completedExpeditions: 0,
+      gold: 0,
       offerSeed: 1,
     },
     loadout: {
@@ -635,6 +638,7 @@ assert.match(
   "the initial render must be the expedition hub",
 );
 assert.match(campaignHtml, />창고</, "the hub must expose the warehouse");
+assert.match(campaignHtml, /보유 골드[\s\S]*0/, "the hub must expose saved guild gold");
 assert.equal(
   DUNGEON_DEFINITIONS.length,
   6,
@@ -733,6 +737,62 @@ for (const dungeon of DUNGEON_DEFINITIONS) {
     ),
     `${dungeon.nameKo} must assign every planned reward to a valid floor`,
   );
+  const plannedRunestones = dungeon.lootPlan.filter(
+    (entry) => ITEM_DEFS[entry.defId]?.category === "stone",
+  );
+  assert.equal(
+    plannedRunestones.length,
+    1,
+    `${dungeon.nameKo} must plan exactly one runestone`,
+  );
+  assert.deepEqual(
+    {
+      floor: plannedRunestones[0]?.floor,
+      source: plannedRunestones[0]?.source,
+    },
+    { floor: 2, source: "ground" },
+    `${dungeon.nameKo} must place its guaranteed runestone on floor two`,
+  );
+  assert.ok(
+    dungeon.goldPlan.every(
+      (entry) =>
+        entry.floor >= 1 &&
+        entry.floor <= dungeon.floorCount &&
+        entry.amount > 0,
+    ),
+    `${dungeon.nameKo} must assign every positive gold pile to a valid floor`,
+  );
+  assert.ok(
+    dungeon.goldPlan.some((entry) => entry.source === "ground") &&
+      dungeon.goldPlan.some((entry) => entry.source === "enemy"),
+    `${dungeon.nameKo} must distribute gold between map piles and monster drops`,
+  );
+  const groundGold = dungeon.goldPlan
+    .filter((entry) => entry.source === "ground")
+    .reduce((total, entry) => total + entry.amount, 0);
+  const enemyGold = dungeon.goldPlan
+    .filter((entry) => entry.source === "enemy")
+    .reduce((total, entry) => total + entry.amount, 0);
+  assert.equal(
+    groundGold,
+    Math.round(dungeon.goldTarget * 0.3),
+    `${dungeon.nameKo} must reserve thirty percent of its gold for map piles`,
+  );
+  assert.equal(
+    dungeon.completionGold,
+    Math.round(dungeon.goldTarget * 0.2),
+    `${dungeon.nameKo} must reserve twenty percent of its gold for the completion fee`,
+  );
+  assert.equal(
+    enemyGold,
+    dungeon.goldTarget - dungeon.completionGold - groundGold,
+    `${dungeon.nameKo} must reserve the remaining farming budget for monsters`,
+  );
+  assert.equal(
+    groundGold + enemyGold + dungeon.completionGold,
+    DUNGEON_GOLD_TARGETS[dungeon.difficulty],
+    `${dungeon.nameKo} full farming plus its completion fee must match the grade budget`,
+  );
   const gradeRules = DUNGEON_DIFFICULTY_RULES[dungeon.difficulty];
   assert.ok(
     dungeon.lootPlan
@@ -756,6 +816,16 @@ for (const dungeon of DUNGEON_DEFINITIONS) {
     `${dungeon.nameKo} equipment must pre-plan a first enchantment matching its item grade`,
   );
 }
+assert.equal(
+  DUNGEON_GOLD_TARGETS[1],
+  1_000,
+  "F-grade full farming and completion must total one thousand gold",
+);
+assert.equal(
+  DUNGEON_GOLD_TARGETS[7],
+  1_000_000,
+  "S-grade full farming and completion must total one million gold",
+);
 assert.equal(
   DUNGEON_DIFFICULTY_RULES[7].enemyStatMultiplier /
     DUNGEON_DIFFICULTY_RULES[1].enemyStatMultiplier,
@@ -1000,6 +1070,7 @@ const soloExpedition = createExpeditionGame(
     difficulty: sewerRules.difficulty,
     mainDropIds: sewerRules.mainDropIds,
     lootPlan: sewerRules.lootPlan,
+    goldPlan: sewerRules.goldPlan,
   },
   preparedPlayer,
   [],
@@ -1117,6 +1188,60 @@ assert.deepEqual(
   collectPlacedDungeonLoot(0x3150a2),
   expectedPlannedLootIds,
   "changing the map seed must not reroll the dungeon's pre-generated loot list",
+);
+const collectPlacedDungeonGold = (mapSeed: number) => {
+  let expedition = createExpeditionGame(
+    mapSeed,
+    {
+      dungeonId: sewerRules.id,
+      dungeonName: sewerRules.nameKo,
+      maxFloor: sewerRules.floorCount,
+      difficultyScale: sewerRules.difficultyScale,
+      difficulty: sewerRules.difficulty,
+      mainDropIds: sewerRules.mainDropIds,
+      lootPlan: sewerRules.lootPlan,
+      goldPlan: sewerRules.goldPlan,
+    },
+    preparedPlayer,
+    [],
+  );
+  let ground = 0;
+  let enemy = 0;
+  let runestones = 0;
+  while (true) {
+    ground += expedition.groundItems
+      .filter((item) => item.defId === "gold")
+      .reduce((total, item) => total + (item.quantity ?? 0), 0);
+    enemy += expedition.enemies.reduce(
+      (total, candidate) => total + (candidate.goldDrop ?? 0),
+      0,
+    );
+    runestones += expedition.groundItems.filter(
+      (item) => ITEM_DEFS[item.defId]?.category === "stone",
+    ).length;
+    if (expedition.floor >= expedition.maxFloor) break;
+    expedition = descendFloor(expedition);
+  }
+  return { ground, enemy, runestones };
+};
+const expectedPlacedGold = {
+  ground: sewerRules.goldPlan
+    .filter((entry) => entry.source === "ground")
+    .reduce((total, entry) => total + entry.amount, 0),
+  enemy: sewerRules.goldPlan
+    .filter((entry) => entry.source === "enemy")
+    .reduce((total, entry) => total + entry.amount, 0),
+  runestones: 1,
+};
+assert.deepEqual(
+  collectPlacedDungeonGold(0x3150a1),
+  expectedPlacedGold,
+  "the first map layout must place every gold pile, monster drop, and floor-two runestone",
+);
+assert.deepEqual(
+  collectPlacedDungeonGold(0x3150a2),
+  expectedPlacedGold,
+  "changing the map seed must move gold without changing the grade budget",
 );
 const roster = createStarterCompanionRoster(COMPANION_CLASS_IDS);
 assert.equal(
@@ -3102,9 +3227,10 @@ assert.deepEqual(
     { id: "grass", defId: "seed_sungrass", quantity: 1, x: 0, y: 0, lootOrigin: "grass" },
     { id: "carried", defId: "ration", quantity: 1, x: 0, y: 0, lootOrigin: "carried" },
     { id: "key", defId: "iron_key", quantity: 1, x: 0, y: 0, lootOrigin: "dungeon" },
+    { id: "gold", defId: "gold", quantity: 99, x: 0, y: 0, lootOrigin: "dungeon" },
   ]).map((pickup) => pickup.id),
   ["planned", "grass"],
-  "new-loot accounting must include dungeon and bush finds while excluding carried items and floor keys",
+  "new-loot accounting must include dungeon and bush finds while excluding carried items, floor keys, and currency",
 );
 
 let throwGame = createNewGame(0x7a20);
@@ -3633,6 +3759,7 @@ tripleEffectGame.enemies = [
     sawPlayerLastTurn: false,
     sleeping: false,
     wakeCooldown: 0,
+    goldDrop: 137,
   },
 ];
 const tripleEffectAttack = playerStep(tripleEffectGame, 1, 0);
@@ -3670,6 +3797,13 @@ assert.deepEqual(
   tripleEffectAttack.defeatedIds,
   ["triple-effect-target"],
   "a lethal attack should report defeated entities for synchronized death audio",
+);
+assert.equal(
+  tripleEffectAttack.state.groundItems.find(
+    (item) => item.id === "gold-drop-triple-effect-target",
+  )?.quantity,
+  137,
+  "a defeated monster must drop its independently planned gold even alongside normal loot rules",
 );
 
 const generatedMapSizes = new Set<string>();
@@ -3778,8 +3912,8 @@ for (let seed = 1; seed <= 96; seed += 1) {
     1,
     `seed ${seed} should have one key`,
   );
-  const ordinaryGroundLoot = generated.groundItems.filter(
-    (item) => item.defId !== "iron_key",
+const ordinaryGroundLoot = generated.groundItems.filter(
+    (item) => !["iron_key", "gold"].includes(item.defId),
   );
   const equipmentLoot = ordinaryGroundLoot.filter((item) =>
     floorEquipmentCategories.has(
@@ -5123,6 +5257,38 @@ assert.equal(
   }),
   null,
   "the continue policy must ignore items that cannot fit in a full bag",
+);
+
+const fullBagGoldGame = createNewGame(0x601db49);
+fullBagGoldGame.enemies = [];
+fullBagGoldGame.player.inventory = {};
+fullBagGoldGame.player.inventoryInstances = Array.from(
+  { length: MAX_INVENTORY_SLOTS },
+  (_, index) => ({
+    id: `gold-full-bag-${index}`,
+    defId: "rusty_sword",
+  }),
+);
+fullBagGoldGame.groundItems = [{
+  id: "full-bag-gold",
+  defId: "gold",
+  quantity: 321,
+  x: fullBagGoldGame.player.x,
+  y: fullBagGoldGame.player.y,
+  lootOrigin: "dungeon",
+}];
+assert.equal(
+  canPickupGroundItem(fullBagGoldGame, fullBagGoldGame.groundItems[0]),
+  true,
+  "gold must remain collectible when every inventory slot is occupied",
+);
+const pickedFullBagGold = pickupGroundItems(fullBagGoldGame, false);
+assert.equal(pickedFullBagGold.state.goldCollected, 321);
+assert.equal(pickedFullBagGold.state.player.inventoryInstances.length, MAX_INVENTORY_SLOTS);
+assert.equal(
+  pickedFullBagGold.state.groundItems.some((item) => item.id === "full-bag-gold"),
+  false,
+  "collected gold must leave the floor without entering the inventory",
 );
 
 const pixelOrigin = {

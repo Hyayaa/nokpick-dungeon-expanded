@@ -5693,6 +5693,14 @@ kbd {
   font-size: 8px;
 }
 
+.results-metrics .gold-metric {
+  grid-column: 1 / -1;
+}
+
+.results-metrics .gold-metric b {
+  color: var(--gold-bright);
+}
+
 .results-loot-note {
   display: flex;
   width: 100%;
