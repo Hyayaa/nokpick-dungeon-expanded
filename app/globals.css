@@ -3246,7 +3246,7 @@ kbd {
   display: grid;
   min-width: 0;
   max-height: min(410px, calc(100vh - 370px));
-  grid-template-columns: repeat(5, minmax(52px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
   align-content: start;
   gap: 6px;
   overflow-x: hidden;
@@ -4067,7 +4067,7 @@ kbd {
   }
 
   .inventory-grid {
-    grid-template-columns: repeat(4, minmax(48px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
   }
 
   .item-detail-content {
@@ -6871,7 +6871,7 @@ button.fixed-item-slot.is-filled:focus-visible {
 }
 
 .preparation-storage-grid {
-  grid-template-columns: repeat(8, minmax(42px, 48px));
+  grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
 }
 
 .preparation-bag-grid {
@@ -7440,7 +7440,7 @@ button.fixed-item-slot.is-filled:focus-visible {
 
   .inventory-grid {
     max-height: 190px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
     border-right: 0;
     border-bottom: 1px solid var(--line-soft);
   }
@@ -7552,7 +7552,7 @@ button.fixed-item-slot.is-filled:focus-visible {
 
 @media (max-width: 420px) {
   .inventory-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   }
 
   .inventory-equipment__slots {
@@ -7881,7 +7881,7 @@ button.fixed-item-slot.is-filled:focus-visible {
   }
 
   .preparation-storage-grid {
-    grid-template-columns: repeat(10, minmax(30px, 36px));
+    grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
     max-height: 190px;
   }
 
@@ -7896,9 +7896,13 @@ button.fixed-item-slot.is-filled:focus-visible {
 }
 
 @media (max-width: 620px) {
-  .warehouse-fixed-grid,
-  .preparation-storage-grid {
+  .warehouse-fixed-grid {
     grid-template-columns: repeat(6, minmax(42px, 1fr));
+    padding: 10px;
+  }
+
+  .preparation-storage-grid {
+    grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
     padding: 10px;
   }
 
@@ -7956,10 +7960,14 @@ button.fixed-item-slot.is-filled:focus-visible {
 
 @media (max-width: 420px) {
   .warehouse-fixed-grid,
-  .preparation-storage-grid,
   .preparation-bag-grid,
   .results-item-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .preparation-storage-grid {
+    grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
     gap: 4px;
   }
 
