@@ -15,6 +15,11 @@ export type SpecialRoomCompatibilityGroup =
   | "potion-solution"
   | "crystal-key";
 
+export const MAGICAL_FIRE_CONFIG = Object.freeze({
+  power: 4,
+  burningTurns: 12,
+});
+
 export type SpecialRoomMetadata = {
   preset: SpecialRoomPreset;
   compatibilityGroup: SpecialRoomCompatibilityGroup;

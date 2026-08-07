@@ -24,7 +24,11 @@ import {
   updateFieldOfView,
 } from "./map";
 import type { P0RoomPreset } from "./room-presets";
-import type { SpecialRewardSlot, SpecialRoomPreset } from "./special-rooms";
+import {
+  MAGICAL_FIRE_CONFIG,
+  type SpecialRewardSlot,
+  type SpecialRoomPreset,
+} from "./special-rooms";
 import { AUTO_SLOT_CATEGORIES, isWand } from "./magic";
 import {
   COMPANION_SKILLS,
@@ -146,10 +150,6 @@ export {
 export const WAND_RECHARGE_TURNS = 50;
 export const BURNING_DURATION = 8;
 const FIRE_FIELD_DURATION = 6;
-const MAGICAL_FIRE_CONFIG = Object.freeze({
-  power: 4,
-  burningTurns: 12,
-});
 
 export type ExpeditionRules = {
   dungeonId: string;
@@ -9065,7 +9065,7 @@ export function pathTo(
   target: Point,
 ): Point[] {
   if (!inBounds(state, target)) return [];
-  const pathTiles = hasStatus(state.player, "levitating")
+  let pathTiles = hasStatus(state.player, "levitating")
     ? state.tiles.map((row) =>
         row.map((tile) =>
           tile.terrain === "chasm"
@@ -9074,6 +9074,19 @@ export function pathTo(
         ),
       )
     : state.tiles;
+  const targetTerrain = state.tiles[target.y][target.x].terrain;
+  const canUnlockCrystalTarget =
+    targetTerrain === "crystalDoor" &&
+    (state.player.inventory.crystal_key ?? 0) > 0;
+  if (canUnlockCrystalTarget) {
+    pathTiles = pathTiles.map((row, y) =>
+      row.map((tile, x) =>
+        x === target.x && y === target.y
+          ? { ...tile, terrain: "openDoor" as const }
+          : tile,
+      ),
+    );
+  }
 
   const blocked = new Set([
     ...state.enemies.map(mapPointKey),
@@ -9103,6 +9116,7 @@ export function pathTo(
   if (
     targetHasEnemy ||
     targetHasObject ||
+    canUnlockCrystalTarget ||
     isWalkable(pathTiles[target.y][target.x].terrain, canUnlock)
   ) {
     return findPath(

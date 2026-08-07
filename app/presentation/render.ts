@@ -70,10 +70,13 @@ export const SEWER_TILE_FRAMES = Object.freeze({
   doorSidewaysOverhang: WALLS_OVERHANG + 16,
   doorSidewaysOverhangClosed: WALLS_OVERHANG + 20,
   doorSidewaysOverhangLocked: WALLS_OVERHANG + 24,
+  doorSidewaysOverhangCrystal: WALLS_OVERHANG + 28,
   doorOverhang: DOOR_OVERHANG,
   doorOverhangOpen: DOOR_OVERHANG + 1,
+  doorOverhangCrystal: DOOR_OVERHANG + 2,
   doorSideways: DOOR_OVERHANG + 3,
   doorSidewaysLocked: DOOR_OVERHANG + 4,
+  doorSidewaysCrystal: DOOR_OVERHANG + 5,
 });
 
 const tileAt = (state: GameState, x: number, y: number): Terrain | null => {
@@ -178,12 +181,11 @@ export function terrainVisual(state: GameState, x: number, y: number) {
 
   if (doorLike(terrain)) {
     // DungeonTerrainTilemap passes map[pos - mapWidth] into
-    // getRaisedDoorTile: Shattered chooses the sideways floor frame from the
-    // tile ABOVE the door. A vertical doorway therefore keeps the complete
-    // raised door frame (112/113/114), including its wall-backed lower half.
-    if (terrain === "crystalDoor") return SEWER_TILE_FRAMES.raisedDoorCrystal;
+    // getRaisedDoorTile: a wall above the door selects the sideways floor
+    // frame while DungeonWallsTilemap paints the matching upper door sprite.
     const wallAbove = wallLike(tileAt(state, x, y - 1));
     if (wallAbove) return SEWER_TILE_FRAMES.raisedDoorSideways;
+    if (terrain === "crystalDoor") return SEWER_TILE_FRAMES.raisedDoorCrystal;
     if (terrain === "openDoor") return SEWER_TILE_FRAMES.raisedDoorOpen;
     if (terrain === "lockedDoor") return SEWER_TILE_FRAMES.raisedDoorLocked;
     return SEWER_TILE_FRAMES.raisedDoor;
@@ -198,9 +200,9 @@ export function wallOverlayVisual(state: GameState, x: number, y: number) {
   if (wallLike(terrain)) {
     if (!wallLike(below) && doorLike(below)) {
       if (below === "openDoor") return null;
-      return below === "lockedDoor"
-        ? SEWER_TILE_FRAMES.doorSidewaysLocked
-        : SEWER_TILE_FRAMES.doorSideways;
+      if (below === "lockedDoor") return SEWER_TILE_FRAMES.doorSidewaysLocked;
+      if (below === "crystalDoor") return SEWER_TILE_FRAMES.doorSidewaysCrystal;
+      return SEWER_TILE_FRAMES.doorSideways;
     }
     if (wallLike(below)) {
       let visual = SEWER_TILE_FRAMES.wallInternal;
@@ -224,7 +226,7 @@ export function wallOverlayVisual(state: GameState, x: number, y: number) {
           : terrain === "lockedDoor"
             ? SEWER_TILE_FRAMES.doorSidewaysOverhangLocked
             : terrain === "crystalDoor"
-              ? SEWER_TILE_FRAMES.doorSidewaysOverhangLocked
+              ? SEWER_TILE_FRAMES.doorSidewaysOverhangCrystal
             : SEWER_TILE_FRAMES.wallOverhang;
     if (!wallLike(tileAt(state, x + 1, y + 1))) visual += 1;
     if (!wallLike(tileAt(state, x - 1, y + 1))) visual += 2;
@@ -232,9 +234,9 @@ export function wallOverlayVisual(state: GameState, x: number, y: number) {
   }
 
   if (doorLike(below)) {
-    return below === "openDoor"
-      ? SEWER_TILE_FRAMES.doorOverhangOpen
-      : SEWER_TILE_FRAMES.doorOverhang;
+    if (below === "openDoor") return SEWER_TILE_FRAMES.doorOverhangOpen;
+    if (below === "crystalDoor") return SEWER_TILE_FRAMES.doorOverhangCrystal;
+    return SEWER_TILE_FRAMES.doorOverhang;
   }
   return null;
 }
