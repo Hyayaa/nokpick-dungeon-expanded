@@ -3,7 +3,9 @@ import {
   acceptQuest,
   claimQuestReward,
   createNewGame,
+  MAX_INVENTORY_SLOTS,
   pathTo,
+  planAutoExplore,
   pickupGroundItems,
   playerStep,
 } from "../app/game/engine";
@@ -44,6 +46,40 @@ assert.ok(
     (item) => item.questId === "sealed_relic_recovery",
   ),
 );
+
+for (let candidateSeed = 1; candidateSeed <= 20; candidateSeed += 1) {
+  const generated = createNewGame(candidateSeed);
+  assert.equal(generated.questRooms?.length, 2);
+  for (const room of generated.questRooms ?? []) {
+    const overlapsSpecialRoom = (generated.specialRooms ?? []).some(
+      (specialRoom) =>
+        room.left <= specialRoom.right &&
+        room.right >= specialRoom.left &&
+        room.top <= specialRoom.bottom &&
+        room.bottom >= specialRoom.top,
+    );
+    assert.equal(
+      overlapsSpecialRoom,
+      false,
+      `quest room ${room.questId} must not overwrite an existing special room`,
+    );
+    const containsTransition = generated.tiles.some((row, y) =>
+      row.some(
+        (tile, x) =>
+          x >= room.left &&
+          x <= room.right &&
+          y >= room.top &&
+          y <= room.bottom &&
+          (tile.terrain === "entrance" || tile.terrain === "exit"),
+      )
+    );
+    assert.equal(
+      containsTransition,
+      false,
+      `quest room ${room.questId} must not consume the entrance or exit room`,
+    );
+  }
+}
 
 const initialShowcase = createDeveloperTestMap(createNewGame(seed));
 assert.equal(initialShowcase.dungeonId, DEVELOPER_TEST_MAP_ID);
@@ -110,6 +146,35 @@ assert.ok(ITEM_DEFS.quest_sealed_relic);
 }
 
 {
+  const game = createDeveloperTestMap(createNewGame(seed + 3));
+  game.companions = [];
+  const target = game.enemies.find((enemy) =>
+    enemy.questId === "red_fang_hunt"
+  )!;
+  game.enemies = [target];
+  game.groundItems = [];
+  game.objects = [];
+  game.tiles.forEach((row) =>
+    row.forEach((tile) => {
+      tile.discovered = true;
+      tile.visible = false;
+    })
+  );
+  game.tiles[target.y][target.x].visible = true;
+  assert.equal(
+    planAutoExplore(game),
+    null,
+    "auto exploration must ignore a protected quest target before acceptance",
+  );
+  questStateFor(game, "red_fang_hunt")!.status = "active";
+  assert.equal(
+    planAutoExplore(game)?.kind,
+    "enemy",
+    "auto exploration must track the unique target after acceptance",
+  );
+}
+
+{
   let game = createDeveloperTestMap(createNewGame(seed + 1));
   game.companions = [];
   const npc = game.questNpcs!.find((candidate) =>
@@ -154,6 +219,42 @@ assert.ok(ITEM_DEFS.quest_sealed_relic);
   );
 }
 
+{
+  let game = createDeveloperTestMap(createNewGame(seed + 2));
+  game.companions = [];
+  const npc = game.questNpcs!.find((candidate) =>
+    candidate.questId === "red_fang_hunt"
+  )!;
+  const quest = questStateFor(game, "red_fang_hunt")!;
+  quest.status = "readyToTurnIn";
+  quest.progress = quest.required;
+  game.player.inventory = {};
+  game.player.inventoryInstances = Array.from(
+    { length: MAX_INVENTORY_SLOTS },
+    (_, index) => ({
+      id: `quest-full-bag-${index}`,
+      defId: "rusty_sword",
+    }),
+  );
+  stageNextTo(game, npc);
+  const playerPosition = { x: game.player.x, y: game.player.y };
+  game = claimQuestReward(game, "red_fang_hunt").state;
+  assert.equal(questStateFor(game, "red_fang_hunt")?.status, "completed");
+  const droppedReward = game.groundItems.find(
+    (item) => item.id.startsWith("quest-reward-red_fang_hunt-"),
+  );
+  assert.deepEqual(
+    droppedReward && { x: droppedReward.x, y: droppedReward.y },
+    playerPosition,
+    "a full-bag reward must drop on the reachable player tile",
+  );
+  assert.notDeepEqual(
+    playerPosition,
+    { x: npc.x, y: npc.y },
+    "the reward fallback must not use the NPC's blocked tile",
+  );
+}
+
 for (const quest of initialShowcase.quests ?? []) {
   assert.ok(questDefinition(quest.questId), `missing definition for ${quest.questId}`);
 }
@@ -161,4 +262,3 @@ for (const quest of initialShowcase.quests ?? []) {
 console.log(
   "quest framework, NPC offers, unique targets, recovery items, rooms, rewards, and reload checks passed",
 );
-

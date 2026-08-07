@@ -1,5 +1,6 @@
 import { ENEMY_STATS } from "./data";
-import { isWalkable, mapPointKey } from "./map";
+import { isWalkable, mapPointKey, type RoomPreset } from "./map";
+import { isSpecialRoomPreset } from "./special-rooms";
 import { gridDistance as distance, pointEquals } from "./spatial";
 import type {
   GameState,
@@ -258,6 +259,7 @@ export const populateQuestArea = (
 };
 
 type RoomRegion = {
+  preset: RoomPreset;
   left: number;
   top: number;
   right: number;
@@ -310,6 +312,9 @@ export const populateProductionQuestAreas = (
   const regions = roomRegions
     .filter(
       (region) =>
+        region.preset !== "entrance" &&
+        region.preset !== "exit" &&
+        !isSpecialRoomPreset(region.preset) &&
         !regionContains(region, state.player) &&
         regionPoints(state, region).length >= 2,
     )

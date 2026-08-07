@@ -2247,17 +2247,14 @@ export function claimQuestReward(
     definition.rewardQuantity,
   );
   if (!rewardRef) {
-    const npc = (next.questNpcs ?? []).find(
-      (candidate) => candidate.questId === questId,
-    ) ?? next.player;
     next.groundItems.push({
       id: `quest-reward-${questId}-${next.turn}`,
       defId: definition.rewardItemId,
       quantity: definition.rewardQuantity,
       lootOrigin: "dungeon",
       manualPickup: true,
-      x: npc.x,
-      y: npc.y,
+      x: next.player.x,
+      y: next.player.y,
     });
     pushLog(next, "가방이 가득 차 보상을 NPC 앞에 내려놓았습니다.");
   } else {
@@ -9462,7 +9459,9 @@ export function planAutoExplore(
 
   const visibleEnemies = state.enemies.filter(
     (enemy) =>
-      enemy.hp > 0 && state.tiles[enemy.y]?.[enemy.x]?.visible,
+      enemy.hp > 0 &&
+      (!enemy.questId || isQuestActive(state, enemy.questId)) &&
+      state.tiles[enemy.y]?.[enemy.x]?.visible,
   );
   const enemyPlan = chooseShortest("enemy", visibleEnemies);
   if (enemyPlan) return enemyPlan;
