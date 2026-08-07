@@ -19,8 +19,7 @@ export type Terrain =
   | "openDoor"
   | "lockedDoor"
   | "crystalDoor"
-  | "barricade"
-  | "magicalFire";
+  | "barricade";
 
 export type Tile = {
   terrain: Terrain;
@@ -160,6 +159,8 @@ export type DungeonCloud = {
   tileLifetime: number;
   turns: number;
   power: number;
+  variant?: "magicalFire";
+  roomId?: string;
 };
 
 export type DungeonWard = Point & {
@@ -207,6 +208,12 @@ export type DungeonSpecialRoom = {
   right: number;
   bottom: number;
   requiredItemId?: string;
+};
+
+export type DungeonSpecialRoomPlanEntry = {
+  id: string;
+  floor: number;
+  preset: SpecialRoomKind;
 };
 
 export type MagicVisualKind = "beam" | "bolt" | "cone" | "burst" | "cloud";
@@ -294,7 +301,19 @@ export type ShopState = {
 
 export type LootOrigin = "dungeon" | "grass" | "carried" | "developer";
 
-export type DungeonLootSource = "ground" | "object" | "enemy";
+export type DungeonLootSource =
+  | "ground"
+  | "object"
+  | "enemy"
+  | "specialReward";
+
+export type DungeonLootPurpose =
+  | "normal"
+  | "majorLoot"
+  | "requiredSolution"
+  | "specialReward"
+  | "key"
+  | "runeStone";
 
 export type DungeonLootPlanEntry = {
   id: string;
@@ -304,6 +323,9 @@ export type DungeonLootPlanEntry = {
   quantity: number;
   objectKind?: Exclude<DungeonObjectKind, "alchemy">;
   instance?: InventoryInstance;
+  purpose?: DungeonLootPurpose;
+  roomKind?: SpecialRoomKind;
+  slotIndex?: number;
 };
 
 export type DungeonGoldSource = "ground" | "enemy";
@@ -643,6 +665,7 @@ export type GameState = {
   difficultyScale: number;
   difficulty: number;
   mainDropIds: string[];
+  specialRoomPlan: DungeonSpecialRoomPlanEntry[];
   lootPlan: DungeonLootPlanEntry[];
   goldPlan: DungeonGoldPlanEntry[];
   goldCollected: number;

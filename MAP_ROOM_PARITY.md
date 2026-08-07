@@ -34,7 +34,7 @@
 | room | gimmick | required item | required system | 상태 | 우선순위 |
 | --- | --- | --- | --- | --- | --- |
 | StorageRoom | 가연성 barricade 뒤 다중 보상 | 액체 화염 물약 | guaranteed floor spawn, fire interaction | 구현 | P0 |
-| MagicalFireRoom | 통과 불가 영원의 불꽃 뒤 보상 | 서리 물약 | frost/cloud interaction | 구현 | P0 |
+| MagicalFireRoom | 통과 가능하지만 매우 위험한 지속성 강화 화염 장판 뒤 보상 | 서리 물약 | persistent DungeonCloud, frost 전역 소화 | 구현 | P0 |
 | ToxicGasRoom | 유독 가스와 비활성 통풍구 | 정화 물약 | DungeonCloud, purified 상태 | 구현 | P0 |
 | TrapsRoom | 지역별 지원 함정 또는 CHASM 횡단 | 부유 물약 | 공통 trap state, levitation 이동 | 구현 | P0 |
 | CrystalChoiceRoom | 두 보상 중 하나 선택 | 수정 열쇠 1개 | CrystalKey/CrystalDoor | 구현 | P0 |
@@ -45,6 +45,8 @@
 | PitRoom / WeakFloorRoom | 낙하·층간 연결 | 방별 대응 | 층간 낙하 상태 | 후속 | P1 |
 
 지원 trap은 gripping, poison dart, explosive, teleportation, flashing으로 제한한다. 소환·분해 광선·별도 차원 계열은 필요한 시스템이 없어 현재 room pool에 넣지 않는다.
+
+특수방 종류·필수 해결 아이템·핵심 보상은 던전 전체 loot/special plan에서 먼저 확정한다. 방 painter는 아이템을 다시 뽑지 않고, 배치 가능한 reward slot만 제공한다.
 
 ## 후속 작업 가이드
 

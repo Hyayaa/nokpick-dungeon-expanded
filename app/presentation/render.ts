@@ -125,7 +125,6 @@ export function terrainVisual(state: GameState, x: number, y: number) {
   const terrain = tile.terrain;
 
   if (terrain === "floor") return floorVisual(tile.variant);
-  if (terrain === "magicalFire") return SEWER_TILE_FRAMES.specialFloor;
   if (terrain === "barricade") return SEWER_TILE_FRAMES.raisedBarricade;
   if (terrain === "specialFloor") {
     return tile.variant >= 50

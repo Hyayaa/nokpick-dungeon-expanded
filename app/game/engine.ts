@@ -17,7 +17,6 @@ import {
 } from "./augments";
 import {
   findPath,
-  floorFeelingFor,
   generateFloor,
   hasLineOfSight,
   isWalkable,
@@ -147,6 +146,10 @@ export {
 export const WAND_RECHARGE_TURNS = 50;
 export const BURNING_DURATION = 8;
 const FIRE_FIELD_DURATION = 6;
+const MAGICAL_FIRE_CONFIG = Object.freeze({
+  power: 4,
+  burningTurns: 12,
+});
 
 export type ExpeditionRules = {
   dungeonId: string;
@@ -155,6 +158,7 @@ export type ExpeditionRules = {
   difficultyScale: number;
   difficulty?: number;
   mainDropIds: string[];
+  specialRoomPlan?: GameState["specialRoomPlan"];
   lootPlan?: GameState["lootPlan"];
   goldPlan?: GameState["goldPlan"];
 };
@@ -166,6 +170,7 @@ const DEFAULT_EXPEDITION_RULES: ExpeditionRules = {
   difficultyScale: 1,
   difficulty: 1,
   mainDropIds: [],
+  specialRoomPlan: [],
   lootPlan: [],
   goldPlan: [],
 };
@@ -899,6 +904,7 @@ const populateFloor = (
   alchemyPoint: Point,
   specialRewards: readonly SpecialRewardSlot[] = [],
   toxicGasTiles: readonly Point[] = [],
+  magicalFireTiles: readonly Point[] = [],
 ) => {
   const flattenOccupiedGrass = (point: Point) => {
     if (state.tiles[point.y][point.x].terrain === "highGrass") {
@@ -910,12 +916,26 @@ const populateFloor = (
       distance(point, state.player) > 3 &&
       mapPointKey(point) !== mapPointKey(keyPoint),
   );
+  const floorLootPlan = (state.lootPlan ?? []).filter(
+    (entry) => entry.floor === state.floor,
+  );
+  const floorGoldPlan = (state.goldPlan ?? []).filter(
+    (entry) => entry.floor === state.floor,
+  );
+  const placedPlanEntryIds = new Set<string>();
+  const ironKeyEntry = floorLootPlan.find(
+    (entry) => entry.purpose === "key" && entry.defId === "iron_key",
+  );
 
   state.groundItems.push({
-    id: `key-${state.floor}-${state.seed}`,
+    id: ironKeyEntry?.id ?? `key-${state.floor}-${state.seed}`,
     defId: "iron_key",
+    quantity: ironKeyEntry?.quantity ?? 1,
+    lootOrigin: "dungeon",
+    dungeonLootId: ironKeyEntry?.id,
     ...keyPoint,
   });
+  if (ironKeyEntry) placedPlanEntryIds.add(ironKeyEntry.id);
   flattenOccupiedGrass(keyPoint);
 
   state.objects.push({
@@ -957,6 +977,13 @@ const populateFloor = (
   // Required special-room solutions are placed before ordinary random loot,
   // using only normal, reachable cells outside every special room.
   for (const requirement of state.requiredFloorSpawns ?? []) {
+    const planned = floorLootPlan.find(
+      (entry) =>
+        !placedPlanEntryIds.has(entry.id) &&
+        entry.defId === requirement.defId &&
+        entry.roomKind === requirement.roomKind &&
+        (entry.purpose === "requiredSolution" || entry.purpose === "key"),
+    );
     const reachableCandidates = candidates.filter(
       (point) =>
         findPath(state.tiles, state.player, point, new Set(), false).length > 0,
@@ -970,46 +997,66 @@ const populateFloor = (
     );
     if (candidateIndex >= 0) candidates.splice(candidateIndex, 1);
     state.groundItems.push({
-      id: requirement.id,
+      id: planned?.id ?? requirement.id,
       defId: requirement.defId,
-      quantity: spawnedGroundQuantity(requirement.defId),
+      quantity: planned?.quantity ?? spawnedGroundQuantity(requirement.defId),
+      instance: planned?.instance
+        ? cloneInventoryInstance(planned.instance)
+        : undefined,
       lootOrigin: "dungeon",
+      dungeonLootId: planned?.id,
       ...point,
     });
+    if (planned) placedPlanEntryIds.add(planned.id);
     flattenOccupiedGrass(point);
   }
 
+  const plannedSpecialRewards = floorLootPlan.filter(
+    (entry) => entry.source === "specialReward",
+  );
   specialRewards.forEach((slot) => {
-    const excluded = new Set<string>();
-    let defId = randomLootId(state, slot.categories, excluded);
-    if (slot.tier >= 2) {
-      const rolls = Array.from({ length: slot.tier }, () =>
-        randomLootId(state, slot.categories, excluded),
-      );
-      defId = rolls.sort(
-        (first, second) =>
-          (ITEM_DEFS[second]?.minFloor ?? 1) -
-          (ITEM_DEFS[first]?.minFloor ?? 1),
-      )[0] ?? defId;
-    }
+    const room = (state.specialRooms ?? []).find(
+      (candidate) =>
+        slot.point.x >= candidate.left &&
+        slot.point.x <= candidate.right &&
+        slot.point.y >= candidate.top &&
+        slot.point.y <= candidate.bottom,
+    );
+    const slotIndex = Number(slot.id.match(/reward-(\d+)$/)?.[1] ?? -1);
+    const planned = plannedSpecialRewards.find(
+      (entry) =>
+        !placedPlanEntryIds.has(entry.id) &&
+        entry.roomKind === room?.kind &&
+        entry.slotIndex === slotIndex,
+    );
+    const defId = planned?.defId ?? randomLootId(state, slot.categories);
     if (slot.source === "object") {
       state.objects.push({
         id: slot.id,
         kind: slot.objectKind ?? "chest",
         looted: false,
         loot: [defId],
+        lootInstances: [
+          planned?.instance ? cloneInventoryInstance(planned.instance) : null,
+        ],
         lootOrigins: ["dungeon"],
+        lootPlanEntryIds: [planned?.id ?? null],
         ...slot.point,
       });
     } else {
       state.groundItems.push({
-        id: slot.id,
+        id: planned?.id ?? slot.id,
         defId,
-        quantity: spawnedGroundQuantity(defId),
+        quantity: planned?.quantity ?? spawnedGroundQuantity(defId),
+        instance: planned?.instance
+          ? cloneInventoryInstance(planned.instance)
+          : undefined,
         lootOrigin: "dungeon",
+        dungeonLootId: planned?.id,
         ...slot.point,
       });
     }
+    if (planned) placedPlanEntryIds.add(planned.id);
   });
 
   if (toxicGasTiles.length > 0) {
@@ -1029,21 +1076,47 @@ const populateFloor = (
       power: 2,
     });
   }
-  const floorLootPlan = (state.lootPlan ?? []).filter(
-    (entry) => entry.floor === state.floor,
-  );
-  const floorGoldPlan = (state.goldPlan ?? []).filter(
-    (entry) => entry.floor === state.floor,
-  );
+  if (magicalFireTiles.length > 0) {
+    const room = (state.specialRooms ?? []).find(
+      (candidate) => candidate.kind === "magicalFire",
+    );
+    state.clouds.push({
+      id: `special-magical-fire-${state.floor}-${state.seed}`,
+      kind: "fire",
+      variant: "magicalFire",
+      roomId: room?.id,
+      origin: { ...magicalFireTiles[0] },
+      tiles: magicalFireTiles.map((point) => ({
+        ...point,
+        remaining: 1,
+        intensity: 1,
+      })),
+      maxRadius: 0,
+      spreadPerTurn: 0,
+      tileLifetime: 1,
+      turns: 1,
+      power: MAGICAL_FIRE_CONFIG.power,
+    });
+  }
   const plannedEnemyDrops = floorLootPlan.filter(
     (entry) => entry.source === "enemy",
   );
   if (state.lootPlan?.length) {
     floorLootPlan
-      .filter((entry) => entry.source === "ground")
-      .forEach((entry) => spawnGroundLoot(entry.defId, entry));
+      .filter(
+        (entry) =>
+          entry.source === "ground" && !placedPlanEntryIds.has(entry.id),
+      )
+      .forEach((entry) => {
+        if (spawnGroundLoot(entry.defId, entry)) {
+          placedPlanEntryIds.add(entry.id);
+        }
+      });
     floorLootPlan
-      .filter((entry) => entry.source === "object")
+      .filter(
+        (entry) =>
+          entry.source === "object" && !placedPlanEntryIds.has(entry.id),
+      )
       .forEach((entry, objectIndex) => {
         const point = chooseAndRemove(state, candidates);
         if (!point) return;
@@ -1059,6 +1132,7 @@ const populateFloor = (
           lootPlanEntryIds: [entry.id],
           ...point,
         });
+        placedPlanEntryIds.add(entry.id);
         flattenOccupiedGrass(point);
       });
   } else {
@@ -1406,12 +1480,32 @@ const makeFloorState = (
   forcedRoomPresets: readonly P0RoomPreset[] = [],
   forcedSpecialPreset?: SpecialRoomPreset,
 ) => {
+  const plannedSpecialRooms = expeditionRules.specialRoomPlan?.length
+    ? expeditionRules.specialRoomPlan
+    : Array.from(
+        new Map(
+          (expeditionRules.lootPlan ?? [])
+            .filter(
+              (entry) =>
+                entry.source === "specialReward" && entry.roomKind !== undefined,
+            )
+            .map((entry) => [
+              `${entry.floor}:${entry.roomKind}`,
+              {
+                id: `loot-derived-special-${entry.floor}-${entry.roomKind}`,
+                floor: entry.floor,
+                preset: entry.roomKind!,
+              },
+            ]),
+        ).values(),
+      );
   const generated = generateFloor(
     seed ^ Math.imul(floor, 0x9e3779b1),
     0,
-    floorFeelingFor(seed, floor),
     forcedRoomPresets,
-    forcedSpecialPreset,
+    forcedSpecialPreset ?? plannedSpecialRooms.find(
+      (entry) => entry.floor === floor,
+    )?.preset,
     floor,
   );
   const player = carriedPlayer
@@ -1532,6 +1626,9 @@ const makeFloorState = (
     difficultyScale: expeditionRules.difficultyScale,
     difficulty: Math.max(1, Math.min(7, expeditionRules.difficulty ?? 1)),
     mainDropIds: [...expeditionRules.mainDropIds],
+    specialRoomPlan: plannedSpecialRooms.map((entry) => ({
+      ...entry,
+    })),
     lootPlan: (expeditionRules.lootPlan ?? []).map((entry) => ({
       ...entry,
       instance: entry.instance
@@ -1580,6 +1677,7 @@ const makeFloorState = (
     generated.alchemyPoint,
     generated.specialRewards,
     generated.toxicGasTiles,
+    generated.magicalFireTiles,
   );
   updatePlayerFieldOfView(state);
   return state;
@@ -1651,6 +1749,7 @@ export function descendFloor(state: GameState): GameState {
       difficultyScale: state.difficultyScale,
       difficulty: state.difficulty,
       mainDropIds: [...state.mainDropIds],
+      specialRoomPlan: state.specialRoomPlan,
       lootPlan: state.lootPlan,
       goldPlan: state.goldPlan,
     },
@@ -2343,13 +2442,8 @@ export function playerStep(
     return { state: next, motions, effects, consumedTurn: false };
   }
 
-  if (terrain === "barricade" || terrain === "magicalFire") {
-    pushLog(
-      next,
-      terrain === "barricade"
-        ? "바리케이드는 열쇠로 열 수 없습니다. 불이 필요합니다."
-        : "영원의 불꽃은 피해를 감수해 통과할 수 없습니다. 냉기가 필요합니다.",
-    );
+  if (terrain === "barricade") {
+    pushLog(next, "바리케이드는 열쇠로 열 수 없습니다. 불이 필요합니다.");
     return { state: next, motions, effects, consumedTurn: false };
   }
 
@@ -2469,6 +2563,7 @@ export function playerStep(
   if (closeDoorBehindPlayer && !swappingCompanion) {
     next.tiles[from.y][from.x].terrain = "door";
   }
+  applyMagicalFireContact(next, next.player, effects);
   const elapsedTurns = spendPlayerTime(
     next,
     1 / getPlayerMoveSpeed(next.player),
@@ -2978,6 +3073,11 @@ export function manualCompanionPickup(
   };
 }
 
+const magicalFireTileKeys = (state: GameState) =>
+  (state.clouds ?? []).flatMap((cloud) =>
+    cloud.variant === "magicalFire" ? cloud.tiles.map(mapPointKey) : [],
+  );
+
 const enemyBlockedSet = (state: GameState, currentEnemyId: string) =>
   new Set(
     [
@@ -2987,6 +3087,7 @@ const enemyBlockedSet = (state: GameState, currentEnemyId: string) =>
       ...(state.companions ?? [])
         .filter((companion) => companion.hp > 0)
         .map(mapPointKey),
+      ...magicalFireTileKeys(state),
     ],
   );
 
@@ -3013,6 +3114,35 @@ const addStatus = (
   } else {
     statuses.push({ id, turns: resolvedTurns, power });
   }
+};
+
+const applyMagicalFireContact = (
+  state: GameState,
+  actor: Player | Companion | Enemy,
+  effects: CombatEffect[],
+) => {
+  const cloud = (state.clouds ?? []).find(
+    (candidate) =>
+      candidate.variant === "magicalFire" &&
+      candidate.tiles.some((tile) => pointEquals(tile, actor)),
+  );
+  if (!cloud) return false;
+  actor.hp = Math.max(0, actor.hp - cloud.power);
+  addStatus(
+    actor.statuses,
+    "burning",
+    MAGICAL_FIRE_CONFIG.burningTurns,
+    cloud.power,
+  );
+  effects.push({
+    x: actor.x,
+    y: actor.y,
+    text: `-${cloud.power}`,
+    color: "#ff6b35",
+    kind: "damage",
+    sourceId: cloud.id,
+  });
+  return true;
 };
 
 const hasStatus = (
@@ -3186,28 +3316,29 @@ const resolveSpecialTerrainFromCloud = (
     if (destroyed > 0) pushLog(state, "불길이 바리케이드를 태워 길을 열었습니다.");
     return;
   }
-  if (kind !== "frost") return;
-  const touchedRooms = (state.specialRooms ?? []).filter(
-    (room) =>
-      room.kind === "magicalFire" &&
-      state.tiles.some((row, y) => row.some((tile, x) =>
-        tile.terrain === "magicalFire" &&
-        x >= room.left && x <= room.right &&
-        y >= room.top && y <= room.bottom &&
-        distance(origin, { x, y }) <= radius,
-      )),
+};
+
+const extinguishMagicalFireAt = (
+  state: GameState,
+  origin: Point,
+  radius: number,
+) => {
+  const touchedRoomIds = new Set(
+    (state.clouds ?? [])
+      .filter(
+        (cloud) =>
+          cloud.variant === "magicalFire" &&
+          cloud.tiles.some((tile) => distance(origin, tile) <= radius),
+      )
+      .map((cloud) => cloud.roomId),
   );
-  if (!touchedRooms.length) return;
-  touchedRooms.forEach((room) => {
-    for (let y = room.top; y <= room.bottom; y += 1) {
-      for (let x = room.left; x <= room.right; x += 1) {
-        if (state.tiles[y][x].terrain === "magicalFire") {
-          state.tiles[y][x].terrain = "floor";
-        }
-      }
-    }
-  });
-  pushLog(state, "서리가 영원의 불꽃을 완전히 꺼뜨렸습니다.");
+  if (!touchedRoomIds.size) return false;
+  state.clouds = (state.clouds ?? []).filter(
+    (cloud) =>
+      cloud.variant !== "magicalFire" || !touchedRoomIds.has(cloud.roomId),
+  );
+  pushLog(state, "서리가 강화 화염 장판 전체를 완전히 꺼뜨렸습니다.");
+  return true;
 };
 
 const BURNABLE_TERRAINS = new Set([
@@ -4627,7 +4758,7 @@ const applyClouds = (
       cloud.tileLifetime ??
       Math.max(3, cloud.turns, ...cloud.tiles.map((tile) => tile.remaining));
     cloud.tileLifetime = tileLifetime;
-    if (cloud.kind === "fire") {
+    if (cloud.kind === "fire" && cloud.variant !== "magicalFire") {
       cloud.tiles = cloud.tiles.filter(
         (tile) => state.tiles[tile.y]?.[tile.x]?.terrain !== "water",
       );
@@ -4640,7 +4771,25 @@ const applyClouds = (
     ) => {
       if (actor.hp <= 0 || !occupied.has(mapPointKey(actor))) return;
       if (cloud.kind === "fire") {
-        addStatus(actor.statuses, "burning", BURNING_DURATION, cloud.power);
+        addStatus(
+          actor.statuses,
+          "burning",
+          cloud.variant === "magicalFire"
+            ? MAGICAL_FIRE_CONFIG.burningTurns
+            : BURNING_DURATION,
+          cloud.power,
+        );
+        if (cloud.variant === "magicalFire") {
+          actor.hp = Math.max(0, actor.hp - cloud.power);
+          effects.push({
+            x: actor.x,
+            y: actor.y,
+            text: `-${cloud.power}`,
+            color: "#ff6b35",
+            kind: "damage",
+            sourceId: cloud.id,
+          });
+        }
       } else if (cloud.kind === "frost") {
         addStatus(actor.statuses, "chilled", 3, cloud.power);
       } else if (cloud.kind === "paralytic") {
@@ -4687,6 +4836,8 @@ const applyClouds = (
         ),
       );
     }
+
+    if (cloud.variant === "magicalFire") continue;
 
     if (cloud.kind === "fire") {
       cloud.tiles.forEach((tile) => {
@@ -4820,6 +4971,7 @@ const companionBlockedSet = (state: GameState) =>
     ...state.objects
       .filter((object) => !object.looted)
       .map(mapPointKey),
+    ...magicalFireTileKeys(state),
   ]);
 
 export const hasCompanionExplorationFrontier = (state: GameState) =>
@@ -5301,6 +5453,9 @@ export function activateCompanionQuickslot(
           cloud.spreadPerTurn,
         )
       : false;
+    if (slot.defId === "potion_frost") {
+      extinguishMagicalFireAt(next, landing, cloud?.maxRadius ?? 0);
+    }
     if (cloud?.kind === "fire" && !created) {
       pushLog(next, `${companion.name}이(가) 던진 ${definition.name}의 불꽃이 물 위에서 식었습니다.`);
     } else if (created) {
@@ -8657,6 +8812,9 @@ export function throwItem(
           cloud.spreadPerTurn,
         )
       : false;
+    if (defId === "potion_frost") {
+      extinguishMagicalFireAt(next, landing, cloud?.maxRadius ?? 0);
+    }
     if (cloud?.kind === "fire" && !created) {
       pushLog(next, `${definition.name}이(가) 깨졌지만 물 위에서 불꽃이 식었습니다.`);
     } else if (created) {
@@ -8922,6 +9080,7 @@ export function pathTo(
     ...state.objects
       .filter((object) => !object.looted)
       .map(mapPointKey),
+    ...magicalFireTileKeys(state),
   ]);
   const targetHasEnemy = state.enemies.some(
     (enemy) => enemy.x === target.x && enemy.y === target.y,
@@ -8934,6 +9093,13 @@ export function pathTo(
   );
   const canUnlock = (state.player.inventory.iron_key ?? 0) > 0;
   if (targetHasEnemy || targetHasObject) blocked.delete(mapPointKey(target));
+  if ((state.clouds ?? []).some(
+    (cloud) =>
+      cloud.variant === "magicalFire" &&
+      cloud.tiles.some((tile) => pointEquals(tile, target)),
+  )) {
+    blocked.delete(mapPointKey(target));
+  }
   if (
     targetHasEnemy ||
     targetHasObject ||
@@ -9002,6 +9168,7 @@ export function pathToPartyActor(
     ...state.objects
       .filter((object) => !object.looted)
       .map(mapPointKey),
+    ...magicalFireTileKeys(state),
   ]);
   const targetIsInteractive =
     state.enemies.some((enemy) => enemy.hp > 0 && pointEquals(enemy, target)) ||
@@ -9035,6 +9202,7 @@ export function planAutoExplore(
   options: { ignoreUnpickableItems?: boolean } = {},
 ): AutoExplorePlan | null {
   const knownPathTo = (target: Point) => {
+    if (magicalFireTileKeys(state).includes(mapPointKey(target))) return [];
     const knownTiles = state.tiles.map((row, y) =>
       row.map((tile, x) =>
         tile.discovered || (x === target.x && y === target.y)
@@ -9047,6 +9215,7 @@ export function planAutoExplore(
       ...state.objects
         .filter((object) => !object.looted)
         .map(mapPointKey),
+      ...magicalFireTileKeys(state),
     ]);
     blocked.delete(mapPointKey(target));
     return findPath(

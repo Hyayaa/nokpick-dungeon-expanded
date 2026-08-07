@@ -75,6 +75,7 @@ export type SpecialRoomPaintResult = {
   traps: DungeonTrap[];
   rewards: SpecialRewardSlot[];
   toxicGasTiles: Point[];
+  magicalFireTiles: Point[];
 };
 
 const pointKey = ({ x, y }: Point) => `${x},${y}`;
@@ -181,6 +182,7 @@ const baseResult = (
     traps: [],
     rewards: [],
     toxicGasTiles: [],
+    magicalFireTiles: [],
   };
 };
 
@@ -201,8 +203,7 @@ const paintStorage = (
     ),
     random,
   );
-  const count = random.int(3, 4);
-  result.rewards = points.slice(0, count).map((point, index) =>
+  result.rewards = points.slice(0, 4).map((point, index) =>
     reward(room, index, point, ["potion", "scroll", "food", "weapon", "armor"], index === 0 ? 2 : 1),
   );
   return result;
@@ -221,7 +222,7 @@ const paintMagicalFire = (
   if (side === "left" || side === "right") {
     const fireX = room.center.x;
     for (let y = room.top + 1; y < room.bottom; y += 1) {
-      tiles[y][fireX].terrain = "magicalFire";
+      result.magicalFireTiles.push({ x: fireX, y });
     }
     const left = side === "right" ? fireX + 1 : room.left + 1;
     const right = side === "right" ? room.right - 1 : fireX - 1;
@@ -232,7 +233,7 @@ const paintMagicalFire = (
   } else {
     const fireY = room.center.y;
     for (let x = room.left + 1; x < room.right; x += 1) {
-      tiles[fireY][x].terrain = "magicalFire";
+      result.magicalFireTiles.push({ x, y: fireY });
     }
     const top = side === "bottom" ? fireY + 1 : room.top + 1;
     const bottom = side === "bottom" ? room.bottom - 1 : fireY - 1;
@@ -242,7 +243,7 @@ const paintMagicalFire = (
     }
   }
   result.rewards = shuffled(rewardPoints, random)
-    .slice(0, random.int(3, 4))
+    .slice(0, 4)
     .map((point, index) =>
       reward(room, index, point, ["potion", "scroll", "food", "wand"], index === 0 ? 2 : 1),
     );

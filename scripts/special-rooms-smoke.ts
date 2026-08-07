@@ -2,11 +2,18 @@ import assert from "node:assert/strict";
 import {
   createExpeditionGame,
   createNewGame,
+  descendFloor,
   playerStep,
   throwItem,
   useItem as consumeItem,
+  waitTurn,
 } from "../app/game/engine";
-import { findPath, generateFloor } from "../app/game/map";
+import { findPath, isWalkable } from "../app/game/map";
+import {
+  DUNGEON_DEFINITIONS,
+  generateDungeonOffers,
+  selectMainLootEntries,
+} from "../app/game/campaign";
 import {
   P0_SPECIAL_ROOM_PRESETS,
   SPECIAL_ROOM_REGISTRY,
@@ -23,6 +30,7 @@ const rules = {
   difficultyScale: base.difficultyScale,
   difficulty: base.difficulty,
   mainDropIds: [...base.mainDropIds],
+  specialRoomPlan: [],
   lootPlan: [],
   goldPlan: [],
 };
@@ -51,7 +59,10 @@ const stageNextTo = (game: GameState, target: Point) => {
     { x: target.x + 1, y: target.y },
     { x: target.x, y: target.y - 1 },
     { x: target.x, y: target.y + 1 },
-  ].find((point) => game.tiles[point.y]?.[point.x]);
+  ].find((point) => {
+    const terrain = game.tiles[point.y]?.[point.x]?.terrain;
+    return terrain && isWalkable(terrain, false);
+  });
   assert.ok(approach, "an adjacent staging point must exist");
   game.player.x = approach.x;
   game.player.y = approach.y;
@@ -112,14 +123,30 @@ for (const preset of P0_SPECIAL_ROOM_PRESETS) {
 {
   const game = gameFor("magicalFire");
   game.enemies = [];
-  const fire = pointsWithTerrain(game, "magicalFire")[0];
+  const magicalCloud = game.clouds.find(
+    (cloud) => cloud.variant === "magicalFire",
+  );
+  const fire = magicalCloud?.tiles[0];
   assert.ok(fire);
+  assert.ok(
+    ["floor", "specialFloor"].includes(game.tiles[fire.y][fire.x].terrain),
+    "magical fire must sit on ordinary walkable terrain",
+  );
   const step = stageNextTo(game, fire);
-  const blocked = playerStep(game, step.dx, step.dy);
-  assert.equal(blocked.consumedTurn, false);
-  game.player.inventory.potion_frost = 1;
-  const cooled = throwItem(game, "potion_frost", fire).state;
-  assert.equal(pointsWithTerrain(cooled, "magicalFire").length, 0);
+  const enteredFire = playerStep(game, step.dx, step.dy);
+  assert.equal(enteredFire.consumedTurn, true);
+  assert.ok(enteredFire.state.player.hp < game.player.hp);
+  assert.ok(
+    enteredFire.state.player.statuses.some(
+      (status) => status.id === "burning" && status.power >= 4,
+    ),
+  );
+  const persisted = waitTurn(enteredFire.state).state;
+  assert.ok(persisted.clouds.some((cloud) => cloud.variant === "magicalFire"));
+  persisted.player.inventory.potion_frost = 1;
+  stageNextTo(persisted, fire);
+  const cooled = throwItem(persisted, "potion_frost", fire).state;
+  assert.ok(cooled.clouds.every((cloud) => cloud.variant !== "magicalFire"));
   const entered = playerStep(cooled, step.dx, step.dy);
   assert.equal(entered.state.player.x, fire.x);
 }
@@ -201,10 +228,56 @@ assert.equal(reloaded.player.inventory.crystal_key ?? 0, 0);
 assert.equal(reloaded.tiles[choice.opened[0].y][choice.opened[0].x].terrain, "openDoor");
 assert.equal(reloaded.tiles[choice.blockedDoor.y][choice.blockedDoor.x].terrain, "crystalDoor");
 
-const randomSpecials = new Set<string>();
-for (let index = 1; index <= 48; index += 1) {
-  generateFloor(index * 7919).specialRooms.forEach((room) => randomSpecials.add(room.kind));
+for (const dungeon of DUNGEON_DEFINITIONS) {
+  const potionRooms = dungeon.specialRoomPlan.filter(
+    (entry) =>
+      SPECIAL_ROOM_REGISTRY.find((room) => room.preset === entry.preset)
+        ?.compatibilityGroup === "potion-solution",
+  );
+  assert.ok(potionRooms.length >= 1 && potionRooms.length <= 2);
+  assert.equal(new Set(potionRooms.map((room) => room.floor)).size, potionRooms.length);
+  const majorLoot = selectMainLootEntries(dungeon.lootPlan);
+  assert.equal(majorLoot.length, 2);
+  assert.ok(majorLoot.every((entry) => entry.source === "specialReward"));
+  assert.ok(
+    majorLoot.every((entry) =>
+      potionRooms.some(
+        (room) => room.floor === entry.floor && room.preset === entry.roomKind,
+      )),
+  );
+  const runestones = dungeon.lootPlan.filter(
+    (entry) => entry.purpose === "runeStone",
+  );
+  assert.ok(Math.abs(runestones.length - dungeon.floorCount) <= 1);
+  assert.ok(
+    [...new Set(runestones.map((entry) => entry.floor))].every(
+      (floor) => runestones.filter((entry) => entry.floor === floor).length <= 2,
+    ),
+  );
 }
-assert.ok(randomSpecials.size > 0, "the random special-room pool must be active");
+
+const plannedDungeon = DUNGEON_DEFINITIONS[0];
+const plannedPotionFloor = plannedDungeon.specialRoomPlan.find(
+  (entry) =>
+    SPECIAL_ROOM_REGISTRY.find((room) => room.preset === entry.preset)
+      ?.compatibilityGroup === "potion-solution",
+)!.floor;
+let plannedGame = createExpeditionGame(
+  seed,
+  plannedDungeon,
+  base.player,
+  [],
+);
+while (plannedGame.floor < plannedPotionFloor) plannedGame = descendFloor(plannedGame);
+const placedPlanIds = new Set([
+  ...plannedGame.groundItems.map((item) => item.dungeonLootId),
+  ...plannedGame.objects.flatMap((object) => object.lootPlanEntryIds ?? []),
+]);
+selectMainLootEntries(plannedDungeon.lootPlan)
+  .filter((entry) => entry.floor === plannedPotionFloor)
+  .forEach((entry) => assert.ok(placedPlanIds.has(entry.id)));
+
+assert.deepEqual(generateDungeonOffers(seed), generateDungeonOffers(seed));
+assert.notDeepEqual(generateDungeonOffers(seed), generateDungeonOffers(seed + 1));
 
 console.log("special rooms, guaranteed loot, traps, crystal choices, determinism, and reload checks passed");

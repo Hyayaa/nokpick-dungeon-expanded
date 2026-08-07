@@ -4892,6 +4892,7 @@ function DeveloperDungeonLoot({
     ground: "바닥",
     object: "오브젝트",
     enemy: "적 드롭",
+    specialReward: "특수방 보상",
   } as const;
   const displayEntries: Array<{
     key: string;
@@ -10686,7 +10687,7 @@ export default function DungeonGame() {
         : undefined;
     const expeditionSeed =
       developerMode &&
-        (developerParams.get("dev-floor") === "chasm" || forcedSpecialRoom)
+        (developerParams.get("dev-room") === "p0" || forcedSpecialRoom)
         ? 0x00000002
         : randomDungeonSeed();
     const forcedRoomPresets =
@@ -10702,6 +10703,7 @@ export default function DungeonGame() {
         difficultyScale: dungeon.difficultyScale,
         difficulty: dungeon.difficulty,
         mainDropIds: [...dungeon.mainDropIds],
+        specialRoomPlan: dungeon.specialRoomPlan,
         lootPlan: dungeon.lootPlan,
         goldPlan: dungeon.goldPlan,
       },

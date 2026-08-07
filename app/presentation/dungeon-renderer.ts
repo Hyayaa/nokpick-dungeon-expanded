@@ -703,19 +703,6 @@ export function startDungeonRenderer({
         );
       });
 
-      state.tiles.forEach((row, y) => row.forEach((tile, x) => {
-        if (tile.terrain !== "magicalFire" || !inViewport(x, y)) return;
-        if (!revealAll && !tile.visible) return;
-        drawLogicalGridPixels(
-          context,
-          fieldTilePixels("fire", now, x * 31 + y * 17),
-          screenX(x * TILE_SIZE),
-          screenY(y * TILE_SIZE),
-          tileScreenSize / 16,
-          1,
-        );
-      }));
-
       const cloudColors: Record<string, string> = {
         fire: "rgba(255, 103, 48, .32)",
         frost: "rgba(116, 224, 255, .32)",

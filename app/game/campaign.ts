@@ -34,13 +34,19 @@ import {
   DungeonGoldPlanEntry,
   DungeonLootPlanEntry,
   DungeonObjectKind,
+  DungeonSpecialRoomPlanEntry,
   InventoryInstance,
   ItemCategory,
   ItemPickup,
   ItemGrade,
   Player,
   ShopState,
+  SpecialRoomKind,
 } from "./types";
+import {
+  SPECIAL_ROOM_REGISTRY,
+  specialRoomMetadata,
+} from "./special-rooms";
 
 export type DungeonId = string;
 export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -62,6 +68,7 @@ export type DungeonDefinition = {
   floorCount: number;
   difficultyScale: number;
   mainDropIds: string[];
+  specialRoomPlan: DungeonSpecialRoomPlanEntry[];
   lootPlan: DungeonLootPlanEntry[];
   goldPlan: DungeonGoldPlanEntry[];
   completionGold: number;
@@ -80,6 +87,7 @@ type DungeonTheme = Omit<
   | "floorCount"
   | "difficultyScale"
   | "mainDropIds"
+  | "specialRoomPlan"
   | "lootPlan"
   | "goldPlan"
   | "completionGold"
@@ -548,18 +556,137 @@ type PlannedRewardCandidate = {
   objectKind?: Exclude<DungeonObjectKind, "alchemy">;
 };
 
-const createDungeonLootPlan = ({
+const pickWeightedSpecial = (
+  candidates: readonly typeof SPECIAL_ROOM_REGISTRY[number][],
+  random: () => number,
+) => {
+  const total = candidates.reduce((sum, entry) => sum + entry.weight, 0);
+  let roll = random() * total;
+  for (const entry of candidates) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry;
+  }
+  return candidates[candidates.length - 1];
+};
+
+export const createDungeonSpecialRoomPlan = ({
+  planId,
+  seed,
+  floorCount,
+}: {
+  planId: string;
+  seed: number;
+  floorCount: number;
+}): DungeonSpecialRoomPlanEntry[] => {
+  const random = seededRandom(seed ^ 0x73a9c5d1);
+  const eligibleFloors = shuffleWith(
+    Array.from({ length: floorCount }, (_, index) => index + 1),
+    random,
+  );
+  const potionPool = SPECIAL_ROOM_REGISTRY.filter(
+    (entry) => entry.compatibilityGroup === "potion-solution",
+  );
+  const potionCount = Math.min(
+    eligibleFloors.length,
+    random() < 0.5 ? 1 : 2,
+  );
+  const plan: DungeonSpecialRoomPlanEntry[] = [];
+  const remainingPotions = [...potionPool];
+  for (let index = 0; index < potionCount; index += 1) {
+    const selected = pickWeightedSpecial(remainingPotions, random);
+    plan.push({
+      id: `${planId}-special-${index + 1}`,
+      floor: eligibleFloors[index],
+      preset: selected.preset,
+    });
+    remainingPotions.splice(remainingPotions.indexOf(selected), 1);
+  }
+  const crystalFloor = eligibleFloors[potionCount];
+  if (crystalFloor !== undefined && random() < 0.6) {
+    const crystalPool = SPECIAL_ROOM_REGISTRY.filter(
+      (entry) => entry.compatibilityGroup === "crystal-key",
+    );
+    const selected = pickWeightedSpecial(crystalPool, random);
+    plan.push({
+      id: `${planId}-special-${plan.length + 1}`,
+      floor: crystalFloor,
+      preset: selected.preset,
+    });
+  }
+  return plan.sort((first, second) => first.floor - second.floor);
+};
+
+type SpecialRewardProfile = {
+  categories: readonly ItemCategory[];
+  tier: 1 | 2 | 3;
+  objectKind?: Exclude<DungeonObjectKind, "alchemy">;
+};
+
+const specialRewardProfiles = (
+  roomKind: SpecialRoomKind,
+): SpecialRewardProfile[] => {
+  if (roomKind === "storage") {
+    return Array.from({ length: 4 }, (_, index) => ({
+      categories: ["potion", "scroll", "food", "weapon", "armor"],
+      tier: index === 0 ? 2 : 1,
+    }));
+  }
+  if (roomKind === "magicalFire") {
+    return Array.from({ length: 4 }, (_, index) => ({
+      categories: ["potion", "scroll", "food", "wand"],
+      tier: index === 0 ? 2 : 1,
+    }));
+  }
+  if (roomKind === "toxicGas") {
+    return Array.from({ length: 3 }, (_, index) => ({
+      categories: index === 0
+        ? ["ring", "wand", "artifact"]
+        : ["potion", "scroll", "misc"],
+      tier: index === 0 ? 2 : 1,
+      objectKind: index === 0 ? "crystalChest" : "chest",
+    }));
+  }
+  if (roomKind === "traps") {
+    return [{
+      categories: ["weapon", "armor", "wand", "ring"],
+      tier: 3,
+      objectKind: "crystalChest",
+    }];
+  }
+  if (roomKind === "crystalChoice") {
+    return [
+      { categories: ["potion", "scroll"], tier: 2, objectKind: "chest" },
+      {
+        categories: ["wand", "ring", "artifact", "weapon", "armor"],
+        tier: 3,
+        objectKind: "crystalChest",
+      },
+    ];
+  }
+  return Array.from({ length: 6 }, (_, index) => ({
+    categories: index < 2
+      ? ["potion", "scroll", "food"]
+      : index < 4
+        ? ["potion", "scroll", "bomb", "brew"]
+        : ["potion", "scroll", "wand", "artifact"],
+    tier: (Math.floor(index / 2) + 1) as 1 | 2 | 3,
+  }));
+};
+
+export const createDungeonLootPlan = ({
   planId,
   seed,
   difficulty,
   floorCount,
   mainDropIds,
+  specialRoomPlan,
 }: {
   planId: string;
   seed: number;
   difficulty: DungeonDifficulty;
   floorCount: number;
   mainDropIds: readonly string[];
+  specialRoomPlan: readonly DungeonSpecialRoomPlanEntry[];
 }) => {
   const rules = DUNGEON_DIFFICULTY_RULES[difficulty];
   const random = seededRandom(seed ^ 0xa511e9b3);
@@ -570,7 +697,10 @@ const createDungeonLootPlan = ({
     floor: number,
     source: DungeonLootPlanEntry["source"],
     defId: string,
-    objectKind?: Exclude<DungeonObjectKind, "alchemy">,
+    options: Pick<
+      DungeonLootPlanEntry,
+      "objectKind" | "purpose" | "roomKind" | "slotIndex"
+    > = {},
   ) => {
     const id = `${planId}-loot-${entryIndex + 1}`;
     const definition = ITEM_DEFS[defId];
@@ -597,23 +727,69 @@ const createDungeonLootPlan = ({
       source,
       defId,
       quantity,
-      objectKind,
+      ...options,
       instance,
     });
     entryIndex += 1;
   };
 
-  const featuredByFloor = new Map<number, PlannedRewardCandidate[]>();
+  for (let floor = 1; floor <= floorCount; floor += 1) {
+    appendEntry(floor, "ground", "iron_key", { purpose: "key" });
+  }
+
+  specialRoomPlan.forEach((room) => {
+    const requiredCount = room.preset === "crystalPath" ? 3 : 1;
+    for (let index = 0; index < requiredCount; index += 1) {
+      appendEntry(room.floor, "ground", specialRoomMetadata(room.preset).requiredItemId, {
+        purpose:
+          specialRoomMetadata(room.preset).compatibilityGroup === "crystal-key"
+            ? "key"
+            : "requiredSolution",
+        roomKind: room.preset,
+        slotIndex: index,
+      });
+    }
+  });
+
+  const potionRooms = specialRoomPlan.filter(
+    (room) =>
+      specialRoomMetadata(room.preset).compatibilityGroup === "potion-solution",
+  );
+  const majorSlots = new Map<string, Set<number>>();
   mainDropIds.slice(0, 2).forEach((defId, index) => {
-    const floor = index === 0 ? 1 : floorCount;
-    const rewards = featuredByFloor.get(floor) ?? [];
-    rewards.push({
-      source: index === 0 ? "ground" : "object",
-      defId,
-      priority: 4,
-      objectKind: index === 0 ? undefined : "crystalChest",
+    const room = potionRooms.length === 1
+      ? potionRooms[0]
+      : potionRooms[index % potionRooms.length];
+    if (!room) return;
+    const slotIndex = potionRooms.length === 1 ? index : 0;
+    const occupied = majorSlots.get(room.id) ?? new Set<number>();
+    occupied.add(slotIndex);
+    majorSlots.set(room.id, occupied);
+    appendEntry(room.floor, "specialReward", defId, {
+      purpose: "majorLoot",
+      roomKind: room.preset,
+      slotIndex,
     });
-    featuredByFloor.set(floor, rewards);
+  });
+
+  specialRoomPlan.forEach((room) => {
+    specialRewardProfiles(room.preset).forEach((profile, slotIndex) => {
+      if (majorSlots.get(room.id)?.has(slotIndex)) return;
+      const rolls = Array.from({ length: profile.tier }, () =>
+        pickTieredFloorLoot(profile.categories, rules.itemTier, random),
+      );
+      const defId = rolls.sort(
+        (first, second) =>
+          (ITEM_DEFS[second]?.minFloor ?? 1) -
+          (ITEM_DEFS[first]?.minFloor ?? 1),
+      )[0];
+      appendEntry(room.floor, "specialReward", defId, {
+        purpose: "specialReward",
+        roomKind: room.preset,
+        slotIndex,
+        objectKind: profile.objectKind,
+      });
+    });
   });
 
   for (let floor = 1; floor <= floorCount; floor += 1) {
@@ -623,7 +799,6 @@ const createDungeonLootPlan = ({
         defId: "potion_healing",
         priority: 1,
       },
-      ...(featuredByFloor.get(floor) ?? []),
     ];
     const potionCount = 1 + Math.floor(random() * 3);
     const usedPotions = new Set(["potion_healing"]);
@@ -691,18 +866,9 @@ const createDungeonLootPlan = ({
           floor,
           candidate.source,
           candidate.defId,
-          candidate.objectKind,
+          { objectKind: candidate.objectKind, purpose: "normal" },
         ),
       );
-
-    if (floor === 2) {
-      const runestones = dropCandidates("stone", rules.itemTier);
-      appendEntry(
-        floor,
-        "ground",
-        runestones[Math.floor(random() * runestones.length)],
-      );
-    }
 
     for (
       let enemyIndex = 0;
@@ -710,9 +876,29 @@ const createDungeonLootPlan = ({
       enemyIndex += 1
     ) {
       if (random() >= ENEMY_DROP_CHANCE) continue;
-      appendEntry(floor, "enemy", pickEnemyDrop(random));
+      appendEntry(floor, "enemy", pickEnemyDrop(random), { purpose: "normal" });
     }
   }
+
+  const runeRoll = random();
+  const runeJitter = runeRoll < 0.25 ? -1 : runeRoll < 0.75 ? 0 : 1;
+  const runeFloors = shuffleWith(
+    Array.from({ length: floorCount }, (_, index) => index + 1),
+    random,
+  );
+  if (runeJitter < 0 && runeFloors.length > 1) runeFloors.pop();
+  if (runeJitter > 0 && runeFloors.length > 0) {
+    runeFloors.push(runeFloors[Math.floor(random() * runeFloors.length)]);
+  }
+  const runestones = dropCandidates("stone", rules.itemTier);
+  runeFloors.forEach((floor) =>
+    appendEntry(
+      floor,
+      "ground",
+      runestones[Math.floor(random() * runestones.length)],
+      { purpose: "runeStone" },
+    ),
+  );
 
   if (!entries.some((entry) => entry.instance)) {
     appendEntry(
@@ -723,7 +909,7 @@ const createDungeonLootPlan = ({
         rules.itemTier,
         random,
       ),
-      "crystalChest",
+      { objectKind: "crystalChest", purpose: "normal" },
     );
   }
 
@@ -736,14 +922,17 @@ const MAIN_LOOT_EXCLUDED_CATEGORIES = new Set<ItemCategory>([
   "stone",
 ]);
 
-/**
- * The hub advertises the two highest-grade planned rewards. Duplicate item
- * definitions are collapsed to their best rolled instance, and common nature
- * consumables never occupy a featured slot.
- */
+/** The hub reads the exact major-loot instances selected before geometry. */
 export const selectMainLootEntries = (
   lootPlan: readonly DungeonLootPlanEntry[],
 ) => {
+  const plannedMajorLoot = lootPlan.filter(
+    (entry) => entry.purpose === "majorLoot",
+  );
+  if (plannedMajorLoot.length > 0) return plannedMajorLoot.slice(0, 2);
+
+  // Older saved plans did not carry purpose metadata. Keep their previous
+  // deterministic selection without rerolling any instance.
   const bestByDefinition = new Map<
     string,
     { entry: DungeonLootPlanEntry; gradeIndex: number; planIndex: number }
@@ -866,12 +1055,20 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
 
     const id = `${theme.themeId}-${(seed >>> 0).toString(16)}-${index + 1}`;
     const difficultyScale = rules.enemyStatMultiplier;
+    const dungeonPlanSeed =
+      (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
+    const specialRoomPlan = createDungeonSpecialRoomPlan({
+      planId: id,
+      seed: dungeonPlanSeed,
+      floorCount,
+    });
     const lootPlan = createDungeonLootPlan({
       planId: id,
-      seed: (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0,
+      seed: dungeonPlanSeed,
       difficulty,
       floorCount,
       mainDropIds: selectedDrops,
+      specialRoomPlan,
     });
     const { goldPlan, completionGold, goldTarget } = createDungeonGoldPlan({
       planId: id,
@@ -896,6 +1093,7 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
       floorCount,
       difficultyScale,
       mainDropIds,
+      specialRoomPlan,
       lootPlan,
       goldPlan,
       completionGold,

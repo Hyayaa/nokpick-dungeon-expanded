@@ -89,12 +89,6 @@ export const TERRAIN_DETAILS: Record<
     descriptionKo: "열쇠로 열 수 없는 가연성 장벽입니다. 화염으로 태울 수 있습니다.",
     descriptionEn: "A flammable barrier that cannot be opened by a key.",
   },
-  magicalFire: {
-    nameKo: "영원의 불꽃",
-    nameEn: "Magical Fire",
-    descriptionKo: "통과할 수 없는 마법 불꽃입니다. 냉기 효과로 제거할 수 있습니다.",
-    descriptionEn: "Impassable magical flame that can be removed with frost.",
-  },
 };
 
 export const OBJECT_DETAILS: Record<

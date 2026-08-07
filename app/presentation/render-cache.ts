@@ -17,7 +17,6 @@ const TERRAIN_CODE: Record<Terrain, number> = {
   lockedDoor: 12,
   crystalDoor: 13,
   barricade: 14,
-  magicalFire: 15,
 };
 
 export type DungeonRenderCache = {
