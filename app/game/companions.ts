@@ -15,6 +15,7 @@ import {
   Direction,
   InventoryInstance,
   Point,
+  StatusEffect,
 } from "./types";
 
 export type CompanionClassDefinition = {
@@ -259,15 +260,20 @@ export const createCompanionTraits = (seedKey: string) => {
   return shuffled.slice(0, 1 + Math.floor(random() * 4));
 };
 
-type TraitCarrier = { traits?: readonly CompanionTraitId[] };
+type TraitCarrier = {
+  traits?: readonly CompanionTraitId[];
+  statuses?: readonly StatusEffect[];
+};
 const hasTrait = (carrier: TraitCarrier, id: CompanionTraitId) =>
   (carrier.traits ?? []).includes(id);
 
 export const characterDamageTakenMultiplier = (carrier: TraitCarrier) =>
-  hasTrait(carrier, "tough") ? 0.8 : 1;
+  (hasTrait(carrier, "tough") ? 0.8 : 1) *
+  ((carrier.statuses ?? []).some((status) => status.id === "vulnerable") ? 1.25 : 1);
 
 export const characterAttackMultiplier = (carrier: TraitCarrier) =>
-  hasTrait(carrier, "aggressive") ? 1.15 : 1;
+  (hasTrait(carrier, "aggressive") ? 1.15 : 1) *
+  ((carrier.statuses ?? []).some((status) => status.id === "weakened") ? 0.75 : 1);
 
 export const characterAttackBonus = (carrier: TraitCarrier) =>
   hasTrait(carrier, "powerful") ? 2 : 0;
@@ -384,7 +390,7 @@ export const getCompanionAttack = (companion: Companion) =>
           (total, { definition, instance }) =>
             total + equipmentStatProfile(definition, instance).attack,
           0,
-        ) +
+        ) * ((companion.statuses ?? []).some((status) => status.id === "degraded") ? 0.5 : 1) +
         (companion.statuses ?? [])
           .filter((status) => status.id === "stamina")
           .reduce((total, status) => total + status.power, 0)) *
@@ -399,7 +405,7 @@ export const getCompanionDefense = (companion: Companion) =>
     (total, { definition, instance }) =>
       total + equipmentStatProfile(definition, instance).defense,
     0,
-  ) +
+  ) * ((companion.statuses ?? []).some((status) => status.id === "degraded") ? 0.5 : 1) +
   (companion.statuses ?? [])
     .filter(
       (status) =>
@@ -408,11 +414,13 @@ export const getCompanionDefense = (companion: Companion) =>
     .reduce((total, status) => total + status.power, 0);
 
 export const getCompanionAccuracy = (companion: Companion) =>
-  companion.accuracy + characterAccuracyBonus(companion);
+  companion.accuracy + characterAccuracyBonus(companion) -
+  ((companion.statuses ?? []).some((status) => status.id === "hexed") ? 4 : 0);
 
 export const getCompanionEvasion = (companion: Companion) =>
   companion.evasion +
   characterEvasionBonus(companion) +
+  ((companion.statuses ?? []).some((status) => status.id === "hexed") ? -4 : 0) +
   ((companion.statuses ?? []).some((status) => status.id === "haste") ? 3 : 0);
 
 export const getCompanionViewDistance = (companion: Companion) =>
@@ -422,7 +430,8 @@ export const getCompanionMoveSpeed = (companion: Companion) => {
   const statusMultiplier =
     ((companion.statuses ?? []).some((status) => status.id === "haste") ? 1.5 : 1) *
     ((companion.statuses ?? []).some((status) => status.id === "stamina") ? 1.15 : 1) *
-    ((companion.statuses ?? []).some((status) => status.id === "chilled") ? 0.75 : 1);
+    ((companion.statuses ?? []).some((status) => status.id === "chilled") ? 0.75 : 1) *
+    ((companion.statuses ?? []).some((status) => status.id === "crippled") ? 0.5 : 1);
   return Math.max(
     0.25,
     Math.round(

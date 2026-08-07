@@ -2275,6 +2275,7 @@ export function findPath(
   target: Point,
   blocked: Set<string> = new Set(),
   canUnlock = false,
+  canFly = false,
 ) {
   if (!inside(tiles, target.x, target.y)) return [] as Point[];
   const targetKey = pointKey(target);
@@ -2292,7 +2293,8 @@ export function findPath(
         !inside(tiles, next.x, next.y) ||
         previous.has(key) ||
         (blocked.has(key) && key !== targetKey) ||
-        !isWalkable(tiles[next.y][next.x].terrain, canUnlock)
+        !(isWalkable(tiles[next.y][next.x].terrain, canUnlock) ||
+          (canFly && tiles[next.y][next.x].terrain === "chasm"))
       ) {
         continue;
       }

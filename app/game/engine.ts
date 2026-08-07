@@ -55,6 +55,21 @@ import {
   deriveCompanionSkill,
   type CompanionSkillModifier,
 } from "./companion-skill-blueprints";
+import { executeCombatSkillCore, type CombatSkillBlueprint } from "./combat-skills";
+import {
+  chooseEnemyForSpawn,
+  enemyRegionForDifficulty,
+  fixedEnemyForSpawnSlot,
+  relativeEnemyStage,
+} from "./enemy-spawn";
+import { enemyDefinition } from "./enemy-definitions";
+import {
+  applyEnemyMeleeIdentity,
+  applyEnemyIncomingDamage,
+  cancelInterruptibleEnemyWindup,
+  resolveEnemyDeathMechanics,
+  runEnemySkillTurn,
+} from "./enemy-combat";
 import {
   EQUIPMENT_TRAITS,
   createEquipmentInstance,
@@ -170,6 +185,7 @@ export type ExpeditionRules = {
   maxFloor: number;
   difficultyScale: number;
   difficulty?: number;
+  enemyRegion?: GameState["enemyRegion"];
   mainDropIds: string[];
   specialRoomPlan?: GameState["specialRoomPlan"];
   lootPlan?: GameState["lootPlan"];
@@ -485,7 +501,8 @@ export const getPlayerMoveSpeed = (player: Player) => {
   const statusMultiplier =
     ((player.statuses ?? []).some((status) => status.id === "haste") ? 1.5 : 1) *
     ((player.statuses ?? []).some((status) => status.id === "stamina") ? 1.15 : 1) *
-    ((player.statuses ?? []).some((status) => status.id === "chilled") ? 0.75 : 1);
+    ((player.statuses ?? []).some((status) => status.id === "chilled") ? 0.75 : 1) *
+    ((player.statuses ?? []).some((status) => status.id === "crippled") ? 0.5 : 1);
   return Math.max(
     0.25,
     Math.round(itemSpeedMultiplier(player, "moveSpeed") * statusMultiplier * 100) /
@@ -716,7 +733,8 @@ export const getPlayerAttack = (player: Player) =>
     Math.round(
       (player.baseAttack +
         characterAttackBonus(player) +
-        itemBonus(player, "attack") +
+        itemBonus(player, "attack") *
+          ((player.statuses ?? []).some((status) => status.id === "degraded") ? 0.5 : 1) +
         augmentRank(player, "strongman") +
         (player.statuses ?? [])
           .filter((status) => status.id === "stamina")
@@ -728,7 +746,8 @@ export const getPlayerAttack = (player: Player) =>
 export const getPlayerDefense = (player: Player) =>
   player.baseDefense +
   characterDefenseBonus(player) +
-  itemBonus(player, "defense") +
+  itemBonus(player, "defense") *
+    ((player.statuses ?? []).some((status) => status.id === "degraded") ? 0.5 : 1) +
   (player.statuses ?? [])
     .filter(
       (status) =>
@@ -740,13 +759,15 @@ export const getPlayerDefense = (player: Player) =>
 export const getPlayerAccuracy = (player: Player) =>
   (player.accuracy ?? 10) +
   characterAccuracyBonus(player) +
-  augmentRank(player, "preciseAssault") * 2;
+  augmentRank(player, "preciseAssault") * 2 -
+  ((player.statuses ?? []).some((status) => status.id === "hexed") ? 4 : 0);
 
 export const getPlayerEvasion = (player: Player) =>
   (player.evasion ?? 5) +
   characterEvasionBonus(player) +
   augmentRank(player, "liquidAgility") * 2 +
-  ((player.statuses ?? []).some((status) => status.id === "haste") ? 3 : 0);
+  ((player.statuses ?? []).some((status) => status.id === "haste") ? 3 : 0) -
+  ((player.statuses ?? []).some((status) => status.id === "hexed") ? 4 : 0);
 
 export const getPlayerViewDistance = (player: Player) =>
   (player.viewDistance ?? 7) +
@@ -828,14 +849,6 @@ const chooseAndRemove = (state: GameState, points: Point[]) => {
   if (!points.length) return null;
   const index = randomInt(state, 0, points.length - 1);
   return points.splice(index, 1)[0];
-};
-
-const enemyPoolForFloor = (floor: number): EnemyKind[] => {
-  if (floor <= 1) return ["rat", "rat", "rat", "gnoll", "snake"];
-  if (floor === 2) return ["rat", "gnoll", "gnoll", "snake", "slime"];
-  if (floor === 3) return ["gnoll", "snake", "slime", "slime", "crab"];
-  if (floor === 4) return ["slime", "crab", "crab", "skeleton"];
-  return ["crab", "skeleton", "skeleton", "slime"];
 };
 
 export const scaledEnemyStats = (
@@ -1267,7 +1280,8 @@ const populateFloor = (
       flattenOccupiedGrass(point);
     });
 
-  const pool = enemyPoolForFloor(state.floor);
+  const enemyRegion = state.enemyRegion ?? enemyRegionForDifficulty(state.difficulty);
+  const enemyStage = relativeEnemyStage(state.floor, state.maxFloor);
   const difficultyScale = Math.max(1, state.difficultyScale ?? 1);
   const difficultyBonus = Math.max(0, (state.difficulty - 1) * 2);
   // Larger floors support real encounter groups instead of isolated enemies.
@@ -1284,9 +1298,13 @@ const populateFloor = (
   for (let index = 0; index < enemyCount; index += 1) {
     const point = chooseAndRemove(state, enemyCells);
     if (!point) break;
-    const kind = pool[randomInt(state, 0, pool.length - 1)];
+    const kind = fixedEnemyForSpawnSlot(enemyRegion, enemyStage, index) ??
+      chooseEnemyForSpawn(enemyRegion, enemyStage, () => random(state));
     const stats = scaledEnemyStats(kind, state.floor, difficultyScale);
-    const plannedDrop = plannedEnemyDrops[index];
+    const definition = enemyDefinition(kind);
+    const plannedDrop = definition.dropProfile === "none"
+      ? undefined
+      : plannedEnemyDrops[index];
     state.enemies.push({
       id: `enemy-${state.floor}-${index}-${state.rng}`,
       kind,
@@ -1304,7 +1322,13 @@ const populateFloor = (
       lastSeenPlayer: null,
       searchTurns: 0,
       statuses: [],
-      drop: plannedDrop
+      skillCooldowns: {},
+      skillUses: {},
+      pendingSkill: null,
+      faction: "hostile",
+      drop: definition.dropProfile === "none"
+        ? null
+        : plannedDrop
         ? {
             id: plannedDrop.id,
             defId: plannedDrop.defId,
@@ -1317,6 +1341,9 @@ const populateFloor = (
         : state.lootPlan?.length
           ? null
           : undefined,
+      goldDrop: definition.dropProfile === "gold"
+        ? randomInt(state, 12, 28)
+        : 0,
       ...point,
     });
     flattenOccupiedGrass(point);
@@ -1648,6 +1675,9 @@ const makeFloorState = (
     maxFloor: expeditionRules.maxFloor,
     difficultyScale: expeditionRules.difficultyScale,
     difficulty: Math.max(1, Math.min(7, expeditionRules.difficulty ?? 1)),
+    enemyRegion:
+      expeditionRules.enemyRegion ??
+      enemyRegionForDifficulty(Math.max(1, Math.min(7, expeditionRules.difficulty ?? 1))),
     mainDropIds: [...expeditionRules.mainDropIds],
     specialRoomPlan: plannedSpecialRooms.map((entry) => ({
       ...entry,
@@ -1772,6 +1802,7 @@ export function descendFloor(state: GameState): GameState {
       maxFloor: state.maxFloor,
       difficultyScale: state.difficultyScale,
       difficulty: state.difficulty,
+      enemyRegion: state.enemyRegion,
       mainDropIds: [...state.mainDropIds],
       specialRoomPlan: state.specialRoomPlan,
       lootPlan: state.lootPlan,
@@ -1976,6 +2007,7 @@ const removeDefeatedEnemies = (
       enemy.hp = enemy.maxHp;
     }
   });
+  state.enemies.forEach((enemy) => resolveEnemyDeathMechanics(state, enemy, effects));
   const defeated = state.enemies.filter((enemy) => enemy.hp <= 0);
   defeated.forEach((enemy) => {
     const resolvedSourceId =
@@ -2408,12 +2440,12 @@ export function playerStep(
           randomInt(next, -1, 2) +
           (surprise ? augmentRank(next.player, "suckerPunch") * 2 : 0),
       );
-      enemy.hp -= damage;
+      const dealtDamage = applyEnemyIncomingDamage(next, enemy, damage);
       pushLog(
         next,
         surprise
-          ? `기습 성공! ${getEnemyLabel(enemy)}에게 ${damage} 피해를 입혔습니다.`
-          : `${getEnemyLabel(enemy)}에게 ${damage} 피해를 입혔습니다.`,
+          ? `기습 성공! ${getEnemyLabel(enemy)}에게 ${dealtDamage} 피해를 입혔습니다.`
+          : `${getEnemyLabel(enemy)}에게 ${dealtDamage} 피해를 입혔습니다.`,
       );
       if (surprise) {
         effects.push({
@@ -2425,7 +2457,7 @@ export function playerStep(
       }
       effects.push({
         ...target,
-        text: `-${damage}`,
+        text: dealtDamage ? `-${dealtDamage}` : "막음!",
         color: "#fff0a6",
         kind: "damage",
         sourceId: PLAYER_ID,
@@ -2913,17 +2945,17 @@ export function manualCompanionStep(
           enemy.defense +
           randomInt(next, -1, 1),
       );
-      enemy.hp -= damage;
+      const dealtDamage = applyEnemyIncomingDamage(next, enemy, damage);
       effects.push({
         ...target,
-        text: `-${damage}`,
+        text: dealtDamage ? `-${dealtDamage}` : "막음!",
         color: "#ffe3a1",
         kind: "damage",
         sourceId: companion.id,
       });
       pushLog(
         next,
-        `${companion.name}이(가) ${getEnemyLabel(enemy)}에게 ${damage} 피해를 입혔습니다.`,
+        `${companion.name}이(가) ${getEnemyLabel(enemy)}에게 ${dealtDamage} 피해를 입혔습니다.`,
       );
     } else {
       effects.push({
@@ -3345,7 +3377,7 @@ const triggerTrapAt = (
   } else if (trap.kind === "explosive") {
     harmPlayer(7, "폭발!", "#ff9a55");
     state.enemies.forEach((enemy) => {
-      if (distance(enemy, point) <= 2) enemy.hp -= 7;
+      if (distance(enemy, point) <= 2) applyEnemyIncomingDamage(state, enemy, 7, true);
     });
     removeDefeatedEnemies(state, effects, false, trap.id);
   } else if (trap.kind === "teleportation") {
@@ -3405,7 +3437,7 @@ const statusDamage = (
 ) => {
   let skipAction = false;
   for (const status of actor.statuses ?? []) {
-    if (status.id === "burning" || status.id === "poisoned" || status.id === "corroded") {
+    if (status.id === "burning" || status.id === "poisoned" || status.id === "corroded" || status.id === "bleeding") {
       const amount =
         status.id === "corroded"
           ? Math.max(1, status.power + Math.floor((5 - status.turns) / 2))
@@ -3718,6 +3750,7 @@ type SkillActor = {
   kind: "player" | "companion";
   motionId: string;
   character: Player | Companion;
+  state: GameState;
 };
 
 const resolveSkillActor = (
@@ -3729,13 +3762,14 @@ const resolveSkillActor = (
       kind: "player",
       motionId: PLAYER_ID,
       character: state.player,
+      state,
     };
   }
   const companion = (state.companions ?? []).find(
     (candidate) => candidate.id === casterId,
   );
   return companion
-    ? { kind: "companion", motionId: companion.id, character: companion }
+    ? { kind: "companion", motionId: companion.id, character: companion, state }
     : null;
 };
 
@@ -3890,8 +3924,7 @@ const damageWithSkill = (
   effects: CombatEffect[],
   color: string,
 ) => {
-  const damage = Math.max(1, Math.round(amount));
-  enemy.hp -= damage;
+  const damage = applyEnemyIncomingDamage(actor.state, enemy, Math.max(1, Math.round(amount)), true);
   enemy.sleeping = false;
   enemy.alerted = true;
   enemy.lastSeenPlayer = {
@@ -3901,7 +3934,7 @@ const damageWithSkill = (
   effects.push({
     x: enemy.x,
     y: enemy.y,
-    text: `-${damage}`,
+    text: damage ? `-${damage}` : "막음!",
     color,
     kind: "damage",
     sourceId: actor.motionId,
@@ -4246,12 +4279,22 @@ export function activateCompanionSkill(
 
   const skillEffectHandlers: Record<CompanionSkillId, () => void> = {
     shockLeap: () => {
-    moveSkillActor(actor, target, motions, skillTravelStyle);
-    const shocked = skillEnemiesInRange(
-      next,
+    let shocked: Array<{ candidate: Enemy; damage: number }> = [];
+    executeCombatSkillCore(
+      {
+        ...definition,
+        name: definition.nameKo,
+        description: definition.descriptionKo,
+        footprint: "burst",
+      } as CombatSkillBlueprint,
+      castFrom,
       target,
-      companionSkillScalar(definition, "radius", 1),
-    ).map((candidate) => ({
+      {
+        onMove: (destination) =>
+          moveSkillActor(actor, destination, motions, skillTravelStyle),
+        onImpact: (affectedTiles) => {
+          const keys = new Set(affectedTiles.map(mapPointKey));
+          shocked = next.enemies.filter((candidate) => keys.has(mapPointKey(candidate))).map((candidate) => ({
       candidate,
       damage: damageWithSkill(
         candidate,
@@ -4260,7 +4303,10 @@ export function activateCompanionSkill(
         effects,
         "#ffd06f",
       ),
-    }));
+          }));
+        },
+      },
+    );
     if (skillHasMechanic("conductive")) {
       const directlyHitIds = new Set(shocked.map(({ candidate }) => candidate.id));
       const claimedWaterTiles = new Set<string>();
@@ -5092,7 +5138,12 @@ const tickPlayerStatuses = (state: GameState, effects: CombatEffect[]) => {
   const hoveringOverChasm =
     state.tiles[state.player.y]?.[state.player.x]?.terrain === "chasm";
   for (const status of state.player.statuses ?? []) {
-    if (status.id === "burning" || status.id === "poisoned" || status.id === "corroded") {
+    if (
+      status.id === "burning" ||
+      status.id === "poisoned" ||
+      status.id === "corroded" ||
+      status.id === "bleeding"
+    ) {
       let damage = Math.max(1, status.power);
       if (state.player.shield > 0) {
         const blocked = Math.min(state.player.shield, damage);
@@ -5932,18 +5983,18 @@ const companionMeleeAttack = (
         target.defense +
         randomInt(state, -1, 1),
     );
-    target.hp -= damage;
+    const dealtDamage = applyEnemyIncomingDamage(state, target, damage);
     effects.push({
       x: target.x,
       y: target.y,
-      text: `-${damage}`,
+      text: dealtDamage ? `-${dealtDamage}` : "막음!",
       color: "#ffe3a1",
       kind: "damage",
       sourceId: companion.id,
     });
     pushLog(
       state,
-      `${companion.name}이(가) ${getEnemyLabel(target)}에게 ${damage} 피해를 입혔습니다.`,
+      `${companion.name}이(가) ${getEnemyLabel(target)}에게 ${dealtDamage} 피해를 입혔습니다.`,
     );
   } else {
     effects.push({
@@ -6313,11 +6364,11 @@ export function runEnemyTurn(
       .filter((enemy) => distance(enemy, ward) <= 4)
       .sort((a, b) => distance(a, ward) - distance(b, ward))[0];
     if (target) {
-      target.hp -= ward.power;
+      const wardDamage = applyEnemyIncomingDamage(next, target, ward.power, true);
       effects.push({
         x: target.x,
         y: target.y,
-        text: `-${ward.power}`,
+        text: wardDamage ? `-${wardDamage}` : "막음!",
         color: "#b99cff",
         kind: "damage",
         sourceId: ward.id,
@@ -6385,13 +6436,18 @@ export function runEnemyTurn(
     ]),
   );
 
-  for (const enemy of next.enemies) {
+  for (const enemy of [...next.enemies]) {
     if (next.player.hp <= 0) break;
     if (enemy.questId && !isQuestActive(next, enemy.questId)) {
       enemy.hp = enemy.maxHp;
       continue;
     }
-    if (statusDamage(enemy, effects) || enemy.hp <= 0) continue;
+    const windupInterrupted = enemy.statuses.some(
+      (status) => status.id === "frozen" || status.id === "paralyzed",
+    );
+    const lostAction = statusDamage(enemy, effects);
+    if (windupInterrupted) cancelInterruptibleEnemyWindup(enemy);
+    if (lostAction || enemy.hp <= 0) continue;
     const playerInvisible = next.player.invisibleTurns > 0;
     const turnSight = sightAtTurnStart.get(enemy.id);
     const enemySawPlayer = turnSight?.enemySawPlayer ?? false;
@@ -6414,6 +6470,12 @@ export function runEnemyTurn(
     }
 
     if (enemy.sleeping) {
+      if (
+        enemyDefinition(enemy.kind).initialDisposition === "passive" &&
+        !enemy.behaviorState?.provoked
+      ) {
+        continue;
+      }
       enemy.sawPlayerLastTurn = false;
       const wakeTarget =
         enemySawPlayer
@@ -6495,6 +6557,7 @@ export function runEnemyTurn(
           allyTarget,
           blocked,
           false,
+          enemyDefinition(enemy.kind).properties.includes("flying"),
         );
         const destination = path[0];
         if (destination && mapPointKey(destination) !== mapPointKey(allyTarget)) {
@@ -6535,8 +6598,31 @@ export function runEnemyTurn(
       enemy.lastSeenPlayer = { x: next.player.x, y: next.player.y };
     }
 
+    if (
+      (enemy.pendingSkill || enemy.alerted) &&
+      runEnemySkillTurn(next, enemy, {
+        motions,
+        effects,
+        signals,
+        playerInvincible: options.playerInvincible,
+      })
+    ) {
+      continue;
+    }
+
+    const currentEnemyDefinition = enemyDefinition(enemy.kind);
+    if (currentEnemyDefinition.properties.includes("immovable")) continue;
+    const forbidsMelee = currentEnemyDefinition.skills.some(
+      (skillId) => skillId === "cripplingShot" || skillId === "acidicShot",
+    );
+    const meleeRange = currentEnemyDefinition.meleeRange ?? 1;
     const range = distance(enemy, next.player);
-    if (!playerInvisible && range <= 1) {
+    if (
+      !forbidsMelee &&
+      !playerInvisible &&
+      range <= meleeRange &&
+      hasLineOfSight(next.tiles, enemy, next.player)
+    ) {
       if (hasStatus(enemy, "charmed")) continue;
       const surprise = !playerSawEnemy;
       const hit = combatHit(
@@ -6566,6 +6652,7 @@ export function runEnemyTurn(
           damage -= blocked;
         }
         next.player.hp = Math.max(0, next.player.hp - damage);
+        applyEnemyMeleeIdentity(next, enemy, next.player, damage);
         pushLog(
           next,
           surprise
@@ -6606,14 +6693,15 @@ export function runEnemyTurn(
       .filter(
         (companion) =>
           companion.hp > 0 &&
-          distance(enemy, companion) <= 1,
+          distance(enemy, companion) <= meleeRange &&
+          hasLineOfSight(next.tiles, enemy, companion),
       )
       .sort(
         (a, b) =>
           a.hp / Math.max(1, a.maxHp) -
           b.hp / Math.max(1, b.maxHp),
       )[0];
-    if (adjacentCompanion) {
+    if (!forbidsMelee && adjacentCompanion) {
       if (hasStatus(enemy, "charmed")) continue;
       const hit = combatHit(
         next,
@@ -6641,6 +6729,7 @@ export function runEnemyTurn(
           ),
         );
         adjacentCompanion.hp = Math.max(0, adjacentCompanion.hp - damage);
+        applyEnemyMeleeIdentity(next, enemy, adjacentCompanion, damage);
         effects.push({
           x: adjacentCompanion.x,
           y: adjacentCompanion.y,
@@ -6680,6 +6769,10 @@ export function runEnemyTurn(
     }
 
     let destination: Point | null = null;
+    const retreatTarget = [
+      next.player,
+      ...(next.companions ?? []).filter((ally) => ally.hp > 0),
+    ].sort((a, b) => distance(a, enemy) - distance(b, enemy))[0];
     if (hasStatus(enemy, "terrified")) {
       destination = [...DIRECTIONS]
         .map((direction) => ({
@@ -6689,13 +6782,39 @@ export function runEnemyTurn(
         .filter(
           (point) =>
             inBounds(next, point) &&
-            isWalkable(next.tiles[point.y][point.x].terrain, false) &&
+            (isWalkable(next.tiles[point.y][point.x].terrain, false) ||
+              (enemyDefinition(enemy.kind).properties.includes("flying") &&
+                next.tiles[point.y][point.x].terrain === "chasm")) &&
             !enemyBlockedSet(next, enemy.id).has(mapPointKey(point)),
         )
         .sort((a, b) => distance(b, next.player) - distance(a, next.player))[0] ?? null;
     } else if (hasStatus(enemy, "rooted")) {
       destination = null;
       continue;
+    } else if (hasStatus(enemy, "crippled") && random(next) < 0.5) {
+      destination = null;
+      continue;
+    } else if (
+      retreatTarget &&
+      distance(enemy, retreatTarget) < 3 &&
+      (currentEnemyDefinition.aiProfile === "ranged" ||
+        currentEnemyDefinition.aiProfile === "skirmisher" ||
+        currentEnemyDefinition.aiProfile === "summoner")
+    ) {
+      destination = [...DIRECTIONS]
+        .map((direction) => ({
+          x: enemy.x + direction.x,
+          y: enemy.y + direction.y,
+        }))
+        .filter(
+          (point) =>
+            inBounds(next, point) &&
+            (isWalkable(next.tiles[point.y][point.x].terrain, false) ||
+              (currentEnemyDefinition.properties.includes("flying") &&
+                next.tiles[point.y][point.x].terrain === "chasm")) &&
+            !enemyBlockedSet(next, enemy.id).has(mapPointKey(point)),
+        )
+        .sort((a, b) => distance(b, retreatTarget) - distance(a, retreatTarget))[0] ?? null;
     } else
     if (
       enemy.alerted &&
@@ -6722,6 +6841,7 @@ export function runEnemyTurn(
         enemy.lastSeenPlayer,
         enemyBlockedSet(next, enemy.id),
         false,
+        enemyDefinition(enemy.kind).properties.includes("flying"),
       );
       if (path.length && mapPointKey(path[0]) !== mapPointKey(next.player)) {
         destination = path[0];
@@ -6739,13 +6859,36 @@ export function runEnemyTurn(
           .find(
             (point) =>
               inBounds(next, point) &&
-              isWalkable(next.tiles[point.y][point.x].terrain, false) &&
+              (isWalkable(next.tiles[point.y][point.x].terrain, false) ||
+                (enemyDefinition(enemy.kind).properties.includes("flying") &&
+                  next.tiles[point.y][point.x].terrain === "chasm")) &&
               !enemyBlockedSet(next, enemy.id).has(mapPointKey(point)) &&
               mapPointKey(point) !== mapPointKey(next.player),
           ) ?? null;
     }
 
     if (destination) {
+      if (
+        currentEnemyDefinition.aiProfile === "fastMelee" &&
+        enemy.alerted &&
+        enemy.lastSeenPlayer
+      ) {
+        const fastPath = findPath(
+          next.tiles,
+          enemy,
+          enemy.lastSeenPlayer,
+          enemyBlockedSet(next, enemy.id),
+          false,
+          currentEnemyDefinition.properties.includes("flying"),
+        );
+        if (
+          fastPath.length > 2 &&
+          pointEquals(fastPath[0], destination) &&
+          !pointEquals(fastPath[1], enemy.lastSeenPlayer)
+        ) {
+          destination = fastPath[1];
+        }
+      }
       const from = { x: enemy.x, y: enemy.y };
       enemy.x = destination.x;
       enemy.y = destination.y;
@@ -6949,11 +7092,11 @@ const damageEnemiesInRange = (
       (!visibleOnly || state.tiles[enemy.y][enemy.x].visible)
     ) {
       const amount = damage(enemy);
-      enemy.hp -= amount;
+      const dealtDamage = applyEnemyIncomingDamage(state, enemy, amount, true);
       effects.push({
         x: enemy.x,
         y: enemy.y,
-        text: `-${amount}`,
+        text: dealtDamage ? `-${dealtDamage}` : "막음!",
         color: "#9deaff",
         kind: "damage",
       });
@@ -8589,14 +8732,14 @@ export function zapWand(
   const effects: CombatEffect[] = [];
   const hit = (enemy: Enemy, amount: number, color: string) => {
     const resolvedAmount = amount + wandPowerBonus;
-    enemy.hp -= resolvedAmount;
+    const dealtDamage = applyEnemyIncomingDamage(next, enemy, resolvedAmount, true);
     enemy.sleeping = false;
     enemy.alerted = true;
     enemy.lastSeenPlayer = { ...next.player };
     effects.push({
       x: enemy.x,
       y: enemy.y,
-      text: `-${resolvedAmount}`,
+      text: dealtDamage ? `-${dealtDamage}` : "막음!",
       color,
       kind: "damage",
       sourceId: `wand-${defId}`,
@@ -8918,12 +9061,12 @@ export function throwItem(
   const dealtDamage = Boolean(enemy && damage > 0);
   if (enemy && damage > 0) {
     const amount = Math.max(1, damage - Math.floor(enemy.defense / 2));
-    enemy.hp -= amount;
+    const dealtDamage = applyEnemyIncomingDamage(next, enemy, amount, true);
     enemy.sleeping = false;
     enemy.alerted = true;
     effects.push({
       ...landing,
-      text: `-${amount}`,
+      text: dealtDamage ? `-${dealtDamage}` : "막음!",
       color: "#ffd27c",
       kind: "damage",
       sourceId: `throw-${defId}`,
@@ -9199,6 +9342,10 @@ export function developerSpawnEnemy(
     lastSeenPlayer: { ...next.player },
     searchTurns: 0,
     statuses: [],
+    skillCooldowns: {},
+    skillUses: {},
+    pendingSkill: null,
+    faction: "hostile",
     drop: null,
     ...destination,
   });

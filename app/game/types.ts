@@ -117,6 +117,12 @@ export type StatusEffectId =
   | "charmed"
   | "corrupted"
   | "rooted"
+  | "bleeding"
+  | "crippled"
+  | "weakened"
+  | "vulnerable"
+  | "hexed"
+  | "degraded"
   | "haste"
   | "levitating"
   | "purified"
@@ -419,7 +425,39 @@ export type CompanionSkillVisual = {
   sourceId?: string;
 };
 
-export type EnemyKind = "rat" | "gnoll" | "snake" | "slime" | "crab" | "skeleton";
+export type EnemyRegion = "sewers" | "prison" | "caves" | "city" | "halls";
+
+export type EnemyKind =
+  | "rat" | "snake" | "gnoll" | "swarm" | "crab" | "slime"
+  | "albino" | "gnoll_exile" | "hermit_crab" | "caustic_slime"
+  | "skeleton" | "thief" | "dm100" | "guard" | "necromancer"
+  | "bandit" | "spectral_necromancer" | "necro_skeleton" | "wraith"
+  | "bat" | "brute" | "shaman_red" | "shaman_blue" | "shaman_purple"
+  | "spinner" | "dm200" | "armored_brute" | "dm201"
+  | "ghoul" | "elemental_fire" | "elemental_frost" | "elemental_shock"
+  | "elemental_chaos" | "warlock" | "monk" | "senior" | "golem"
+  | "succubus" | "eye" | "scorpio" | "acidic"
+  | "demon_spawner" | "ripper_demon" | "training_leaper";
+
+export type EnemySkillId =
+  | CompanionSkillId
+  | "chainPull" | "summonSkeleton" | "summonWraith" | "summonRipper"
+  | "lightningBolt" | "shamanBolt" | "poisonWeb" | "toxicVent"
+  | "corrosiveVent" | "elementalBolt" | "darkBolt" | "teleportSelf"
+  | "charm" | "deathGaze" | "cripplingShot" | "acidicShot"
+  | "splitSwarm" | "lifeSteal" | "bruteRage" | "ghoulRevive";
+
+export type EnemyPendingSkill = {
+  skillId: EnemySkillId;
+  casterId: string;
+  targetId: string | null;
+  targetPoint: Point;
+  affectedTiles: Point[];
+  remainingWindupTurns: number;
+  startedTurn: number;
+  interruptible: boolean;
+  targetLockMode: "fixed" | "tracking";
+};
 
 export type Enemy = Point & {
   id: string;
@@ -438,6 +476,13 @@ export type Enemy = Point & {
   lastSeenPlayer: Point | null;
   searchTurns: number;
   statuses: StatusEffect[];
+  skillCooldowns?: Partial<Record<EnemySkillId, number>>;
+  skillUses?: Partial<Record<EnemySkillId, number>>;
+  pendingSkill?: EnemyPendingSkill | null;
+  summonOwnerId?: string;
+  summonIds?: string[];
+  faction?: "hostile" | "corrupted";
+  behaviorState?: Record<string, number | string | boolean | null>;
   drop?: EnemyDrop | null;
   goldDrop?: number;
   questId?: string;
@@ -728,6 +773,7 @@ export type GameState = {
   maxFloor: number;
   difficultyScale: number;
   difficulty: number;
+  enemyRegion?: EnemyRegion;
   mainDropIds: string[];
   specialRoomPlan: DungeonSpecialRoomPlanEntry[];
   lootPlan: DungeonLootPlanEntry[];
@@ -851,5 +897,6 @@ export type EnemySpriteDefinition = {
   idle: number[];
   run: number[];
   attackFrames: number[];
+  specialFrames?: number[];
   label: string;
 };

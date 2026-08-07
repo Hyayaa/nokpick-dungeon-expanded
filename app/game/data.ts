@@ -6,6 +6,7 @@ import {
   ItemDefinition,
 } from "./types";
 import { SHATTERED_ITEM_DEFS } from "./item-catalog";
+import { ENEMY_DEFINITIONS, type EnemyDefinition } from "./enemy-definitions";
 
 const ESSENTIAL_ITEM_DEFS: Record<string, ItemDefinition> = {
   rusty_sword: {
@@ -216,138 +217,22 @@ export const CATEGORY_LABELS = {
   other: "기타",
 } as const;
 
-export const ENEMY_SPRITES: Record<EnemyKind, EnemySpriteDefinition> = {
-  rat: {
-    file: "/assets/sprites/rat.png",
-    sheetWidth: 256,
-    frameWidth: 16,
-    frameHeight: 15,
-    idle: [0, 0, 1],
-    run: [6, 7, 8, 9, 10],
-    attackFrames: [2, 3, 4, 5],
-    label: "화난 쥐",
-  },
-  gnoll: {
-    file: "/assets/sprites/gnoll.png",
-    sheetWidth: 256,
-    frameWidth: 12,
-    frameHeight: 15,
-    idle: [0, 0, 1],
-    run: [4, 5, 6, 7],
-    attackFrames: [2, 3],
-    label: "놀 정찰병",
-  },
-  snake: {
-    file: "/assets/sprites/snake.png",
-    sheetWidth: 256,
-    frameWidth: 12,
-    frameHeight: 11,
-    idle: [0, 0, 1, 2],
-    run: [4, 5, 6, 7],
-    attackFrames: [8, 9, 10],
-    label: "하수도 뱀",
-  },
-  slime: {
-    file: "/assets/sprites/slime.png",
-    sheetWidth: 128,
-    frameWidth: 14,
-    frameHeight: 12,
-    idle: [0, 1, 1, 0],
-    run: [0, 2, 3, 2],
-    attackFrames: [2, 3, 4, 6, 5],
-    label: "부식성 슬라임",
-  },
-  crab: {
-    file: "/assets/sprites/crab.png",
-    sheetWidth: 256,
-    frameWidth: 16,
-    frameHeight: 16,
-    idle: [0, 1, 0, 2],
-    run: [3, 4, 5, 6],
-    attackFrames: [7, 8, 9],
-    label: "동굴 게",
-  },
-  skeleton: {
-    file: "/assets/sprites/skeleton.png",
-    sheetWidth: 256,
-    frameWidth: 12,
-    frameHeight: 15,
-    idle: [0, 0, 1, 2, 3],
-    run: [4, 5, 6, 7, 8, 9],
-    attackFrames: [14, 15, 16],
-    label: "해골 병사",
-  },
-};
+export const ENEMY_SPRITES = Object.fromEntries(
+  Object.entries(ENEMY_DEFINITIONS).map(([kind, definition]) => [kind, definition.sprite]),
+) as Record<EnemyKind, EnemySpriteDefinition>;
 
-export const ENEMY_STATS: Record<
-  EnemyKind,
-  {
-    hp: number;
-    attack: number;
-    defense: number;
-    accuracy: number;
-    evasion: number;
-    xp: number;
-  }
-> = {
-  rat: {
-    hp: 7,
-    attack: 3,
-    defense: 0,
-    accuracy: 8,
-    evasion: 2,
-    xp: 4,
-  },
-  gnoll: {
-    hp: 10,
-    attack: 4,
-    defense: 1,
-    accuracy: 10,
-    evasion: 4,
-    xp: 6,
-  },
-  snake: {
-    hp: 8,
-    attack: 5,
-    defense: 0,
-    accuracy: 10,
-    evasion: 10,
-    xp: 5,
-  },
-  slime: {
-    hp: 13,
-    attack: 5,
-    defense: 1,
-    accuracy: 12,
-    evasion: 5,
-    xp: 8,
-  },
-  crab: {
-    hp: 16,
-    attack: 6,
-    defense: 2,
-    accuracy: 12,
-    evasion: 5,
-    xp: 10,
-  },
-  skeleton: {
-    hp: 19,
-    attack: 7,
-    defense: 2,
-    accuracy: 12,
-    evasion: 9,
-    xp: 12,
-  },
-};
+export const ENEMY_STATS = Object.fromEntries(
+  Object.entries(ENEMY_DEFINITIONS).map(([kind, definition]) => [kind, {
+    ...definition.baseStats,
+    xp: definition.xp,
+  }]),
+) as Record<EnemyKind, EnemyDefinitionStats>;
 
-export const ENEMY_DESCRIPTIONS: Record<EnemyKind, string> = {
-  rat: "하수도의 먹이를 두고 사나워진 설치류입니다. 약하지만 무리를 이루면 위협적입니다.",
-  gnoll: "지하 통로를 순찰하는 작은 놀 전사입니다. 쥐보다 단단하고 공격도 정확합니다.",
-  snake: "낮은 방어력 대신 민첩한 회피를 지닌 뱀입니다. 기습으로 회피를 무시할 수 있습니다.",
-  slime: "산성 점액으로 뒤덮인 덩어리입니다. 체력이 높고 꾸준한 피해를 줍니다.",
-  crab: "단단한 껍질과 집게를 지닌 동굴 게입니다. 방어와 체력이 모두 뛰어납니다.",
-  skeleton: "오래된 장비를 들고 움직이는 병사의 유해입니다. 깊은 층에서 강한 공격을 가합니다.",
-};
+type EnemyDefinitionStats = EnemyDefinition["baseStats"] & { xp: number };
+
+export const ENEMY_DESCRIPTIONS = Object.fromEntries(
+  Object.entries(ENEMY_DEFINITIONS).map(([kind, definition]) => [kind, definition.description]),
+) as Record<EnemyKind, string>;
 
 export const ENEMY_DROP_CHANCE = 0.28;
 

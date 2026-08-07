@@ -152,6 +152,17 @@ export const cloneGame = (
   enemies: state.enemies.map((enemy) => ({
     ...enemy,
     statuses: (enemy.statuses ?? []).map((status) => ({ ...status })),
+    skillCooldowns: { ...(enemy.skillCooldowns ?? {}) },
+    skillUses: { ...(enemy.skillUses ?? {}) },
+    pendingSkill: enemy.pendingSkill
+      ? {
+          ...enemy.pendingSkill,
+          targetPoint: { ...enemy.pendingSkill.targetPoint },
+          affectedTiles: enemy.pendingSkill.affectedTiles.map((point) => ({ ...point })),
+        }
+      : null,
+    summonIds: [...(enemy.summonIds ?? [])],
+    behaviorState: { ...(enemy.behaviorState ?? {}) },
     drop: enemy.drop
       ? {
           ...enemy.drop,
