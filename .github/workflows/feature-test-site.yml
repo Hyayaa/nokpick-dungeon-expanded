@@ -3,7 +3,7 @@ name: Feature branch test site
 on:
   push:
     branches:
-      - feature/item-grades-companion-progression
+      - feature/room-presets
   workflow_dispatch:
 
 permissions:
