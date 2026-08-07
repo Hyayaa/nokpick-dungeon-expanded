@@ -465,6 +465,15 @@ const throwVisualDuration = (itemThrow: ItemThrow) => {
 };
 const throwImpactDelay = (itemThrow: ItemThrow) =>
   throwVisualDuration(itemThrow) * 0.9;
+const magicVisualDuration = (visual: MagicVisual) =>
+  visual.durationMs ??
+  (visual.kind === "cloud"
+    ? 720
+    : visual.kind === "beam"
+      ? 560
+      : visual.kind === "summon" || visual.kind === "burst"
+        ? 520
+        : 430);
 
 const LEVEL_UP_EFFECT_HOLD = 420;
 const UI_SCALE_STORAGE_KEY = "shattered-web-ui-scale";
@@ -6764,10 +6773,10 @@ function DungeonRun({
     if (!visuals.length) return;
     const now = performance.now();
     magicRef.current.push(
-      ...visuals.map((visual) => ({
-        ...visual,
-        startedAt: now + delay,
-        duration: visual.kind === "cloud" ? 720 : 430,
+        ...visuals.map((visual) => ({
+          ...visual,
+          startedAt: now + delay,
+          duration: magicVisualDuration(visual),
       })),
     );
   }, []);
@@ -7274,11 +7283,20 @@ function DungeonRun({
         const attack = effect.sourceId
           ? attackSchedule.get(effect.sourceId)
           : undefined;
+        const magicVisual = effect.sourceId
+          ? turnMagicVisuals.find((visual) => visual.sourceId === effect.sourceId)
+          : undefined;
+        const magicImpactDelay = magicVisual
+          ? (attack
+              ? attack.delay + attack.duration * 0.2
+              : actionLeadEnd) + magicVisualDuration(magicVisual) * 0.82
+          : null;
         const delay = initialThrow
           ? throwImpactDelay(initialThrow)
-          : attack
-            ? attack.delay + attack.duration * 0.52
-            : skillTravelImpactDelay(effect.sourceId);
+          : magicImpactDelay ??
+            (attack
+              ? attack.delay + attack.duration * 0.52
+              : skillTravelImpactDelay(effect.sourceId));
         effectGroups.set(delay, [
           ...(effectGroups.get(delay) ?? []),
           effect,

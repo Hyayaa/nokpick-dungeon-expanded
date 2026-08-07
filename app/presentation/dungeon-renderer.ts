@@ -809,27 +809,118 @@ export function startDungeonRenderer({
         const fromY = screenY(visual.from.y * TILE_SIZE + TILE_SIZE / 2);
         const toX = screenX(visual.to.x * TILE_SIZE + TILE_SIZE / 2);
         const toY = screenY(visual.to.y * TILE_SIZE + TILE_SIZE / 2);
+        const headProgress = Math.min(1, progress * 1.35);
+        const headX = fromX + (toX - fromX) * headProgress;
+        const headY = fromY + (toY - fromY) * headProgress;
+        const impactProgress = Math.max(0, (progress - 0.68) / 0.32);
         context.save();
-        context.globalAlpha = Math.sin(progress * Math.PI);
+        context.globalAlpha = Math.max(0, Math.sin(progress * Math.PI));
         context.strokeStyle = visual.color;
+        context.fillStyle = visual.secondaryColor ?? visual.color;
         context.shadowColor = visual.secondaryColor ?? visual.color;
         context.shadowBlur = 9 * zoom;
-        context.lineWidth =
-          (visual.kind === "cone" ? 9 : 3) * zoom * (1 - progress * 0.45);
-        context.beginPath();
-        context.moveTo(fromX, fromY);
-        context.lineTo(toX, toY);
-        context.stroke();
-        context.fillStyle = visual.secondaryColor ?? "#fff";
-        context.beginPath();
-        context.arc(
-          fromX + (toX - fromX) * Math.min(1, progress * 1.8),
-          fromY + (toY - fromY) * Math.min(1, progress * 1.8),
-          3.5 * zoom,
-          0,
-          Math.PI * 2,
-        );
-        context.fill();
+
+        if (visual.kind === "burst" || visual.kind === "summon") {
+          const radius = (visual.kind === "summon" ? 18 : 14) * zoom * progress;
+          context.lineWidth = Math.max(1, (visual.width ?? 3) * zoom * (1 - progress * 0.55));
+          context.beginPath();
+          context.arc(toX, toY, radius, 0, Math.PI * 2);
+          context.stroke();
+          if (visual.kind === "summon") {
+            context.translate(toX, toY);
+            context.rotate(progress * Math.PI * 2);
+            context.strokeRect(-radius * 0.45, -radius * 0.45, radius * 0.9, radius * 0.9);
+          }
+        } else if (visual.kind === "beam") {
+          context.globalAlpha = Math.max(0, 1 - progress * 0.72);
+          context.lineCap = "round";
+          context.lineWidth = (visual.width ?? 6) * 2.2 * zoom;
+          context.strokeStyle = visual.color;
+          context.beginPath();
+          context.moveTo(fromX, fromY);
+          context.lineTo(toX, toY);
+          context.stroke();
+          context.shadowBlur = 3 * zoom;
+          context.lineWidth = Math.max(1, (visual.width ?? 6) * 0.52 * zoom);
+          context.strokeStyle = visual.secondaryColor ?? "#fff";
+          context.stroke();
+        } else if (visual.kind === "chain") {
+          context.shadowBlur = 2 * zoom;
+          context.lineWidth = Math.max(1, (visual.width ?? 2) * zoom);
+          context.setLineDash([5 * zoom, 4 * zoom]);
+          context.lineDashOffset = -progress * 18 * zoom;
+          context.beginPath();
+          context.moveTo(fromX, fromY);
+          context.lineTo(toX, toY);
+          context.stroke();
+          context.setLineDash([]);
+          const angle = Math.atan2(toY - fromY, toX - fromX);
+          context.translate(headX, headY);
+          context.rotate(angle);
+          context.strokeRect(-4 * zoom, -3 * zoom, 8 * zoom, 6 * zoom);
+        } else {
+          const angle = Math.atan2(toY - fromY, toX - fromX);
+          context.globalAlpha = Math.max(0.2, 1 - progress * 0.38);
+          context.lineWidth = (visual.kind === "cone" ? 9 : 2) * zoom;
+          context.beginPath();
+          context.moveTo(fromX, fromY);
+          context.lineTo(headX, headY);
+          context.stroke();
+          context.translate(headX, headY);
+          context.rotate(angle);
+          if (visual.kind === "projectile") {
+            context.beginPath();
+            context.moveTo(6 * zoom, 0);
+            context.lineTo(-4 * zoom, -2.2 * zoom);
+            context.lineTo(-4 * zoom, 2.2 * zoom);
+            context.closePath();
+            context.fill();
+          } else if (visual.kind === "cloud") {
+            for (let index = 0; index < 4; index += 1) {
+              context.beginPath();
+              context.arc(
+                (index - 1.5) * 3 * zoom,
+                Math.sin(index * 2.1 + progress * 8) * 3 * zoom,
+                (3.5 + index * 0.6) * zoom,
+                0,
+                Math.PI * 2,
+              );
+              context.fill();
+            }
+          } else {
+            context.beginPath();
+            context.arc(0, 0, 3.8 * zoom, 0, Math.PI * 2);
+            context.fill();
+          }
+        }
+
+        if (
+          impactProgress > 0 &&
+          visual.impactStyle &&
+          visual.impactStyle !== "none"
+        ) {
+          context.restore();
+          context.save();
+          context.globalAlpha = Math.max(0, 1 - impactProgress);
+          context.strokeStyle = visual.secondaryColor ?? visual.color;
+          context.lineWidth = Math.max(1, 2 * zoom * (1 - impactProgress * 0.5));
+          const impactRadius = (4 + impactProgress * 15) * zoom;
+          context.beginPath();
+          context.arc(toX, toY, impactRadius, 0, Math.PI * 2);
+          context.stroke();
+          if (visual.impactStyle === "web") {
+            for (let ray = 0; ray < 6; ray += 1) {
+              const angle = (ray / 6) * Math.PI * 2;
+              context.beginPath();
+              context.moveTo(toX, toY);
+              context.lineTo(
+                toX + Math.cos(angle) * impactRadius,
+                toY + Math.sin(angle) * impactRadius,
+              );
+              context.stroke();
+            }
+          }
+        }
         context.restore();
         return true;
       });
@@ -867,6 +958,9 @@ export function startDungeonRenderer({
         let frames = sprite.idle;
         if (motionUsesRunFrames(visual.motion)) frames = sprite.run;
         if (visual.motion?.kind === "attack") frames = sprite.attackFrames;
+        if (visual.motion?.special && sprite.specialFrames?.length) {
+          frames = sprite.specialFrames;
+        }
         if (enemy.pendingSkill && !visual.motion) {
           frames = sprite.specialFrames ?? sprite.attackFrames;
         }
