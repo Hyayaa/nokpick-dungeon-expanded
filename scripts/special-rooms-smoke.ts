@@ -4,7 +4,7 @@ import {
   createNewGame,
   playerStep,
   throwItem,
-  useItem,
+  useItem as consumeItem,
 } from "../app/game/engine";
 import { findPath, generateFloor } from "../app/game/map";
 import {
@@ -131,7 +131,7 @@ for (const preset of P0_SPECIAL_ROOM_PRESETS) {
   game.player.x = Math.floor((room.left + room.right) / 2);
   game.player.y = Math.floor((room.top + room.bottom) / 2);
   game.player.inventory.potion_purity = 1;
-  const purified = useItem(game, "potion_purity").state;
+  const purified = consumeItem(game, "potion_purity").state;
   assert.ok(purified.player.statuses.some((status) => status.id === "purified"));
   assert.ok(purified.clouds.every((cloud) => cloud.kind !== "toxic"));
 }
