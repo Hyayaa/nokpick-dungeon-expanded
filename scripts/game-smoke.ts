@@ -699,6 +699,18 @@ assert.equal(
   stackSaleFixture.campaign.gold,
   "dropping an empty or invalid warehouse slot must not change items or gold",
 );
+const protectedSaleFixture = createPreparationTransferFixture();
+protectedSaleFixture.campaign.warehouse.stacks.iron_key = 1;
+protectedSaleFixture.campaign.warehouse.slots[3] = "iron_key";
+const protectedSale = sellWarehouseItem(protectedSaleFixture.campaign, 3);
+assert.equal(protectedSale.changed, false);
+assert.equal(protectedSale.campaign, protectedSaleFixture.campaign);
+assert.equal(protectedSale.goldDelta, 0);
+assert.equal(
+  protectedSaleFixture.campaign.warehouse.stacks.iron_key,
+  1,
+  "non-tradable items must remain untouched after a rejected sale",
+);
 const stackSalePrice = shopSalePrice(ITEM_DEFS.potion_healing);
 const stackSale = sellWarehouseItem(stackSaleFixture.campaign, 2);
 assert.equal(stackSale.changed, true);
@@ -932,6 +944,16 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
+  /disabled=\{!requirementsMet\}[\s\S]*onClick=\{\(\) => onUpgrade\(selected\.target\)\}/,
+  "the upgrade action must stay disabled until one valid target has every requirement satisfied",
+);
+assert.match(
+  dungeonUiSource,
+  /preparation-storage-panel[\s\S]*CampaignWarehouseInventory[\s\S]*placement="party"[\s\S]*placement="reserve"/,
+  "expedition preparation must keep using the same shared warehouse and companion equipment renderers",
+);
+assert.match(
+  dungeonUiSource,
   /shop: createShopState\(nextOfferSeed, current\.expeditions\)/,
   "every expedition return must replace stock and clear the old buyback cycle",
 );
@@ -942,8 +964,8 @@ assert.match(
 );
 assert.match(
   globalStyleSource,
-  /\.commerce-tabs[\s\S]*\.shop-listing-grid[\s\S]*\.blacksmith-layout/,
-  "shop tabs, listings, and the blacksmith must have responsive presentation rules",
+  /\.commerce-split-layout[\s\S]*\.shop-listing-grid[\s\S]*\.blacksmith-source-panels[\s\S]*\.fixed-item-slot\.is-upgradeable-choice/,
+  "the two-column shop, split blacksmith sources, and upgrade highlights must have presentation rules",
 );
 assert.equal(
   DUNGEON_DEFINITIONS.length,
