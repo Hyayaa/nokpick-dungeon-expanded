@@ -36,7 +36,7 @@ export const DEVELOPER_TEST_MAP_ID = "developer-showcase";
 export const DEVELOPER_TEST_MAP_SEED = 0x5a0ca5e;
 
 const WIDTH = 122;
-const HEIGHT = 66;
+const HEIGHT = 96;
 
 const makeRandom = (seed: number) => {
   let value = seed >>> 0;
@@ -139,6 +139,10 @@ const enemy = (kind: EnemyKind, id: string, point: Point): Enemy => {
     lastSeenPlayer: null,
     searchTurns: 0,
     statuses: [],
+    skillCooldowns: {},
+    skillUses: {},
+    pendingSkill: null,
+    faction: "hostile",
     drop: null,
     goldDrop: 0,
   };
@@ -341,8 +345,24 @@ export function createDeveloperTestMap(base: GameState): GameState {
     y: 53,
   });
 
+  // Enemy Test Arena extends the existing Showcase instead of creating a
+  // second developer map. Chambers isolate regional AI and skill tests.
+  setRect(tiles, 1, 66, WIDTH - 2, 68, "floor");
+  const enemyArenaRooms = [
+    room("enemy-arena-sewers", 4, 69, 19, 93),
+    room("enemy-arena-prison", 21, 69, 36, 93),
+    room("enemy-arena-caves", 38, 69, 53, 93),
+    room("enemy-arena-city", 55, 69, 70, 93),
+    room("enemy-arena-halls", 72, 69, 87, 93),
+    room("enemy-arena-rare", 89, 69, 104, 93),
+    room("enemy-arena-telegraph", 106, 69, 120, 93),
+  ];
+  enemyArenaRooms.forEach((area) =>
+    frameRoom(tiles, area, { x: area.center.x, y: area.top }),
+  );
+
   const start = { x: 3, y: 17 };
-  const exit = { x: 3, y: 63 };
+  const exit = { x: 3, y: 94 };
   tiles[start.y][start.x].terrain = "entrance";
   tiles[exit.y][exit.x].terrain = "exit";
 
@@ -523,6 +543,20 @@ export function createDeveloperTestMap(base: GameState): GameState {
     enemy("rat", "showcase-rat", { x: 60, y: 25 }),
     enemy("snake", "showcase-snake", { x: 68, y: 25 }),
     enemy("slime", "showcase-slime", { x: 76, y: 25 }),
+    enemy("swarm", "arena-sewers-swarm", { x: 9, y: 80 }),
+    enemy("caustic_slime", "arena-sewers-caustic", { x: 15, y: 84 }),
+    enemy("guard", "arena-prison-guard", { x: 26, y: 80 }),
+    enemy("necromancer", "arena-prison-necromancer", { x: 32, y: 85 }),
+    enemy("spinner", "arena-caves-spinner", { x: 43, y: 80 }),
+    enemy("dm200", "arena-caves-dm200", { x: 49, y: 85 }),
+    enemy("elemental_shock", "arena-city-elemental", { x: 60, y: 80 }),
+    enemy("golem", "arena-city-golem", { x: 66, y: 85 }),
+    enemy("eye", "arena-halls-eye", { x: 77, y: 80 }),
+    enemy("scorpio", "arena-halls-scorpio", { x: 83, y: 85 }),
+    enemy("spectral_necromancer", "arena-rare-necromancer", { x: 94, y: 80 }),
+    enemy("dm201", "arena-rare-dm201", { x: 100, y: 85 }),
+    enemy("training_leaper", "arena-training-leaper", { x: 110, y: 80 }),
+    enemy("eye", "arena-telegraph-eye", { x: 116, y: 86 }),
   ];
   next.groundItems = groundItems;
   next.objects = objects;
@@ -576,6 +610,8 @@ export function createDeveloperTestMap(base: GameState): GameState {
     "[개발자] 전체 맵 요소 테스트 맵입니다.",
     "위쪽은 지형·문·CHASM·함정, 가운데는 환경·오브젝트·적, 아래쪽은 특수방 샘플입니다.",
     "맨 아래 Quest Test Area에서는 NPC·고유 적·의뢰품·구역 진입·보상을 확인합니다.",
+    "그 아래 Enemy Test Arena는 Sewers·Prison·Caves·City·Halls·Rare·Telegraph 격리실로 구성됩니다.",
+    "Telegraph 격리실의 훈련용 도약체는 2턴 동안 빨간 범위를 표시한 뒤 같은 범위를 공격합니다.",
     "왼쪽 안전 통로 끝의 출구로 테스트를 종료할 수 있습니다.",
   ];
   next.gameOver = false;

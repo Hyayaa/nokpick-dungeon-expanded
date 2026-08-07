@@ -867,6 +867,9 @@ export function startDungeonRenderer({
         let frames = sprite.idle;
         if (motionUsesRunFrames(visual.motion)) frames = sprite.run;
         if (visual.motion?.kind === "attack") frames = sprite.attackFrames;
+        if (enemy.pendingSkill && !visual.motion) {
+          frames = sprite.specialFrames ?? sprite.attackFrames;
+        }
         const frameIndex = visual.motion
           ? Math.min(
               frames.length - 1,
@@ -981,6 +984,32 @@ export function startDungeonRenderer({
           );
         }
       };
+
+      // Pending skills persist in GameState; only visible warned cells render,
+      // so telegraphs survive reloads without leaking unexplored enemies.
+      for (const enemy of state.enemies) {
+        const pending = enemy.pendingSkill;
+        if (!pending || !state.tiles[enemy.y]?.[enemy.x]?.discovered) continue;
+        const pulse = 0.24 + (Math.sin(now / 170) + 1) * 0.08;
+        for (const point of pending.affectedTiles) {
+          if (!state.tiles[point.y]?.[point.x]?.visible || !inViewport(point.x, point.y)) continue;
+          context.fillStyle = `rgba(255, 48, 48, ${pulse})`;
+          context.fillRect(
+            screenX(point.x * TILE_SIZE),
+            screenY(point.y * TILE_SIZE),
+            tileScreenSize,
+            tileScreenSize,
+          );
+          context.strokeStyle = "rgba(255, 105, 92, .86)";
+          context.lineWidth = Math.max(1, zoom);
+          context.strokeRect(
+            screenX(point.x * TILE_SIZE) + zoom,
+            screenY(point.y * TILE_SIZE) + zoom,
+            tileScreenSize - zoom * 2,
+            tileScreenSize - zoom * 2,
+          );
+        }
+      }
 
       renderCache.sortedEnemies.forEach(drawEnemy);
       const liveEnemyIds = new Set(state.enemies.map((enemy) => enemy.id));

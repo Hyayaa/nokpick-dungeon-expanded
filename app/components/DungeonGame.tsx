@@ -25,6 +25,8 @@ import {
   ITEM_DEFS,
   OBJECT_SPRITES,
 } from "../game/data";
+import { enemyDefinition } from "../game/enemy-definitions";
+import { enemySkill } from "../game/enemy-skills";
 import {
   acceptQuest,
   acceptEquipmentOffer,
@@ -2261,6 +2263,12 @@ function EntityInspector({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const sprite = ENEMY_SPRITES[enemy.kind];
+  const definition = enemyDefinition(enemy.kind);
+  const enemySkills = definition.skills.flatMap((skillId) => {
+    const skill = enemySkill(skillId);
+    const rule = definition.skillRules.find((candidate) => candidate.skillId === skillId);
+    return skill ? [{ rule, skill }] : [];
+  });
   const enemyName = enemy.questId
     ? language === "ko"
       ? enemy.uniqueName ?? localizedEnemyName(enemy.kind, language)
@@ -2330,6 +2338,17 @@ function EntityInspector({
             <span key={status.id}>
               {localizedStatusLabel(status.id, language)} · {status.turns}
               {text("턴", " turns")}
+            </span>
+          ))}
+        </div>
+      )}
+      {enemySkills.length > 0 && (
+        <div className="inventory-detail__stats">
+          {enemySkills.map(({ rule, skill }) => (
+            <span key={skill.id}>
+              <strong>{skill.name}</strong> · {skill.description}
+              {(rule?.windupTurns ?? 0) > 0 && ` · 시전 ${rule?.windupTurns}턴 전 범위 표시`}
+              {rule?.maxUses === 1 && " · 전투당 1회"}
             </span>
           ))}
         </div>
