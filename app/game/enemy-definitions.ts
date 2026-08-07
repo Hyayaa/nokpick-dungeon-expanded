@@ -1,5 +1,5 @@
 import type { EnemySkillUseRule } from "./enemy-skills";
-import type { EnemyKind, EnemyRegion, EnemySkillId, EnemySpriteDefinition } from "./types";
+import type { Enemy, EnemyKind, EnemyRegion, EnemySkillId, EnemySpriteDefinition, Point } from "./types";
 
 export type EnemyProperty = "flying" | "undead" | "demonic" | "large" | "immovable" | "inorganic" | "aquatic";
 export type EnemyAiProfile = "melee" | "fastMelee" | "ranged" | "skirmisher" | "summoner" | "support" | "charger";
@@ -88,3 +88,44 @@ export const ENEMY_DEFINITIONS: Readonly<Record<EnemyKind, EnemyDefinition>> = {
 export const PRODUCTION_ENEMY_KINDS = (Object.keys(ENEMY_DEFINITIONS) as EnemyKind[])
   .filter((kind) => ENEMY_DEFINITIONS[kind].production);
 export const enemyDefinition = (kind: EnemyKind) => ENEMY_DEFINITIONS[kind];
+
+export type EnemyFactoryStats = EnemyDefinition["baseStats"] & { xp: number };
+
+/** Registry-backed construction shared by production, quest, and summon actors. */
+export const createEnemyFromDefinition = (
+  kind: EnemyKind,
+  id: string,
+  point: Point,
+  stats: EnemyFactoryStats,
+  overrides: Partial<Enemy> = {},
+): Enemy => {
+  const definition = enemyDefinition(kind);
+  return {
+    id,
+    kind,
+    ...point,
+    hp: stats.hp,
+    maxHp: stats.hp,
+    attack: stats.attack,
+    defense: stats.defense,
+    accuracy: stats.accuracy,
+    evasion: stats.evasion,
+    xp: stats.xp,
+    alerted: false,
+    sawPlayerLastTurn: false,
+    sleeping: true,
+    wakeCooldown: 0,
+    lastSeenPlayer: null,
+    searchTurns: 0,
+    statuses: [],
+    skillCooldowns: {},
+    skillUses: {},
+    pendingSkill: null,
+    faction: "hostile",
+    drop: definition.dropProfile === "none" ? null : undefined,
+    ...overrides,
+    id,
+    kind,
+    ...point,
+  };
+};

@@ -1,5 +1,15 @@
-import { ENEMY_STATS } from "./data";
-import { isWalkable, mapPointKey, type RoomPreset } from "./map";
+import { canEnemySpawnAt } from "./enemy-combat";
+import {
+  createEnemyFromDefinition,
+  enemyDefinition,
+} from "./enemy-definitions";
+import {
+  findPath,
+  isWalkable,
+  mapPointKey,
+  type RoomPreset,
+} from "./map";
+import { randomInt } from "./random";
 import { isSpecialRoomPreset } from "./special-rooms";
 import { gridDistance as distance, pointEquals } from "./spatial";
 import type {
@@ -73,6 +83,27 @@ export const createInitialQuestStates = (): QuestState[] =>
     required: 1,
   }));
 
+export const selectedProductionQuestDefinition = (seed: number) => {
+  let mixed = seed >>> 0;
+  mixed = Math.imul(mixed ^ (mixed >>> 16), 0x7feb352d) >>> 0;
+  mixed = Math.imul(mixed ^ (mixed >>> 15), 0x846ca68b) >>> 0;
+  mixed = (mixed ^ (mixed >>> 16)) >>> 0;
+  const roll = mixed / 4294967296;
+  return QUEST_DEFINITIONS[
+    Math.min(QUEST_DEFINITIONS.length - 1, Math.floor(roll * QUEST_DEFINITIONS.length))
+  ];
+};
+
+export const createProductionQuestStates = (seed: number): QuestState[] => {
+  const definition = selectedProductionQuestDefinition(seed);
+  return [{
+    questId: definition.id,
+    status: "available",
+    progress: 0,
+    required: 1,
+  }];
+};
+
 export const questStateFor = (state: GameState, questId: string) =>
   (state.quests ?? []).find((quest) => quest.questId === questId) ?? null;
 
@@ -90,8 +121,10 @@ export const acceptQuestInPlace = (state: GameState, questId: string) => {
   if (!quest || !definition || quest.status !== "available") return false;
   quest.status = "active";
   quest.acceptedAtTurn = state.turn;
+  quest.pendingContentSpawn = true;
   state.logs.push(`퀘스트 수락 · ${definition.titleKo}`);
   state.logs.push(definition.objectiveKo);
+  activateQuestContentInPlace(state, questId);
   return true;
 };
 
@@ -175,31 +208,33 @@ const questEnemy = (
   point: Point,
 ) => {
   const kind = definition.targetEnemyKind ?? "gnoll";
-  const base = ENEMY_STATS[kind];
-  const scale = Math.max(1, state.difficultyScale ?? 1);
-  const hp = Math.ceil(base.hp * 1.8 * scale);
-  return {
-    id: `quest-target-${definition.id}`,
+  const base = enemyDefinition(kind);
+  const scale =
+    Math.max(1, state.difficultyScale ?? 1) *
+    (1 + Math.max(0, state.floor - 1) * 0.2);
+  return createEnemyFromDefinition(
     kind,
-    hp,
-    maxHp: hp,
-    attack: Math.ceil(base.attack * 1.25 * scale),
-    defense: base.defense + 1,
-    accuracy: base.accuracy + 2,
-    evasion: base.evasion,
-    xp: Math.ceil(base.xp * 2),
+    `quest-target-${definition.id}`,
+    point,
+    {
+      hp: Math.ceil(base.baseStats.hp * 1.8 * scale),
+      attack: Math.ceil(base.baseStats.attack * 1.25 * scale),
+      defense: Math.max(1, Math.ceil(base.baseStats.defense * scale) + 1),
+      accuracy: Math.ceil(base.baseStats.accuracy * scale) + 2,
+      evasion: Math.ceil(base.baseStats.evasion * scale),
+      xp: Math.ceil(base.xp * 2 * scale),
+    },
+    {
     alerted: false,
     sawPlayerLastTurn: false,
-    sleeping: true,
-    wakeCooldown: 0,
+    sleeping: false,
     lastSeenPlayer: null,
-    searchTurns: 0,
-    statuses: [],
     drop: null,
     questId: definition.id,
     uniqueName: definition.targetNameKo,
-    ...point,
-  } satisfies GameState["enemies"][number];
+    behaviorState: { questRoaming: true },
+    },
+  );
 };
 
 export const populateQuestArea = (
@@ -224,6 +259,10 @@ export const populateQuestArea = (
   state.groundItems = state.groundItems.filter(
     (item) => item.questId !== definition.id,
   );
+  quest.contentPoint = { ...placement.target };
+  quest.contentSpawned = false;
+  quest.pendingContentSpawn = false;
+  quest.targetId = undefined;
 
   state.questNpcs.push({
     id: `quest-npc-${definition.id}`,
@@ -240,21 +279,6 @@ export const populateQuestArea = (
     ...placement.room,
   });
 
-  if (quest.status === "readyToTurnIn" || quest.status === "completed") {
-    return true;
-  }
-  if (definition.kind === "uniqueEnemy") {
-    state.enemies.push(questEnemy(state, definition, placement.target));
-  } else if (definition.questItemId) {
-    state.groundItems.push({
-      id: `quest-item-${definition.id}`,
-      defId: definition.questItemId,
-      quantity: 1,
-      lootOrigin: "dungeon",
-      questId: definition.id,
-      ...placement.target,
-    });
-  }
   return true;
 };
 
@@ -299,13 +323,153 @@ const regionPoints = (state: GameState, region: RoomRegion) => {
   return points;
 };
 
+const questTraversalBlocked = (state: GameState) => new Set([
+  ...state.enemies.map(mapPointKey),
+  ...(state.companions ?? []).filter((companion) => companion.hp > 0).map(mapPointKey),
+  ...(state.questNpcs ?? []).map(mapPointKey),
+  ...state.objects.filter((object) => !object.looted).map(mapPointKey),
+  ...state.groundItems.map(mapPointKey),
+  ...(state.clouds ?? []).flatMap((cloud) =>
+    cloud.variant === "magicalFire" || cloud.power > 0
+      ? cloud.tiles.map(mapPointKey)
+      : []
+  ),
+]);
+
+const reachableFromParty = (state: GameState, point: Point) => {
+  const blocked = questTraversalBlocked(state);
+  blocked.delete(mapPointKey(point));
+  const path = findPath(state.tiles, state.player, point, blocked, false);
+  return pointEquals(state.player, point) || pointEquals(path.at(-1) ?? state.player, point);
+};
+
+const uniqueTargetCandidates = (
+  state: GameState,
+  definition: QuestDefinition,
+) => {
+  const kind = definition.targetEnemyKind ?? "gnoll";
+  return state.tiles.flatMap((row, y) =>
+    row.flatMap((tile, x) => {
+      const point = { x, y };
+      return !tile.visible &&
+        canEnemySpawnAt(state, point, kind) &&
+        reachableFromParty(state, point)
+        ? [point]
+        : [];
+    }),
+  );
+};
+
+const questRoomFor = (state: GameState, questId: string): RoomRegion | null => {
+  const room = (state.questRooms ?? []).find((candidate) => candidate.questId === questId);
+  if (!room) return null;
+  return { preset: "empty", ...room };
+};
+
+const questItemCandidates = (state: GameState, questId: string) => {
+  const room = questRoomFor(state, questId);
+  if (!room) return [];
+  return regionPoints(state, room).filter((point) => reachableFromParty(state, point));
+};
+
+const preferredThenRandom = (
+  state: GameState,
+  preferred: Point | undefined,
+  candidates: readonly Point[],
+) => {
+  const preferredKey = preferred ? mapPointKey(preferred) : null;
+  const preferredCandidate = preferredKey
+    ? candidates.find((candidate) => mapPointKey(candidate) === preferredKey)
+    : null;
+  if (preferredCandidate) return preferredCandidate;
+  if (!candidates.length) return null;
+  return candidates[randomInt(state, 0, candidates.length - 1)];
+};
+
+export function activateQuestContentInPlace(
+  state: GameState,
+  questId: string,
+) {
+  const quest = questStateFor(state, questId);
+  const definition = questDefinition(questId);
+  if (!quest || !definition || quest.status !== "active") return false;
+  if (quest.contentSpawned && !quest.pendingContentSpawn) return true;
+
+  if (definition.kind === "uniqueEnemy") {
+    const existing = state.enemies.find((enemy) => enemy.questId === questId && enemy.hp > 0);
+    if (existing) {
+      quest.targetId = existing.id;
+      quest.contentSpawned = true;
+      quest.pendingContentSpawn = false;
+      return true;
+    }
+    const point = preferredThenRandom(
+      state,
+      quest.contentPoint,
+      uniqueTargetCandidates(state, definition),
+    );
+    if (!point) {
+      quest.pendingContentSpawn = true;
+      return false;
+    }
+    const target = questEnemy(state, definition, point);
+    state.enemies.push(target);
+    quest.targetId = target.id;
+    quest.contentPoint = { ...point };
+  } else if (definition.questItemId) {
+    const existing = state.groundItems.find((item) => item.questId === questId);
+    if (existing) {
+      quest.contentSpawned = true;
+      quest.pendingContentSpawn = false;
+      return true;
+    }
+    const point = preferredThenRandom(
+      state,
+      quest.contentPoint,
+      questItemCandidates(state, questId),
+    );
+    if (!point) {
+      quest.pendingContentSpawn = true;
+      return false;
+    }
+    state.groundItems.push({
+      id: `quest-item-${definition.id}`,
+      defId: definition.questItemId,
+      quantity: 1,
+      lootOrigin: "dungeon",
+      questId: definition.id,
+      ...point,
+    });
+    quest.contentPoint = { ...point };
+  }
+
+  quest.contentSpawned = true;
+  quest.pendingContentSpawn = false;
+  return true;
+}
+
+export const activatePendingQuestContentInPlace = (state: GameState) => {
+  for (const quest of state.quests ?? []) {
+    if (quest.status === "active" && quest.pendingContentSpawn) {
+      activateQuestContentInPlace(state, quest.questId);
+    }
+  }
+};
+
 export const populateProductionQuestAreas = (
   state: GameState,
   roomRegions: readonly RoomRegion[],
 ) => {
   if (state.floor !== 1) return;
-  state.quests = (state.quests?.length ? state.quests : createInitialQuestStates())
-    .map((quest) => ({ ...quest }));
+  const selectedId = selectedProductionQuestDefinition(state.seed).id;
+  const selectedState = (state.quests ?? []).find(
+    (quest) => quest.questId === selectedId,
+  );
+  state.quests = [
+    selectedState
+      ? { ...selectedState }
+      : createProductionQuestStates(state.seed)[0],
+  ];
   state.questNpcs = [];
   state.questRooms = [];
 
@@ -332,7 +496,9 @@ export const populateProductionQuestAreas = (
       );
     });
 
-  QUEST_DEFINITIONS.forEach((definition, index) => {
+  state.quests.forEach((quest, index) => {
+    const definition = questDefinition(quest.questId);
+    if (!definition) return;
     const region = regions[index];
     if (!region) return;
     const points = regionPoints(state, region);

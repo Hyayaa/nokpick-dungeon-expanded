@@ -1,10 +1,15 @@
 import { executeCombatSkillCore, resolveCombatSkillAffectedTiles } from "./combat-skills";
 import { ENEMY_DEFINITIONS, enemyDefinition } from "./enemy-definitions";
-import { enemySkill, type EnemySkillUseRule, type EnemyTargetPolicy } from "./enemy-skills";
+import {
+  enemySkill,
+  type EnemySkillUseRule,
+  type EnemySkillVisualProfile,
+  type EnemyTargetPolicy,
+} from "./enemy-skills";
 import { hasLineOfSight, isWalkable, mapPointKey } from "./map";
 import { random, randomInt } from "./random";
 import type {
-  CombatEffect, Companion, Enemy, EnemyKind, EnemySkillId, GameState,
+  CombatEffect, Companion, Enemy, EnemyKind, EnemySkillId, GameState, MagicVisual,
   Motion, Player, Point, StatusEffect, StatusSignal,
 } from "./types";
 
@@ -13,6 +18,7 @@ type SkillTurnOutput = {
   motions: Motion[];
   effects: CombatEffect[];
   signals: StatusSignal[];
+  magicVisuals: MagicVisual[];
   playerInvincible?: boolean;
 };
 
@@ -62,11 +68,50 @@ const occupied = (state: GameState, ignoredEnemyId?: string) => new Set([
   ...state.enemies.filter((enemy) => enemy.hp > 0 && enemy.id !== ignoredEnemyId).map(mapPointKey),
   ...(state.questNpcs ?? []).map(mapPointKey),
 ]);
-const canEnemyOccupy = (state: GameState, point: Point, kind: EnemyKind, ignoredEnemyId?: string) => {
+export const canEnemyOccupy = (state: GameState, point: Point, kind: EnemyKind, ignoredEnemyId?: string) => {
   const tile = state.tiles[point.y]?.[point.x];
   if (!tile || occupied(state, ignoredEnemyId).has(mapPointKey(point))) return false;
   const flying = ENEMY_DEFINITIONS[kind].properties.includes("flying");
   return flying ? tile.terrain !== "wall" && tile.terrain !== "crystalDoor" && tile.terrain !== "barricade" : isWalkable(tile.terrain, false);
+};
+
+/** Strict placement validation for actors created after floor generation. */
+export const canEnemySpawnAt = (
+  state: GameState,
+  point: Point,
+  kind: EnemyKind,
+) => {
+  const tile = state.tiles[point.y]?.[point.x];
+  if (!tile || !canEnemyOccupy(state, point, kind)) return false;
+  if (
+    [
+      "door",
+      "openDoor",
+      "lockedDoor",
+      "crystalDoor",
+      "barricade",
+      "entrance",
+      "exit",
+      "chasm",
+    ].includes(tile.terrain)
+  ) return false;
+  if (state.groundItems.some((item) => mapPointKey(item) === mapPointKey(point))) return false;
+  if (state.objects.some((object) => !object.looted && mapPointKey(object) === mapPointKey(point))) return false;
+  if ((state.traps ?? []).some((trap) => trap.active && mapPointKey(trap) === mapPointKey(point))) return false;
+  if (
+    (state.specialRooms ?? []).some(
+      (room) =>
+        point.x >= room.left &&
+        point.x <= room.right &&
+        point.y >= room.top &&
+        point.y <= room.bottom,
+    )
+  ) return false;
+  return !(state.clouds ?? []).some(
+    (cloud) =>
+      (cloud.variant === "magicalFire" || cloud.power > 0) &&
+      cloud.tiles.some((cloudTile) => mapPointKey(cloudTile) === mapPointKey(point)),
+  );
 };
 
 const scaledSummon = (state: GameState, owner: Enemy, kind: EnemyKind, point: Point): Enemy => {
@@ -129,15 +174,62 @@ const applySkillStatus = (enemy: Enemy, target: PartyTarget, skillId: EnemySkill
   }
 };
 
+const identityVisualColors = (
+  enemy: Enemy,
+  profile: EnemySkillVisualProfile,
+) => {
+  if (enemy.kind === "shaman_red") return { color: "#ef6b65", secondaryColor: "#ffd0a8" };
+  if (enemy.kind === "shaman_blue") return { color: "#62aee8", secondaryColor: "#ccecff" };
+  if (enemy.kind === "shaman_purple") return { color: "#a66bd3", secondaryColor: "#f0d2ff" };
+  if (enemy.kind === "elemental_frost") return { color: "#72d8ee", secondaryColor: "#e8fbff" };
+  if (enemy.kind === "elemental_shock") return { color: "#fff37a", secondaryColor: "#8bdcff" };
+  if (enemy.kind === "elemental_chaos") return { color: "#c879d8", secondaryColor: "#82e0b3" };
+  return { color: profile.color, secondaryColor: profile.secondaryColor };
+};
+
+const emitSkillVisual = (
+  state: GameState,
+  enemy: Enemy,
+  skillId: EnemySkillId,
+  from: Point,
+  to: Point,
+  affectedTiles: readonly Point[],
+  output: SkillTurnOutput,
+) => {
+  const profile = enemySkill(skillId)?.visual;
+  if (!profile || profile.kind === "none") return;
+  const visiblePoints = [from, to, ...affectedTiles];
+  if (!visiblePoints.some((point) => state.tiles[point.y]?.[point.x]?.visible)) return;
+  const kind: MagicVisual["kind"] = profile.kind === "magicBolt"
+    ? "bolt"
+    : profile.kind;
+  const colors = identityVisualColors(enemy, profile);
+  output.magicVisuals.push({
+    id: `enemy-skill-${enemy.id}-${skillId}-${state.turn}-${output.magicVisuals.length}`,
+    kind,
+    from: { ...from },
+    to: { ...to },
+    affectedTiles: affectedTiles.map((point) => ({ ...point })),
+    color: colors.color,
+    secondaryColor: colors.secondaryColor,
+    width: profile.width,
+    durationMs: profile.durationMs,
+    impactStyle: profile.impactStyle,
+    sourceId: enemy.id,
+  });
+};
+
 const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, targetIdValue: string | null, targetPoint: Point, affectedTiles: readonly Point[], output: SkillTurnOutput) => {
   const blueprint = enemySkill(skillId);
   if (!blueprint) return;
+  const casterPoint = { x: enemy.x, y: enemy.y };
   if (blueprint.travelMode === "none") {
     output.motions.push({
       id: enemy.id,
       from: { x: enemy.x, y: enemy.y },
       to: { ...targetPoint },
       kind: "attack",
+      special: Boolean(enemyDefinition(enemy.kind).sprite.specialFrames?.length),
     });
   }
   const directTarget = targetById(state, targetIdValue) ?? targetAt(state, targetPoint);
@@ -155,10 +247,20 @@ const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, tar
       state.enemies.push(summon);
       enemy.summonIds = [...(enemy.summonIds ?? []).filter((id) => state.enemies.some((candidate) => candidate.id === id && candidate.hp > 0)), summon.id];
       output.signals.push({ ...point, text:"소환!", color:"#c9a0ff", sourceId:enemy.id });
+      emitSkillVisual(state, enemy, skillId, casterPoint, point, [point], output);
     }
     return;
   }
   if (skillId === "chainPull" && directTarget) {
+    emitSkillVisual(
+      state,
+      enemy,
+      skillId,
+      casterPoint,
+      { x: directTarget.x, y: directTarget.y },
+      affectedTiles,
+      output,
+    );
     const landing = affectedTiles.slice(0, -1).find((point) => canEnemyOccupy(state, point, "rat"));
     if (landing) {
       const from = { x: directTarget.x, y: directTarget.y };
@@ -176,6 +278,7 @@ const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, tar
       const from = { x: enemy.x, y: enemy.y };
       enemy.x = destination.x; enemy.y = destination.y;
       output.motions.push({ id:enemy.id, from, to:destination, kind:"move", travelStyle:"teleport" });
+      emitSkillVisual(state, enemy, skillId, from, destination, [destination], output);
     }
     if (directTarget && skillId === "charm") applySkillStatus(enemy, directTarget, skillId);
     return;
@@ -197,6 +300,7 @@ const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, tar
             to: destination,
             kind: "move",
             travelStyle: travelMode === "none" ? "walk" : travelMode,
+            special: Boolean(enemyDefinition(enemy.kind).sprite.specialFrames?.length),
           });
         },
         onImpact: (tiles) => { impactTiles = [...tiles]; },
@@ -206,6 +310,18 @@ const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, tar
   }
   if (skillId === "toxicVent") createCloud(state, "toxic", affectedTiles, 2);
   if (skillId === "corrosiveVent") createCloud(state, "corrosive", affectedTiles, 2);
+  const visualTarget = blueprint.footprint === "line"
+    ? affectedTiles.at(-1) ?? targetPoint
+    : targetPoint;
+  emitSkillVisual(
+    state,
+    enemy,
+    skillId,
+    casterPoint,
+    visualTarget,
+    impactTiles,
+    output,
+  );
   const victims = partyTargets(state).filter((target) => impactTiles.some((point) => point.x === target.x && point.y === target.y));
   for (const target of victims) {
     const power = blueprint.scalars.power ?? 1;

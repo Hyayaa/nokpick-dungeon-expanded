@@ -201,7 +201,10 @@ export const cloneGame = (
   traps: (state.traps ?? []).map((trap) => ({ ...trap })),
   specialRooms: (state.specialRooms ?? []).map((room) => ({ ...room })),
   requiredFloorSpawns: (state.requiredFloorSpawns ?? []).map((spawn) => ({ ...spawn })),
-  quests: (state.quests ?? []).map((quest) => ({ ...quest })),
+  quests: (state.quests ?? []).map((quest) => ({
+    ...quest,
+    contentPoint: quest.contentPoint ? { ...quest.contentPoint } : undefined,
+  })),
   questNpcs: (state.questNpcs ?? []).map((npc) => ({ ...npc })),
   questRooms: (state.questRooms ?? []).map((room) => ({ ...room })),
   specialRoomPlan: (state.specialRoomPlan ?? []).map((entry) => ({ ...entry })),

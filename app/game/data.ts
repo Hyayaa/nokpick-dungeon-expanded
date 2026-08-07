@@ -195,7 +195,7 @@ const ESSENTIAL_ITEM_DEFS: Record<string, ItemDefinition> = {
     name: "봉인 유물",
     category: "misc",
     description: "학자 세라의 의뢰품입니다. 퀘스트 완료 전에는 원정 가방에 보관됩니다.",
-    sprite: 445,
+    sprite: 246,
     accent: "#b79cff",
   },
 };

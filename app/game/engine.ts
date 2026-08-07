@@ -32,9 +32,10 @@ import {
 import { AUTO_SLOT_CATEGORIES, isWand } from "./magic";
 import {
   acceptQuestInPlace,
+  activatePendingQuestContentInPlace,
   canCollectQuestItem,
   completeQuestInPlace,
-  createInitialQuestStates,
+  createProductionQuestStates,
   isQuestActive,
   populateProductionQuestAreas,
   questDefinition,
@@ -62,10 +63,14 @@ import {
   fixedEnemyForSpawnSlot,
   relativeEnemyStage,
 } from "./enemy-spawn";
-import { enemyDefinition } from "./enemy-definitions";
+import {
+  createEnemyFromDefinition,
+  enemyDefinition,
+} from "./enemy-definitions";
 import {
   applyEnemyMeleeIdentity,
   applyEnemyIncomingDamage,
+  canEnemySpawnAt,
   cancelInterruptibleEnemyWindup,
   resolveEnemyDeathMechanics,
   runEnemySkillTurn,
@@ -1305,27 +1310,12 @@ const populateFloor = (
     const plannedDrop = definition.dropProfile === "none"
       ? undefined
       : plannedEnemyDrops[index];
-    state.enemies.push({
-      id: `enemy-${state.floor}-${index}-${state.rng}`,
+    state.enemies.push(createEnemyFromDefinition(
       kind,
-      hp: stats.hp,
-      maxHp: stats.hp,
-      attack: stats.attack,
-      defense: stats.defense,
-      accuracy: stats.accuracy,
-      evasion: stats.evasion,
-      xp: stats.xp,
-      alerted: false,
-      sawPlayerLastTurn: false,
-      sleeping: true,
-      wakeCooldown: 0,
-      lastSeenPlayer: null,
-      searchTurns: 0,
-      statuses: [],
-      skillCooldowns: {},
-      skillUses: {},
-      pendingSkill: null,
-      faction: "hostile",
+      `enemy-${state.floor}-${index}-${state.rng}`,
+      point,
+      stats,
+      {
       drop: definition.dropProfile === "none"
         ? null
         : plannedDrop
@@ -1344,8 +1334,8 @@ const populateFloor = (
       goldDrop: definition.dropProfile === "gold"
         ? randomInt(state, 12, 28)
         : 0,
-      ...point,
-    });
+      },
+    ));
     flattenOccupiedGrass(point);
   }
 
@@ -1666,7 +1656,7 @@ const makeFloorState = (
     requiredFloorSpawns: generated.requiredFloorSpawns.map((spawn) => ({ ...spawn })),
     quests: expeditionRules.quests?.length
       ? expeditionRules.quests.map((quest) => ({ ...quest }))
-      : createInitialQuestStates(),
+      : createProductionQuestStates(seed),
     questNpcs: [],
     questRooms: [],
     floor,
@@ -3283,6 +3273,54 @@ const enemyBlockedSet = (state: GameState, currentEnemyId: string) =>
       ...magicalFireTileKeys(state),
     ],
   );
+
+const questRoamingStep = (state: GameState, enemy: Enemy): Point | null => {
+  const currentDestination =
+    typeof enemy.behaviorState?.roamingX === "number" &&
+      typeof enemy.behaviorState?.roamingY === "number"
+      ? {
+          x: Number(enemy.behaviorState.roamingX),
+          y: Number(enemy.behaviorState.roamingY),
+        }
+      : null;
+  const pathToDestination = (destination: Point) =>
+    findPath(
+      state.tiles,
+      enemy,
+      destination,
+      enemyBlockedSet(state, enemy.id),
+      false,
+      enemyDefinition(enemy.kind).properties.includes("flying"),
+    );
+  if (currentDestination && !pointEquals(enemy, currentDestination)) {
+    const path = pathToDestination(currentDestination);
+    if (path.length) return path[0];
+  }
+
+  const candidates = state.tiles.flatMap((row, y) =>
+    row.flatMap((_tile, x) => {
+      const point = { x, y };
+      return distance(point, enemy) >= 4 &&
+        canEnemySpawnAt(state, point, enemy.kind)
+        ? [point]
+        : [];
+    }),
+  );
+  if (!candidates.length) return null;
+  const start = randomInt(state, 0, candidates.length - 1);
+  for (let offset = 0; offset < candidates.length; offset += 1) {
+    const destination = candidates[(start + offset) % candidates.length];
+    const path = pathToDestination(destination);
+    if (!path.length) continue;
+    enemy.behaviorState = {
+      ...(enemy.behaviorState ?? {}),
+      roamingX: destination.x,
+      roamingY: destination.y,
+    };
+    return path[0];
+  }
+  return null;
+};
 
 const enemyCanSeePlayer = (state: GameState, enemy: Enemy) =>
   distance(enemy, state.player) <= 8 &&
@@ -6357,6 +6395,7 @@ export function runEnemyTurn(
   const pickups: ItemPickup[] = [];
   const throws: ItemThrow[] = [];
   const soundCues: GameSoundCue[] = [];
+  activatePendingQuestContentInPlace(next);
   extinguishOrIgniteBurningActors(next, effects);
   applyClouds(next, effects, magicVisuals);
   for (const ward of next.wards ?? []) {
@@ -6604,6 +6643,7 @@ export function runEnemyTurn(
         motions,
         effects,
         signals,
+        magicVisuals,
         playerInvincible: options.playerInvincible,
       })
     ) {
@@ -6848,6 +6888,8 @@ export function runEnemyTurn(
       }
     } else if (enemy.searchTurns > 0) {
       enemy.searchTurns -= 1;
+    } else if (enemy.questId && enemy.behaviorState?.questRoaming) {
+      destination = questRoamingStep(next, enemy);
     } else if (random(next) < 0.28) {
       const shuffled = [...DIRECTIONS].sort(() => random(next) - 0.5);
       destination =

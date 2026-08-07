@@ -222,7 +222,15 @@ export type DungeonSpecialRoomPlanEntry = {
   preset: SpecialRoomKind;
 };
 
-export type MagicVisualKind = "beam" | "bolt" | "cone" | "burst" | "cloud";
+export type MagicVisualKind =
+  | "beam"
+  | "bolt"
+  | "projectile"
+  | "chain"
+  | "cone"
+  | "burst"
+  | "summon"
+  | "cloud";
 
 export type MagicVisual = {
   id: string;
@@ -231,6 +239,10 @@ export type MagicVisual = {
   to: Point;
   color: string;
   secondaryColor?: string;
+  affectedTiles?: Point[];
+  width?: number;
+  durationMs?: number;
+  impactStyle?: "none" | "burst" | "shockwave" | "web" | "cloud";
   sourceId?: string;
 };
 
@@ -523,6 +535,10 @@ export type QuestState = {
   status: QuestStatus;
   progress: number;
   required: number;
+  contentPoint?: Point;
+  contentSpawned?: boolean;
+  pendingContentSpawn?: boolean;
+  targetId?: string;
   acceptedAtTurn?: number;
   readyAtTurn?: number;
   completedAtTurn?: number;
@@ -798,6 +814,7 @@ export type Motion = {
   to: Point;
   kind: MotionKind;
   travelStyle?: MotionTravelStyle;
+  special?: boolean;
 };
 
 export type CombatEffectKind =
