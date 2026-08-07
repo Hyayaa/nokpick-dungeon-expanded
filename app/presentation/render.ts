@@ -356,6 +356,10 @@ export function waterSurfaceMaskRows(
 
 export const usesQuadrantFogForFrame = (frame: number | null) => {
   if (frame === null || frame < 0) return false;
+  // The chasm-wall stitch is the lower face of the wall tile above it. It
+  // needs the same quarter-tile visibility as the wall atlas rows or one
+  // visible quadrant reveals the entire hidden cliff face.
+  if (frame === SEWER_TILE_FRAMES.chasmWall) return true;
   const oneBasedRow = Math.floor(frame / SEWER_ATLAS_COLUMNS) + 1;
   return oneBasedRow >= 10 && oneBasedRow <= 14;
 };
@@ -366,9 +370,10 @@ export function fogMasksForTile(tile: Tile, frame: number | null) {
   const discoveredMask =
     ((tile.discoveredMask ?? 0) || (tile.discovered ? 15 : 0)) & 15;
 
-  // Only the wall artwork in atlas rows 10–14 uses Shattered's fine
-  // silhouette. Doors, grass, raised wall art, and every other frame reveal
-  // as one complete tile even when their terrain blocks sight.
+  // Wall artwork in atlas rows 10–14 and the chasm-wall lower-face stitch use
+  // Shattered's fine silhouette. Doors, grass, raised wall art, and every
+  // other frame reveal as one complete tile even when their terrain blocks
+  // sight.
   if (usesQuadrantFogForFrame(frame)) {
     return { visibleMask, discoveredMask };
   }

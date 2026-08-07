@@ -12,6 +12,10 @@ import {
   skillTargetableTiles,
 } from "../app/game/targeting";
 import type { DungeonObject, Terrain, Tile } from "../app/game/types";
+import {
+  fogMasksForTile,
+  SEWER_TILE_FRAMES,
+} from "../app/presentation/render";
 import { targetingOutlineSegments } from "../app/presentation/targeting-overlay";
 
 const targetingTile = (terrain: Terrain = "floor"): Tile => ({
@@ -29,6 +33,32 @@ const targetingState = (width: number, height: number) => ({
     Array.from({ length: width }, () => targetingTile())),
   objects: [] as DungeonObject[],
 });
+
+const partialChasmWallFog = fogMasksForTile(
+  {
+    ...targetingTile("chasm"),
+    visibleMask: 1,
+    discoveredMask: 5,
+  },
+  SEWER_TILE_FRAMES.chasmWall,
+);
+assert.deepEqual(
+  partialChasmWallFog,
+  { visibleMask: 1, discoveredMask: 5 },
+  "the chasm-wall lower face must preserve quarter-tile fog masks",
+);
+assert.deepEqual(
+  fogMasksForTile(
+    {
+      ...targetingTile("floor"),
+      visibleMask: 1,
+      discoveredMask: 5,
+    },
+    SEWER_TILE_FRAMES.floor,
+  ),
+  { visibleMask: 15, discoveredMask: 15 },
+  "ordinary floor must keep its full-tile reveal rule",
+);
 
 const circularState = targetingState(17, 17);
 const circularOrigin = { x: 8, y: 8 };
