@@ -1,0 +1,95 @@
+name: Feature branch test site
+
+on:
+  push:
+    branches:
+      - feature/item-grades-companion-progression
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: feature-branch-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build static game
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build static game
+        run: npm run build:local
+
+      - name: Adapt root asset paths for project Pages
+        env:
+          PAGES_BASE_PATH: /${{ github.event.repository.name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile, readdir, writeFile } from "node:fs/promises";
+          import { extname, join } from "node:path";
+
+          const root = "local-dist";
+          const extensions = new Set([".html", ".js", ".css"]);
+          const replacements = [
+            [/"\/assets\//g, `"${process.env.PAGES_BASE_PATH}/assets/`],
+            [/'\/assets\//g, `'${process.env.PAGES_BASE_PATH}/assets/`],
+            [/url\(\/assets\//g, `url(${process.env.PAGES_BASE_PATH}/assets/`],
+          ];
+
+          const rewrite = async (directory) => {
+            for (const entry of await readdir(directory, { withFileTypes: true })) {
+              const path = join(directory, entry.name);
+              if (entry.isDirectory()) {
+                await rewrite(path);
+                continue;
+              }
+              if (!extensions.has(extname(entry.name))) continue;
+              let content = await readFile(path, "utf8");
+              for (const [pattern, replacement] of replacements) {
+                content = content.replace(pattern, replacement);
+              }
+              await writeFile(path, content);
+            }
+          };
+
+          await rewrite(root);
+          NODE
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload static game
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: local-dist
+
+  deploy:
+    name: Deploy feature test site
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
