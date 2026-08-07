@@ -87,8 +87,13 @@ const RUNTIME_IMAGE_SOURCES: Readonly<Record<string, string>> = {
   "/assets/sprites/companions/cleric.png": cleric,
 };
 
-export const runtimeImageSource = (publicPath: string) =>
-  RUNTIME_IMAGE_SOURCES[publicPath] ?? publicPath;
+export const runtimeImageSource = (publicPath: string) => {
+  const embedded = RUNTIME_IMAGE_SOURCES[publicPath];
+  if (embedded || typeof window === "undefined" || !publicPath.startsWith("/")) {
+    return embedded ?? publicPath;
+  }
+  return new URL(publicPath.slice(1), new URL("./", window.location.href)).href;
+};
 
 export const RUNTIME_IMAGE_PATHS = Object.freeze(
   Object.keys(RUNTIME_IMAGE_SOURCES),
