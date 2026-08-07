@@ -31,6 +31,19 @@ import {
 } from "./special-rooms";
 import { AUTO_SLOT_CATEGORIES, isWand } from "./magic";
 import {
+  acceptQuestInPlace,
+  canCollectQuestItem,
+  completeQuestInPlace,
+  createInitialQuestStates,
+  isQuestActive,
+  populateProductionQuestAreas,
+  questDefinition,
+  questStateFor,
+  recordQuestEnemyDefeat,
+  recordQuestItemPickup,
+  triggerQuestRoomInPlace,
+} from "./quests";
+import {
   COMPANION_SKILLS,
   normalizeCompanionProfession,
   normalizeCompanionSkills,
@@ -161,6 +174,7 @@ export type ExpeditionRules = {
   specialRoomPlan?: GameState["specialRoomPlan"];
   lootPlan?: GameState["lootPlan"];
   goldPlan?: GameState["goldPlan"];
+  quests?: GameState["quests"];
 };
 
 const DEFAULT_EXPEDITION_RULES: ExpeditionRules = {
@@ -173,6 +187,7 @@ const DEFAULT_EXPEDITION_RULES: ExpeditionRules = {
   specialRoomPlan: [],
   lootPlan: [],
   goldPlan: [],
+  quests: [],
 };
 
 const DIRECTIONS: Point[] = [
@@ -304,7 +319,9 @@ const canAddInventoryItem = (player: Player, defId: string) =>
 export const canPickupGroundItem = (
   state: GameState,
   item: GameState["groundItems"][number],
-) => item.defId === "gold"
+) => !canCollectQuestItem(state, item)
+  ? false
+  : item.defId === "gold"
   ? true
   : item.recoversThrowableCharge
   ? Boolean(
@@ -758,7 +775,8 @@ const updatePlayerFieldOfView = (state: GameState, revealAll = false) => {
   }
 };
 
-export const getEnemyLabel = (enemy: Enemy) => ENEMY_SPRITES[enemy.kind].label;
+export const getEnemyLabel = (enemy: Enemy) =>
+  enemy.uniqueName ?? ENEMY_SPRITES[enemy.kind].label;
 
 const combatHit = (
   state: GameState,
@@ -1619,6 +1637,11 @@ const makeFloorState = (
     traps: generated.traps.map((trap) => ({ ...trap })),
     specialRooms: generated.specialRooms.map((room) => ({ ...room })),
     requiredFloorSpawns: generated.requiredFloorSpawns.map((spawn) => ({ ...spawn })),
+    quests: expeditionRules.quests?.length
+      ? expeditionRules.quests.map((quest) => ({ ...quest }))
+      : createInitialQuestStates(),
+    questNpcs: [],
+    questRooms: [],
     floor,
     dungeonId: expeditionRules.dungeonId,
     dungeonName: expeditionRules.dungeonName,
@@ -1679,6 +1702,7 @@ const makeFloorState = (
     generated.toxicGasTiles,
     generated.magicalFireTiles,
   );
+  populateProductionQuestAreas(state, generated.roomRegions);
   updatePlayerFieldOfView(state);
   return state;
 };
@@ -1752,6 +1776,7 @@ export function descendFloor(state: GameState): GameState {
       specialRoomPlan: state.specialRoomPlan,
       lootPlan: state.lootPlan,
       goldPlan: state.goldPlan,
+      quests: state.quests,
     },
   );
   next.goldCollected = state.goldCollected;
@@ -1946,6 +1971,11 @@ const removeDefeatedEnemies = (
   allowDrop = true,
   sourceId?: string,
 ) => {
+  state.enemies.forEach((enemy) => {
+    if (enemy.questId && !isQuestActive(state, enemy.questId) && enemy.hp <= 0) {
+      enemy.hp = enemy.maxHp;
+    }
+  });
   const defeated = state.enemies.filter((enemy) => enemy.hp <= 0);
   defeated.forEach((enemy) => {
     const resolvedSourceId =
@@ -1968,6 +1998,7 @@ const removeDefeatedEnemies = (
       pushLog(state, `치명적 가속으로 생명력 ${momentumHealing}을 회복했습니다.`);
     }
     pushLog(state, `${getEnemyLabel(enemy)}을(를) 쓰러뜨렸습니다.`);
+    recordQuestEnemyDefeat(state, enemy.questId);
     effects.push({
       x: enemy.x,
       y: enemy.y,
@@ -2054,7 +2085,9 @@ export function pickupGroundItems(
     return { state, motions: [], effects: [], consumedTurn: false };
   }
   const found = groundItemsAtPlayer(state).filter(
-    (item) => includeManual || !item.manualPickup,
+    (item) =>
+      (includeManual || !item.manualPickup) &&
+      canCollectQuestItem(state, item),
   );
   if (!found.length) {
     return { state, motions: [], effects: [], consumedTurn: false };
@@ -2118,6 +2151,7 @@ export function pickupGroundItems(
   next.groundItems = next.groundItems.filter(
     (item) => !foundIds.has(item.id),
   );
+  picked.forEach((item) => recordQuestItemPickup(next, item));
   const elapsedTurns = spendPlayerTime(next, 1);
   if (!autoEquipBetter) {
     picked.forEach(({ defId, itemRef }) => {
@@ -2152,6 +2186,93 @@ export function pickupGroundItems(
     elapsedTurns,
     interacted: true,
     interactionKind: "pickup",
+  };
+}
+
+export function acceptQuest(
+  state: GameState,
+  questId: string,
+): ActionResult {
+  const npc = (state.questNpcs ?? []).find(
+    (candidate) => candidate.questId === questId,
+  );
+  if (!npc || distance(npc, state.player) > 1) {
+    return { state, motions: [], effects: [], consumedTurn: false };
+  }
+  const next = cloneGameWithoutTiles(state);
+  const accepted = acceptQuestInPlace(next, questId);
+  return {
+    state: accepted ? next : state,
+    motions: [],
+    effects: [],
+    consumedTurn: false,
+    interacted: accepted,
+  };
+}
+
+export function claimQuestReward(
+  state: GameState,
+  questId: string,
+): ActionResult {
+  const definition = questDefinition(questId);
+  const quest = questStateFor(state, questId);
+  const npc = (state.questNpcs ?? []).find(
+    (candidate) => candidate.questId === questId,
+  );
+  if (
+    !definition ||
+    quest?.status !== "readyToTurnIn" ||
+    !npc ||
+    distance(npc, state.player) > 1
+  ) {
+    return { state, motions: [], effects: [], consumedTurn: false };
+  }
+  const next = cloneGameWithoutTiles(state);
+  if (
+    definition.kind === "recoverItem" &&
+    definition.questItemId &&
+    (next.player.inventory[definition.questItemId] ?? 0) <= 0
+  ) {
+    pushLog(next, "의뢰품이 가방에 없습니다. 다시 회수해야 합니다.");
+    return { state: next, motions: [], effects: [], consumedTurn: false };
+  }
+  if (definition.kind === "recoverItem" && definition.questItemId) {
+    removeInventoryItem(next, definition.questItemId);
+  }
+  const rewardRef = addInventoryItem(
+    next,
+    definition.rewardItemId,
+    `quest-reward-${questId}`,
+    undefined,
+    definition.rewardQuantity,
+  );
+  if (!rewardRef) {
+    const npc = (next.questNpcs ?? []).find(
+      (candidate) => candidate.questId === questId,
+    ) ?? next.player;
+    next.groundItems.push({
+      id: `quest-reward-${questId}-${next.turn}`,
+      defId: definition.rewardItemId,
+      quantity: definition.rewardQuantity,
+      lootOrigin: "dungeon",
+      manualPickup: true,
+      x: npc.x,
+      y: npc.y,
+    });
+    pushLog(next, "가방이 가득 차 보상을 NPC 앞에 내려놓았습니다.");
+  } else {
+    pushLog(
+      next,
+      `보상 획득 · ${ITEM_DEFS[definition.rewardItemId].name} ${definition.rewardQuantity}개`,
+    );
+  }
+  completeQuestInPlace(next, questId);
+  return {
+    state: next,
+    motions: [],
+    effects: [],
+    consumedTurn: false,
+    interacted: true,
   };
 }
 
@@ -2192,6 +2313,11 @@ export function playerStep(
       candidate.x === target.x &&
       candidate.y === target.y,
   );
+  const targetNpc = (state.questNpcs ?? []).find(
+    (candidate) =>
+      candidate.x === target.x &&
+      candidate.y === target.y,
+  );
   const targetObject = state.objects.find(
     (candidate) =>
       !candidate.looted &&
@@ -2207,6 +2333,7 @@ export function playerStep(
   const needsTileCopy =
     !targetEnemy &&
     !targetObject &&
+    !targetNpc &&
     targetTerrain !== "wall" &&
     !lockedWithoutKey;
   const next = needsTileCopy
@@ -2214,9 +2341,42 @@ export function playerStep(
     : cloneGameWithoutTiles(state);
   next.player.facing = facing;
 
+  if (targetNpc) {
+    const quest = questStateFor(next, targetNpc.questId);
+    const definition = questDefinition(targetNpc.questId);
+    if (!quest || !definition) {
+      return { state: next, motions, effects, consumedTurn: false };
+    }
+    if (quest.status === "available") {
+      pushLog(next, `${targetNpc.nameKo}: 부탁할 일이 있습니다.`);
+    } else if (quest.status === "active") {
+      pushLog(next, `${targetNpc.nameKo}: ${definition.objectiveKo}`);
+    } else if (quest.status === "readyToTurnIn") {
+      pushLog(next, `${targetNpc.nameKo}: 해냈군요. 보상을 준비했습니다.`);
+    } else {
+      pushLog(next, `${targetNpc.nameKo}: 다시 한번 고맙습니다.`);
+    }
+    return {
+      state: next,
+      motions,
+      effects,
+      consumedTurn: false,
+      interacted: true,
+      questInteraction: {
+        npcId: targetNpc.id,
+        questId: targetNpc.questId,
+        status: quest.status,
+      },
+    };
+  }
+
   const enemy = targetEnemy
     ? next.enemies.find((candidate) => candidate.id === targetEnemy.id)
     : null;
+  if (enemy?.questId && !isQuestActive(next, enemy.questId)) {
+    pushLog(next, "퀘스트 NPC에게 의뢰를 받은 뒤 상대해야 합니다.");
+    return { state: next, motions, effects, consumedTurn: false };
+  }
   if (enemy) {
     const presentationState = presentationStateWithFacing(state, facing);
     const wasSleeping = enemy.sleeping;
@@ -2563,6 +2723,7 @@ export function playerStep(
   if (closeDoorBehindPlayer && !swappingCompanion) {
     next.tiles[from.y][from.x].terrain = "door";
   }
+  triggerQuestRoomInPlace(next, target);
   applyMagicalFireContact(next, next.player, effects);
   const elapsedTurns = spendPlayerTime(
     next,
@@ -2994,7 +3155,9 @@ export function manualCompanionPickup(
   if (!companion) {
     return { state, motions: [], effects: [], consumedTurn: false };
   }
-  const found = state.groundItems.filter((item) => pointEquals(item, companion));
+  const found = state.groundItems.filter(
+    (item) => pointEquals(item, companion) && !item.questId,
+  );
   if (!found.length) {
     return { state, motions: [], effects: [], consumedTurn: false };
   }
@@ -3087,6 +3250,7 @@ const enemyBlockedSet = (state: GameState, currentEnemyId: string) =>
       ...(state.companions ?? [])
         .filter((companion) => companion.hp > 0)
         .map(mapPointKey),
+      ...(state.questNpcs ?? []).map(mapPointKey),
       ...magicalFireTileKeys(state),
     ],
   );
@@ -4971,6 +5135,7 @@ const companionBlockedSet = (state: GameState) =>
     ...state.objects
       .filter((object) => !object.looted)
       .map(mapPointKey),
+    ...(state.questNpcs ?? []).map(mapPointKey),
     ...magicalFireTileKeys(state),
   ]);
 
@@ -5561,7 +5726,10 @@ const pickupGroundItemsForCompanion = (
   pickups: ItemPickup[],
 ) => {
   const found = state.groundItems.filter(
-    (item) => item.x === companion.x && item.y === companion.y,
+    (item) =>
+      item.x === companion.x &&
+      item.y === companion.y &&
+      !item.questId,
   );
   if (!found.length) return false;
 
@@ -5859,6 +6027,7 @@ const runCompanionActions = (
       .filter(
         (enemy) =>
           enemy.hp > 0 &&
+          (!enemy.questId || isQuestActive(state, enemy.questId)) &&
           !hasStatus(enemy, "corrupted") &&
           ((distance(enemy, companion) <= getCompanionViewDistance(companion) &&
             hasLineOfSight(state.tiles, companion, enemy)) ||
@@ -6221,6 +6390,10 @@ export function runEnemyTurn(
 
   for (const enemy of next.enemies) {
     if (next.player.hp <= 0) break;
+    if (enemy.questId && !isQuestActive(next, enemy.questId)) {
+      enemy.hp = enemy.maxHp;
+      continue;
+    }
     if (statusDamage(enemy, effects) || enemy.hp <= 0) continue;
     const playerInvisible = next.player.invisibleTurns > 0;
     const turnSight = sightAtTurnStart.get(enemy.id);
@@ -8701,12 +8874,22 @@ export function throwItem(
   const resolved = resolveInventoryItem(state.player, itemRef);
   const { defId } = resolved;
   const definition = ITEM_DEFS[defId];
+  const protectedQuest = (state.quests ?? []).find(
+    (quest) =>
+      quest.status !== "completed" &&
+      questDefinition(quest.questId)?.questItemId === defId,
+  );
   if (
     state.gameOver ||
     !definition ||
     inventoryItemQuantity(state.player, defId) <= 0
   ) {
     return { state, motions: [], effects: [], consumedTurn: false };
+  }
+  if (protectedQuest) {
+    const next = cloneGameWithoutTiles(state);
+    pushLog(next, "퀘스트 의뢰품은 버리거나 던질 수 없습니다.");
+    return { state: next, motions: [], effects: [], consumedTurn: false };
   }
   if (
     definition.category === "missile" &&
@@ -8880,12 +9063,22 @@ export function throwItem(
 export function discardItem(state: GameState, itemRef: string): ActionResult {
   const { defId } = resolveInventoryItem(state.player, itemRef);
   const definition = ITEM_DEFS[defId];
+  const protectedQuest = (state.quests ?? []).find(
+    (quest) =>
+      quest.status !== "completed" &&
+      questDefinition(quest.questId)?.questItemId === defId,
+  );
   if (
     state.gameOver ||
     !definition ||
     inventoryItemQuantity(state.player, defId) <= 0
   ) {
     return { state, motions: [], effects: [], consumedTurn: false };
+  }
+  if (protectedQuest) {
+    const next = cloneGameWithoutTiles(state);
+    pushLog(next, "퀘스트 의뢰품은 버리거나 던질 수 없습니다.");
+    return { state: next, motions: [], effects: [], consumedTurn: false };
   }
   const next = cloneGameWithoutTiles(state);
   const presentationState = state;
@@ -9093,6 +9286,7 @@ export function pathTo(
     ...state.objects
       .filter((object) => !object.looted)
       .map(mapPointKey),
+    ...(state.questNpcs ?? []).map(mapPointKey),
     ...magicalFireTileKeys(state),
   ]);
   const targetHasEnemy = state.enemies.some(
@@ -9104,8 +9298,13 @@ export function pathTo(
       object.x === target.x &&
       object.y === target.y,
   );
+  const targetHasNpc = (state.questNpcs ?? []).some((npc) =>
+    pointEquals(npc, target),
+  );
   const canUnlock = (state.player.inventory.iron_key ?? 0) > 0;
-  if (targetHasEnemy || targetHasObject) blocked.delete(mapPointKey(target));
+  if (targetHasEnemy || targetHasObject || targetHasNpc) {
+    blocked.delete(mapPointKey(target));
+  }
   if ((state.clouds ?? []).some(
     (cloud) =>
       cloud.variant === "magicalFire" &&
@@ -9116,6 +9315,7 @@ export function pathTo(
   if (
     targetHasEnemy ||
     targetHasObject ||
+    targetHasNpc ||
     canUnlockCrystalTarget ||
     isWalkable(pathTiles[target.y][target.x].terrain, canUnlock)
   ) {
@@ -9182,11 +9382,13 @@ export function pathToPartyActor(
     ...state.objects
       .filter((object) => !object.looted)
       .map(mapPointKey),
+    ...(state.questNpcs ?? []).map(mapPointKey),
     ...magicalFireTileKeys(state),
   ]);
   const targetIsInteractive =
     state.enemies.some((enemy) => enemy.hp > 0 && pointEquals(enemy, target)) ||
     state.objects.some((object) => !object.looted && pointEquals(object, target)) ||
+    (state.questNpcs ?? []).some((npc) => pointEquals(npc, target)) ||
     pointEquals(state.player, target) ||
     state.companions.some(
       (companion) =>
@@ -9229,6 +9431,7 @@ export function planAutoExplore(
       ...state.objects
         .filter((object) => !object.looted)
         .map(mapPointKey),
+      ...(state.questNpcs ?? []).map(mapPointKey),
       ...magicalFireTileKeys(state),
     ]);
     blocked.delete(mapPointKey(target));
@@ -9269,6 +9472,7 @@ export function planAutoExplore(
     state.groundItems.filter(
       (item) =>
         state.tiles[item.y]?.[item.x]?.discovered &&
+        canCollectQuestItem(state, item) &&
         (!options.ignoreUnpickableItems || canPickupGroundItem(state, item)),
     ),
   );

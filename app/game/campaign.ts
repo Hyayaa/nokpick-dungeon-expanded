@@ -47,6 +47,7 @@ import {
   SPECIAL_ROOM_REGISTRY,
   specialRoomMetadata,
 } from "./special-rooms";
+import { isQuestItemDefinitionId } from "./quests";
 
 export type DungeonId = string;
 export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -1546,7 +1547,9 @@ export const selectedLoadoutSlotCount = (loadout: ExpeditionLoadout) =>
 export const warehouseItemCount = (warehouse: WarehouseState) =>
   Object.entries(warehouse.stacks).reduce(
     (total, [itemId, quantity]) =>
-      ITEM_DEFS[itemId]?.category === "key" ? total : total + quantity,
+      ITEM_DEFS[itemId]?.category === "key" || isQuestItemDefinitionId(itemId)
+        ? total
+        : total + quantity,
     warehouse.instances.length,
   );
 
@@ -1630,7 +1633,11 @@ export const depositPlayerInventory = (
   const next = cloneWarehouse(warehouse);
   let recoveredItems = 0;
   for (const [itemId, quantity] of Object.entries(player.inventory)) {
-    if (quantity <= 0 || ITEM_DEFS[itemId]?.category === "key") continue;
+    if (
+      quantity <= 0 ||
+      ITEM_DEFS[itemId]?.category === "key" ||
+      isQuestItemDefinitionId(itemId)
+    ) continue;
     next.stacks[itemId] = (next.stacks[itemId] ?? 0) + quantity;
     recoveredItems += quantity;
   }

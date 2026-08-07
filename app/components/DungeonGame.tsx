@@ -26,12 +26,14 @@ import {
   OBJECT_SPRITES,
 } from "../game/data";
 import {
+  acceptQuest,
   acceptEquipmentOffer,
   activateCompanionSkill,
   advanceManualPartyRound,
   assignCompanionItem,
   assignPlayerItem,
   autoEquipBetterOffers,
+  claimQuestReward,
   canAssignCompanionItem,
   canAssignPlayerItem,
   createExpeditionGame,
@@ -78,6 +80,7 @@ import {
   waitTurn,
   zapWand,
 } from "../game/engine";
+import { questDefinition } from "../game/quests";
 import { P0_ROOM_PRESETS } from "../game/room-presets";
 import { isSpecialRoomPreset } from "../game/special-rooms";
 import {
@@ -2258,7 +2261,12 @@ function EntityInspector({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const sprite = ENEMY_SPRITES[enemy.kind];
-  const enemyName = localizedEnemyName(enemy.kind, language);
+  const enemyName = enemy.questId
+    ? language === "ko"
+      ? enemy.uniqueName ?? localizedEnemyName(enemy.kind, language)
+      : questDefinition(enemy.questId)?.targetNameEn ??
+        localizedEnemyName(enemy.kind, language)
+    : localizedEnemyName(enemy.kind, language);
 
   return (
     <DescriptionWindow
@@ -3708,6 +3716,98 @@ function AlchemyModal({
           >
             {text("연금하기 · 1턴", "Transmute · 1 turn")}
           </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function QuestInteractionModal({
+  game,
+  questId,
+  onAccept,
+  onClaim,
+  onClose,
+}: {
+  game: GameState;
+  questId: string;
+  onAccept: (questId: string) => void;
+  onClaim: (questId: string) => void;
+  onClose: () => void;
+}) {
+  const language = useUiLanguage();
+  const text = (korean: string, english: string) =>
+    uiText(language, korean, english);
+  const definition = questDefinition(questId);
+  const quest = (game.quests ?? []).find(
+    (candidate) => candidate.questId === questId,
+  );
+  if (!definition || !quest) return null;
+  const title = language === "ko" ? definition.titleKo : definition.titleEn;
+  const npcName = language === "ko"
+    ? definition.npcNameKo
+    : definition.npcNameEn;
+  const description = language === "ko"
+    ? definition.descriptionKo
+    : definition.descriptionEn;
+  const objective = language === "ko"
+    ? definition.objectiveKo
+    : definition.objectiveEn;
+  const reward = ITEM_DEFS[definition.rewardItemId];
+  const statusLabel = quest.status === "available"
+    ? text("제안", "Offer")
+    : quest.status === "active"
+      ? text("진행 중", "Active")
+      : quest.status === "readyToTurnIn"
+        ? text("보고 가능", "Ready")
+        : text("완료", "Completed");
+
+  return (
+    <div className="modal-backdrop quest-backdrop" role="presentation">
+      <section
+        className="quest-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="quest-dialog-title"
+      >
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow">QUEST · {statusLabel}</p>
+            <h2 id="quest-dialog-title">{title}</h2>
+            <small>{npcName}</small>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose}>×</button>
+        </header>
+        <p>{description}</p>
+        <div className="quest-objective">
+          <small>{text("목표", "Objective")}</small>
+          <strong>{objective}</strong>
+          <span>{quest.progress}/{quest.required}</span>
+        </div>
+        <div className="quest-reward">
+          <ItemIcon itemId={definition.rewardItemId} size={34} />
+          <span>
+            <small>{text("보상", "Reward")}</small>
+            <strong>{localizedItemName(definition.rewardItemId, language)} ×{definition.rewardQuantity}</strong>
+          </span>
+          <i style={{ background: reward.accent }} />
+        </div>
+        <footer>
+          <button type="button" onClick={onClose}>
+            {quest.status === "active"
+              ? text("계속 진행", "Continue")
+              : text("닫기", "Close")}
+          </button>
+          {quest.status === "available" && (
+            <button type="button" className="is-primary" onClick={() => onAccept(questId)}>
+              {text("퀘스트 수락", "Accept Quest")}
+            </button>
+          )}
+          {quest.status === "readyToTurnIn" && (
+            <button type="button" className="is-primary" onClick={() => onClaim(questId)}>
+              {text("보고하고 보상 받기", "Turn In & Claim")}
+            </button>
+          )}
         </footer>
       </section>
     </div>
@@ -5997,6 +6097,10 @@ function DungeonRun({
     useState(PLAYER_ID);
   const [upgradeFlashKey, setUpgradeFlashKey] = useState<string | null>(null);
   const [alchemyOpen, setAlchemyOpen] = useState(false);
+  const [questPrompt, setQuestPrompt] = useState<{
+    npcId: string;
+    questId: string;
+  } | null>(null);
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
 
   const gameRef = useRef(game);
@@ -6746,6 +6850,12 @@ function DungeonRun({
         ),
       );
       if (result.alchemyOpened) setAlchemyOpen(true);
+      if (result.questInteraction) {
+        setQuestPrompt({
+          npcId: result.questInteraction.npcId,
+          questId: result.questInteraction.questId,
+        });
+      }
       if (result.interacted && !playerAttacked) {
         startInteractionAnimation(0, interactionEnd);
       }
@@ -8219,6 +8329,20 @@ function DungeonRun({
     });
   }, [resolvePartyAction, runExclusive]);
 
+  const acceptCurrentQuest = useCallback((questId: string) => {
+    void runExclusive(async (token) => {
+      setQuestPrompt(null);
+      await resolveAction(acceptQuest(gameRef.current, questId), token);
+    });
+  }, [resolveAction, runExclusive]);
+
+  const claimCurrentQuestReward = useCallback((questId: string) => {
+    void runExclusive(async (token) => {
+      setQuestPrompt(null);
+      await resolveAction(claimQuestReward(gameRef.current, questId), token);
+    });
+  }, [resolveAction, runExclusive]);
+
   const brewSelectedIngredients = useCallback(
     (itemRefs: string[]) => {
       void runExclusive(async (token) => {
@@ -8265,6 +8389,7 @@ function DungeonRun({
         setPendingCompanionSkill(null);
         setPendingQuickslotAim(null);
         setAlchemyOpen(false);
+        setQuestPrompt(null);
         setExitConfirmOpen(false);
         return;
       }
@@ -8296,6 +8421,7 @@ function DungeonRun({
         helpOpen ||
         settingsOpen ||
         compendiumOpen ||
+        questPrompt ||
         exitConfirmOpen ||
         gameRef.current.pendingAugmentOffers.length > 0 ||
         throwingItemId ||
@@ -8350,6 +8476,7 @@ function DungeonRun({
     throwingItemId,
     pendingCompanionSkill,
     pendingQuickslotAim,
+    questPrompt,
     waitOneTurn,
   ]);
 
@@ -8491,7 +8618,9 @@ function DungeonRun({
               // Reusable objects such as the alchemy workbench open a UI
               // without spending a turn, so their result still has to reach
               // the action resolver before travel stops at the object.
-              if (result.alchemyOpened) await resolveAction(result, token);
+              if (result.alchemyOpened || result.questInteraction) {
+                await resolveAction(result, token);
+              }
               break;
             }
             const reachedNextPoint =
@@ -9377,6 +9506,10 @@ function DungeonRun({
             100,
         );
   const latestLogs = game.logs.slice(-5);
+  const trackedQuests = (game.quests ?? []).filter(
+    (quest) =>
+      quest.status === "active" || quest.status === "readyToTurnIn",
+  );
   const itemsHere = game.groundItems.filter((item) =>
     pointEquals(item, controlledCharacter),
   );
@@ -9874,7 +10007,12 @@ function DungeonRun({
             {hoveredEnemy && (
               <div className="enemy-tooltip">
                 <strong>
-                  {localizedEnemyName(hoveredEnemy.kind, language)}
+                  {hoveredEnemy.questId
+                    ? language === "ko"
+                      ? hoveredEnemy.uniqueName
+                      : questDefinition(hoveredEnemy.questId)?.targetNameEn ??
+                        localizedEnemyName(hoveredEnemy.kind, language)
+                    : localizedEnemyName(hoveredEnemy.kind, language)}
                 </strong>
                 <span>
                   HP {hoveredEnemy.hp}/{hoveredEnemy.maxHp}
@@ -9882,6 +10020,25 @@ function DungeonRun({
                 {hoveredEnemy.sleeping && (
                   <em>{text("수면 중", "Sleeping")}</em>
                 )}
+              </div>
+            )}
+            {trackedQuests.length > 0 && (
+              <div className="quest-tracker" aria-label={text("퀘스트 진행", "Quest progress")}>
+                <small>QUEST</small>
+                {trackedQuests.map((quest) => {
+                  const definition = questDefinition(quest.questId);
+                  if (!definition) return null;
+                  return (
+                    <p key={quest.questId} data-ready={quest.status === "readyToTurnIn"}>
+                      <strong>{language === "ko" ? definition.titleKo : definition.titleEn}</strong>
+                      <span>
+                        {quest.status === "readyToTurnIn"
+                          ? text("NPC에게 보고", "Return to NPC")
+                          : `${quest.progress}/${quest.required}`}
+                      </span>
+                    </p>
+                  );
+                })}
               </div>
             )}
             <div className="game-event-feed" aria-live="polite" aria-label={text("탐사 기록", "Field Log")}>
@@ -10289,6 +10446,15 @@ function DungeonRun({
           busy={busy}
           onBrew={brewSelectedIngredients}
           onClose={() => setAlchemyOpen(false)}
+        />
+      )}
+      {questPrompt && (
+        <QuestInteractionModal
+          game={game}
+          questId={questPrompt.questId}
+          onAccept={acceptCurrentQuest}
+          onClaim={claimCurrentQuestReward}
+          onClose={() => setQuestPrompt(null)}
         />
       )}
       {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}

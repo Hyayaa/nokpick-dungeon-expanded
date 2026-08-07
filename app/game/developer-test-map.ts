@@ -7,6 +7,10 @@ import {
 import { updateFieldOfView } from "./map";
 import { P0_ROOM_PRESETS, paintP0Room } from "./room-presets";
 import {
+  createInitialQuestStates,
+  populateQuestArea,
+} from "./quests";
+import {
   MAGICAL_FIRE_CONFIG,
   P0_SPECIAL_ROOM_PRESETS,
   paintSpecialRoom,
@@ -329,6 +333,14 @@ export function createDeveloperTestMap(base: GameState): GameState {
     return area;
   });
 
+  const huntQuestArea = room("showcase-quest-hunt", 8, 53, 32, 64);
+  frameRoom(tiles, huntQuestArea, { x: huntQuestArea.center.x, y: 53 });
+  const recoveryQuestArea = room("showcase-quest-recovery", 35, 53, 59, 64);
+  frameRoom(tiles, recoveryQuestArea, {
+    x: recoveryQuestArea.center.x,
+    y: 53,
+  });
+
   const start = { x: 3, y: 17 };
   const exit = { x: 3, y: 63 };
   tiles[start.y][start.x].terrain = "entrance";
@@ -519,6 +531,31 @@ export function createDeveloperTestMap(base: GameState): GameState {
   next.traps = traps;
   next.specialRooms = specialRooms;
   next.requiredFloorSpawns = requiredFloorSpawns;
+  next.quests = createInitialQuestStates();
+  next.questNpcs = [];
+  next.questRooms = [];
+  populateQuestArea(next, {
+    questId: "red_fang_hunt",
+    room: {
+      left: huntQuestArea.left,
+      top: huntQuestArea.top,
+      right: huntQuestArea.right,
+      bottom: huntQuestArea.bottom,
+    },
+    npc: { x: 12, y: 58 },
+    target: { x: 28, y: 58 },
+  });
+  populateQuestArea(next, {
+    questId: "sealed_relic_recovery",
+    room: {
+      left: recoveryQuestArea.left,
+      top: recoveryQuestArea.top,
+      right: recoveryQuestArea.right,
+      bottom: recoveryQuestArea.bottom,
+    },
+    npc: { x: 39, y: 58 },
+    target: { x: 55, y: 58 },
+  });
   next.floor = 1;
   next.dungeonId = DEVELOPER_TEST_MAP_ID;
   next.dungeonName = "개발자 전체 맵 요소 테스트";
@@ -538,6 +575,7 @@ export function createDeveloperTestMap(base: GameState): GameState {
   next.logs = [
     "[개발자] 전체 맵 요소 테스트 맵입니다.",
     "위쪽은 지형·문·CHASM·함정, 가운데는 환경·오브젝트·적, 아래쪽은 특수방 샘플입니다.",
+    "맨 아래 Quest Test Area에서는 NPC·고유 적·의뢰품·구역 진입·보상을 확인합니다.",
     "왼쪽 안전 통로 끝의 출구로 테스트를 종료할 수 있습니다.",
   ];
   next.gameOver = false;

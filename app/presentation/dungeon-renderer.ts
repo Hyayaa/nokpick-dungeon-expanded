@@ -703,6 +703,45 @@ export function startDungeonRenderer({
         );
       });
 
+      (state.questNpcs ?? []).forEach((npc) => {
+        if (!inViewport(npc.x, npc.y)) return;
+        if (!revealAll && !state.tiles[npc.y]?.[npc.x]?.visible) return;
+        const definition = COMPANION_PRESENTATIONS[npc.classId];
+        const frameWithinTier =
+          COMPANION_IDLE_FRAMES[Math.floor(now / 210) % COMPANION_IDLE_FRAMES.length];
+        const frame = companionFrameIndex(0, frameWithinTier);
+        const width = definition.frameWidth * spritePixelSize;
+        const height = definition.frameHeight * spritePixelSize;
+        const centerX = screenX(npc.x * TILE_SIZE + TILE_SIZE / 2);
+        const bottom = screenY(npc.y * TILE_SIZE + TILE_SIZE - 3);
+        drawEntityShadow(centerX, bottom, width, 0.34);
+        drawSheetFrame(
+          context,
+          assets.companions[npc.classId],
+          frame,
+          definition.frameWidth,
+          definition.frameHeight,
+          centerX - width / 2,
+          bottom - height,
+          width,
+          height,
+        );
+        const quest = (state.quests ?? []).find(
+          (candidate) => candidate.questId === npc.questId,
+        );
+        const marker = quest?.status === "readyToTurnIn"
+          ? "!"
+          : quest?.status === "completed"
+            ? "✓"
+            : "?";
+        drawSpeechBubble(
+          centerX,
+          bottom - height - 7 * zoom,
+          marker,
+          quest?.status === "readyToTurnIn" ? "#ffd56a" : "#b79cff",
+        );
+      });
+
       const cloudColors: Record<string, string> = {
         fire: "rgba(255, 103, 48, .32)",
         frost: "rgba(116, 224, 255, .32)",

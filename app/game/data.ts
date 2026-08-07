@@ -189,6 +189,14 @@ const ESSENTIAL_ITEM_DEFS: Record<string, ItemDefinition> = {
     sprite: 56,
     accent: "#78d7ec",
   },
+  quest_sealed_relic: {
+    id: "quest_sealed_relic",
+    name: "봉인 유물",
+    category: "misc",
+    description: "학자 세라의 의뢰품입니다. 퀘스트 완료 전에는 원정 가방에 보관됩니다.",
+    sprite: 445,
+    accent: "#b79cff",
+  },
 };
 
 export const ITEM_DEFS: Record<string, ItemDefinition> = {

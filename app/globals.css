@@ -1234,6 +1234,39 @@ button:not(:disabled):active {
   color: #c3a864;
 }
 
+.quest-tracker {
+  position: absolute;
+  z-index: 6;
+  right: 14px;
+  bottom: 14px;
+  display: grid;
+  min-width: 190px;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(183, 156, 255, .48);
+  background: rgba(12, 9, 20, .88);
+  pointer-events: none;
+}
+
+.quest-tracker > small {
+  color: #b79cff;
+  font: 8px/1 var(--pixel);
+  letter-spacing: .14em;
+}
+
+.quest-tracker p {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  color: #d9d1ee;
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
+.quest-tracker p[data-ready="true"] span {
+  color: #ffd56a;
+}
+
 .throw-prompt {
   position: absolute;
   z-index: 7;
@@ -7225,6 +7258,86 @@ button.fixed-item-slot.is-filled:focus-visible {
   border-color: #7b434a;
   background: #241517;
   color: #efb1b5;
+}
+
+.quest-modal {
+  width: min(520px, calc(100vw - 28px));
+  padding: 24px;
+  border: 1px solid #5e4f83;
+  background: #121117;
+  box-shadow: 0 24px 75px rgba(0, 0, 0, .72);
+}
+
+.quest-modal > p {
+  margin: 16px 0;
+  color: #b7b1c0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.quest-objective,
+.quest-reward {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 11px 12px;
+  border: 1px solid #34303f;
+  background: #0c0b10;
+}
+
+.quest-objective {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+
+.quest-objective small,
+.quest-reward small {
+  color: #9387ae;
+}
+
+.quest-objective strong {
+  grid-column: 1 / -1;
+  color: #ded6ed;
+  font-size: 12px;
+}
+
+.quest-objective span {
+  grid-column: 2;
+  grid-row: 1;
+  color: #ffd56a;
+}
+
+.quest-reward span {
+  display: grid;
+  gap: 3px;
+}
+
+.quest-reward > i {
+  width: 4px;
+  height: 34px;
+  margin-left: auto;
+}
+
+.quest-modal footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.quest-modal footer button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid #45404f;
+  background: #0b0a0e;
+  color: #c5becd;
+}
+
+.quest-modal footer button.is-primary {
+  border-color: #7964ae;
+  background: #251f36;
+  color: #eee5ff;
 }
 
 @media (max-width: 1120px) {
