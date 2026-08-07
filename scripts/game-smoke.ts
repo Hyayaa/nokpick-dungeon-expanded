@@ -815,6 +815,60 @@ assert.equal(
   "smithy upgrades must not mutate the original campaign equipment",
 );
 
+const companionSmithyFixture = createPreparationTransferFixture();
+companionSmithyFixture.campaign.gold = 2_000;
+const companionSmithyCandidate = listSmithyCandidates(
+  companionSmithyFixture.campaign,
+).find((candidate) => candidate.target.kind === "companionEquipment");
+assert.ok(
+  companionSmithyCandidate,
+  "the smithy must reuse every companion's equipped item as a candidate",
+);
+if (!companionSmithyCandidate || companionSmithyCandidate.target.kind !== "companionEquipment") {
+  throw new Error("missing companion smithy candidate");
+}
+companionSmithyCandidate.instance.grade = "F";
+const companionEquipmentId = companionSmithyCandidate.instance.id;
+const companionEquipmentDefId = companionSmithyCandidate.instance.defId;
+const companionSmithyUpgrade = upgradeCampaignEquipmentGrade(
+  companionSmithyFixture.campaign,
+  companionSmithyCandidate.target,
+);
+assert.equal(companionSmithyUpgrade.changed, true);
+const upgradedCompanion = companionSmithyUpgrade.campaign.companions.find(
+  (companion) => companion.id === companionSmithyCandidate.target.companionId,
+);
+const companionEquipmentKey = companionSmithyCandidate.target.equipmentKey as keyof NonNullable<
+  typeof upgradedCompanion
+>["equipmentInstances"];
+const upgradedCompanionInstance = upgradedCompanion?.equipmentInstances[
+  companionEquipmentKey
+];
+assert.equal(upgradedCompanionInstance?.id, companionEquipmentId);
+assert.equal(upgradedCompanionInstance?.defId, companionEquipmentDefId);
+assert.equal(upgradedCompanionInstance?.grade, "E");
+assert.equal(
+  upgradedCompanion?.equipment[
+    companionEquipmentKey
+  ],
+  companionEquipmentDefId,
+  "upgrading companion gear must keep it equipped by the same companion",
+);
+assert.equal(
+  companionSmithyUpgrade.campaign.warehouse.instances.some(
+    (instance) => instance.id === companionEquipmentId,
+  ),
+  false,
+  "upgraded companion gear must not be copied or moved into the warehouse",
+);
+assert.equal(
+  listSmithyCandidates(companionSmithyFixture.campaign).some(
+    (candidate) => candidate.itemId === "potion_healing",
+  ),
+  false,
+  "non-equipment warehouse items must stay visible in UI without becoming smithy candidates",
+);
+
 assert.match(
   campaignHtml,
   /어디로 향하시겠습니까\?/,
@@ -838,6 +892,16 @@ assert.match(
   dungeonUiSource,
   /commerce-split-layout[\s\S]*CampaignWarehouseInventory[\s\S]*commerce-shop-panel/,
   "the shop must render the shared warehouse on the left and shop stock on the right",
+);
+assert.match(
+  dungeonUiSource,
+  /blacksmith-source-panels[\s\S]*CampaignWarehouseInventory[\s\S]*companions=\{campaign\.companions\}[\s\S]*CampaignCompanionEquipmentRoster/,
+  "the blacksmith must show the shared full warehouse above the complete companion equipment roster",
+);
+assert.match(
+  dungeonUiSource,
+  /target\.zone === "smithyTarget"[\s\S]*listSmithyCandidates\(campaign\)[\s\S]*smithyNextGrade\(grade\)[\s\S]*setBlacksmithTarget\(candidate\.target\)/,
+  "only an existing upgradeable smithy candidate may register through drag and drop",
 );
 assert.match(
   dungeonUiSource,

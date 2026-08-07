@@ -5393,12 +5393,16 @@ const smithyTargetKey = (target: SmithyTarget) => JSON.stringify(target);
 
 function BlacksmithModal({
   campaign,
+  selectedTarget,
   notice,
+  onTargetSelect,
   onUpgrade,
   onClose,
 }: {
   campaign: CampaignSave;
+  selectedTarget: SmithyTarget | null;
   notice: string | null;
+  onTargetSelect: (target: SmithyTarget) => void;
   onUpgrade: (target: SmithyTarget) => void;
   onClose: () => void;
 }) {
@@ -5411,11 +5415,9 @@ function BlacksmithModal({
     );
     return smithyNextGrade(grade) !== null;
   });
-  const [selectedKey, setSelectedKey] = useState<string | null>(
-    upgradeableCandidates[0]
-      ? smithyTargetKey(upgradeableCandidates[0].target)
-      : null,
-  );
+  const selectedKey = selectedTarget
+    ? smithyTargetKey(selectedTarget)
+    : null;
   const selected = candidates.find(
     (candidate) => smithyTargetKey(candidate.target) === selectedKey,
   ) ?? upgradeableCandidates[0] ?? null;
@@ -5480,7 +5482,7 @@ function BlacksmithModal({
                 }
                 onItemSelect={(entry) => {
                   const candidate = upgradeableCandidateForInstance(entry.instance);
-                  if (candidate) setSelectedKey(smithyTargetKey(candidate.target));
+                  if (candidate) onTargetSelect(candidate.target);
                 }}
               />
             </section>
@@ -5504,7 +5506,7 @@ function BlacksmithModal({
                 }
                 onItemSelect={(_companion, _target, entry) => {
                   const candidate = upgradeableCandidateForInstance(entry.instance);
-                  if (candidate) setSelectedKey(smithyTargetKey(candidate.target));
+                  if (candidate) onTargetSelect(candidate.target);
                 }}
               />
             </section>
@@ -10267,6 +10269,7 @@ export default function DungeonGame() {
   const [screen, setScreen] = useState<CampaignScreen>("hub");
   const [commerceOpen, setCommerceOpen] = useState(false);
   const [blacksmithOpen, setBlacksmithOpen] = useState(false);
+  const [blacksmithTarget, setBlacksmithTarget] = useState<SmithyTarget | null>(null);
   const [facilityNotice, setFacilityNotice] = useState<string | null>(null);
   const [hubHelpOpen, setHubHelpOpen] = useState(false);
   const [hubSettingsOpen, setHubSettingsOpen] = useState(false);
@@ -10471,6 +10474,19 @@ export default function DungeonGame() {
   const handleCampaignSlotDrop = useCallback(
     (held: HeldSlotItem, target: ItemSlotAddress) => {
       const source = held.source;
+      if (target.zone === "smithyTarget") {
+        const candidate = listSmithyCandidates(campaign).find(
+          (entry) => entry.instance.id === held.item.itemRef,
+        );
+        const grade = candidate
+          ? resolveItemGrade(ITEM_DEFS[candidate.itemId], candidate.instance)
+          : null;
+        if (candidate && grade && smithyNextGrade(grade)) {
+          setBlacksmithTarget(candidate.target);
+          setFacilityNotice(null);
+        }
+        return;
+      }
       if (
         source.zone === "warehouse" &&
         (target.zone === "shopSellTarget" ||
@@ -10547,10 +10563,16 @@ export default function DungeonGame() {
           {blacksmithOpen && (
             <BlacksmithModal
               campaign={campaign}
+              selectedTarget={blacksmithTarget}
               notice={facilityNotice}
+              onTargetSelect={(target) => {
+                setBlacksmithTarget(target);
+                setFacilityNotice(null);
+              }}
               onUpgrade={handleBlacksmithUpgrade}
               onClose={() => {
                 setBlacksmithOpen(false);
+                setBlacksmithTarget(null);
                 setFacilityNotice(null);
               }}
             />
@@ -10758,6 +10780,7 @@ export default function DungeonGame() {
       }}
       onOpenBlacksmith={() => {
         setBlacksmithOpen(true);
+        setBlacksmithTarget(null);
         setCommerceOpen(false);
         setFacilityNotice(null);
       }}
