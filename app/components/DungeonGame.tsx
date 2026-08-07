@@ -10644,8 +10644,13 @@ export default function DungeonGame() {
       withdrawal.loadout,
       withdrawal.instances,
     );
+    const expeditionSeed =
+      developerMode &&
+      new URLSearchParams(window.location.search).get("dev-floor") === "chasm"
+        ? 0x00000002
+        : randomDungeonSeed();
     const initialGame = createExpeditionGame(
-      randomDungeonSeed(),
+      expeditionSeed,
       {
         dungeonId: dungeon.id,
         dungeonName: dungeon.nameKo,
@@ -10670,6 +10675,7 @@ export default function DungeonGame() {
   }, [
     campaign.companions,
     campaign.warehouse,
+    developerMode,
     dungeonOffers,
     preparationLoadout,
     selectedCompanionIds,

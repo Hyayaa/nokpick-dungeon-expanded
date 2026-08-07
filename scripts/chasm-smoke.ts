@@ -83,5 +83,10 @@ assert.equal(
   "none",
   "the first floor cannot roll a chasm feeling",
 );
+assert.equal(
+  floorFeelingFor(0x00000002, 2),
+  "chasm",
+  "the developer test seed must force a chasm on floor two",
+);
 
 console.log("chasm terrain, generation, pathfinding, and rendering checks passed");
