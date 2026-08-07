@@ -1,4 +1,9 @@
 import { Point, Terrain, Tile } from "./types";
+import {
+  isP0RoomPreset,
+  paintP0Room,
+  type P0RoomPreset,
+} from "./room-presets";
 
 const CARDINALS: Point[] = [
   { x: 1, y: 0 },
@@ -15,7 +20,7 @@ const EIGHT_WAY: Point[] = [
   { x: -1, y: -1 },
 ];
 
-type RoomPreset =
+export type RoomPreset =
   | "entrance"
   | "exit"
   | "empty"
@@ -27,6 +32,10 @@ type RoomPreset =
   | "circleBasin"
   | "plants"
   | "platform"
+  | "chasmBridge"
+  | "chasmRoom"
+  | "circlePit"
+  | "cavesFissure"
   | "segmented"
   | "patch"
   | "cross"
@@ -42,6 +51,7 @@ type Room = {
   bottom: number;
   center: Point;
   preset: RoomPreset;
+  roomValue: 1 | 2 | 3;
   purpose?: "alchemy";
 };
 
@@ -61,6 +71,14 @@ export type GeneratedFloor = {
   corridorWidths: Array<1 | 3>;
   corridorLengths: number[];
   roomCount: number;
+  roomPresets: RoomPreset[];
+  roomRegions: Array<{
+    preset: RoomPreset;
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  }>;
   feeling: FloorFeeling;
   rng: number;
 };
@@ -175,6 +193,7 @@ const paintRoom = (
   }
 
   const interior = roomInterior(room);
+  if (isP0RoomPreset(room.preset)) return;
   if (
     room.preset === "entrance" ||
     room.preset === "exit" ||
@@ -267,18 +286,6 @@ const paintRoom = (
     return;
   }
 
-  if (room.preset === "platform") {
-    interior.forEach((point) => {
-      const border =
-        point.x === room.left + 1 ||
-        point.x === room.right - 1 ||
-        point.y === room.top + 1 ||
-        point.y === room.bottom - 1;
-      if (border) tiles[point.y][point.x].terrain = "water";
-    });
-    return;
-  }
-
   if (room.preset === "segmented") {
     const vertical = room.right - room.left >= room.bottom - room.top;
     if (vertical) {
@@ -360,7 +367,7 @@ const roomFloorPoint = (
   random: ReturnType<typeof makeRandom>,
 ) => {
   const candidates = roomInterior(room).filter(
-    (point) => tiles[point.y][point.x].terrain !== "wall",
+    (point) => isWalkable(tiles[point.y][point.x].terrain, true),
   );
   const preferred = candidates.filter(
     (point) =>
@@ -784,7 +791,7 @@ type RoomSpec = {
   preset: RoomPreset;
   width: number;
   height: number;
-  roomValue: number;
+  roomValue: 1 | 2 | 3;
   purpose?: "alchemy";
 };
 
@@ -803,6 +810,10 @@ const STANDARD_PRESETS: RoomPreset[] = [
   ...Array<RoomPreset>(4).fill("circleBasin"),
   "plants",
   "platform",
+  "chasmBridge",
+  "chasmRoom",
+  "circlePit",
+  "cavesFissure",
   "striped",
   "segmented",
   "pillars",
@@ -811,7 +822,6 @@ const STANDARD_PRESETS: RoomPreset[] = [
 
 const SPECIAL_PRESETS: RoomPreset[] = [
   "plants",
-  "platform",
   "striped",
   "segmented",
   "pillars",
@@ -827,6 +837,10 @@ const SIZE_WEIGHTS: Partial<Record<RoomPreset, [number, number, number]>> = {
   circleBasin: [0, 3, 1],
   plants: [3, 1, 0],
   platform: [6, 3, 1],
+  chasmBridge: [3, 1, 0],
+  chasmRoom: [4, 2, 1],
+  circlePit: [4, 2, 1],
+  cavesFissure: [9, 3, 1],
   striped: [2, 1, 0],
   segmented: [9, 3, 1],
   pillars: [9, 3, 1],
@@ -841,6 +855,10 @@ const PRESET_MINIMUMS: Partial<Record<RoomPreset, number>> = {
   circleBasin: 11,
   plants: 5,
   platform: 6,
+  chasmBridge: 5,
+  chasmRoom: 5,
+  circlePit: 8,
+  cavesFissure: 7,
   segmented: 7,
   pillars: 7,
 };
@@ -856,6 +874,7 @@ const roomFromSpec = (spec: RoomSpec, center: Point): Room => {
     bottom: top + spec.height - 1,
     center: { ...center },
     preset: spec.preset,
+    roomValue: spec.roomValue,
     purpose: spec.purpose,
   };
 };
@@ -918,7 +937,10 @@ const curvedLoopAngle = (
   );
 };
 
-const roomSpecs = (random: ReturnType<typeof makeRandom>) => {
+const roomSpecs = (
+  random: ReturnType<typeof makeRandom>,
+  forcedPresets: readonly P0RoomPreset[] = [],
+) => {
   // Keep the large party-friendly room sizes, but use a tighter per-floor
   // graph so each expedition floor has fewer stops and shorter transfers.
   const standardRoll = random.next();
@@ -962,7 +984,7 @@ const roomSpecs = (random: ReturnType<typeof makeRandom>) => {
     );
     let width = random.int(Math.min(minimum, maximum), maximum);
     let height = random.int(Math.min(minimum, maximum), maximum);
-    if (preset === "circleBasin") {
+    if (preset === "circleBasin" || preset === "circlePit") {
       if (width % 2 === 0) width -= 1;
       if (height % 2 === 0) height -= 1;
     }
@@ -971,13 +993,21 @@ const roomSpecs = (random: ReturnType<typeof makeRandom>) => {
       preset,
       width,
       height,
-      roomValue: category + 1,
+      roomValue: (category + 1) as 1 | 2 | 3,
     };
   };
   const entrance = makeSpec("entrance", "entrance", "transition");
   const exit = makeSpec("exit", "exit", "transition");
   const standards: RoomSpec[] = [];
-  let roomBudget = standardCount;
+  forcedPresets.slice(0, standardCount).forEach((preset) => {
+    standards.push(
+      makeSpec(`standard-${standards.length}`, preset, "normal", 3),
+    );
+  });
+  let roomBudget = Math.max(
+    0,
+    standardCount - standards.reduce((total, room) => total + room.roomValue, 0),
+  );
   while (roomBudget > 0) {
     let preset: RoomPreset;
     do {
@@ -1281,10 +1311,11 @@ export function generateFloor(
   seed: number,
   attempt = 0,
   feeling: FloorFeeling = "none",
+  forcedPresets: readonly P0RoomPreset[] = [],
 ): GeneratedFloor {
   const random = makeRandom(seed);
   const tunnelTerrain = feeling === "chasm" ? "specialFloor" : "floor";
-  const specs = roomSpecs(random);
+  const specs = roomSpecs(random, forcedPresets);
   // RegularLevel chooses evenly between LoopBuilder and FigureEightBuilder.
   const layout =
     random.next() < 0.5
@@ -1315,6 +1346,7 @@ export function generateFloor(
   let lockedDoor: Point | null = null;
   const usedDoorPoints = new Set<string>();
   const doorAxes = new Map<string, "horizontal" | "vertical">();
+  const roomDoors = new Map<string, Point[]>();
   // Figure-eight layouts may intentionally contain the same undirected room
   // pair twice. Assign widths by connection index so those passages remain
   // independent and the requested rounded 80% quota is exact.
@@ -1357,6 +1389,14 @@ export function generateFloor(
     corridorLengths.push(connection.length);
     carveRoomAccess(tiles, first, connection.firstDoor);
     carveRoomAccess(tiles, second, connection.secondDoor);
+    roomDoors.set(first.id, [
+      ...(roomDoors.get(first.id) ?? []),
+      connection.firstDoor,
+    ]);
+    roomDoors.set(second.id, [
+      ...(roomDoors.get(second.id) ?? []),
+      connection.secondDoor,
+    ]);
     doorAxes.set(pointKey(connection.firstDoor), connection.axis);
     doorAxes.set(pointKey(connection.secondDoor), connection.axis);
     if (
@@ -1430,6 +1470,18 @@ export function generateFloor(
     tiles[y][x].terrain = terrain;
   });
 
+  // These presets depend on their actual connection doors. Paint them only
+  // after corridor planning, reusing the existing terrain and path rules.
+  layout.rooms.forEach((room) => {
+    if (!isP0RoomPreset(room.preset)) return;
+    paintP0Room(
+      tiles,
+      { ...room, preset: room.preset },
+      roomDoors.get(room.id) ?? [],
+      random,
+    );
+  });
+
   const entranceRoom = roomById.get(specs.entrance.id) ?? layout.rooms[0];
   const exitRoom =
     roomById.get(specs.exit.id) ?? layout.rooms.at(-1) ?? layout.rooms[0];
@@ -1443,10 +1495,23 @@ export function generateFloor(
   const roomPaintable = new Set(
     layout.rooms.flatMap((room) => roomInterior(room).map(pointKey)),
   );
+  const roomAnchorPoint = (room: Room) =>
+    roomInterior(room)
+      .filter((point) => isWalkable(tiles[point.y][point.x].terrain, true))
+      .sort(
+        (first, second) =>
+          Math.abs(first.x - room.center.x) +
+            Math.abs(first.y - room.center.y) -
+            Math.abs(second.x - room.center.x) -
+            Math.abs(second.y - room.center.y),
+      )[0] ?? room.center;
+  const roomAnchors = new Map(
+    layout.rooms.map((room) => [room.id, roomAnchorPoint(room)]),
+  );
   const protectedPoints = new Set<string>([
     pointKey(start),
     pointKey(exit),
-    ...layout.rooms.map((room) => pointKey(room.center)),
+    ...layout.rooms.map((room) => pointKey(roomAnchors.get(room.id) ?? room.center)),
   ]);
   doorAxes.forEach((axis, key) => {
     protectedPoints.add(key);
@@ -1559,7 +1624,9 @@ export function generateFloor(
     !reachable.has(pointKey(exit)) &&
     reachableAfterUnlock.has(pointKey(exit)) &&
     layout.rooms.every((room) =>
-      reachableAfterUnlock.has(pointKey(room.center)),
+      reachableAfterUnlock.has(
+        pointKey(roomAnchors.get(room.id) ?? room.center),
+      ),
     );
   if (!validLayout && attempt < 64) {
     // RegularLevel retries a rejected builder result. Advance deterministically
@@ -1568,6 +1635,7 @@ export function generateFloor(
       (seed + 0x9e3779b9 + attempt * 0x85ebca6b) >>> 0,
       attempt + 1,
       feeling,
+      forcedPresets,
     );
   }
   if (!validLayout) {
@@ -1612,6 +1680,14 @@ export function generateFloor(
     corridorWidths,
     corridorLengths,
     roomCount: layout.rooms.length,
+    roomPresets: layout.rooms.map((room) => room.preset),
+    roomRegions: layout.rooms.map((room) => ({
+      preset: room.preset,
+      left: room.left,
+      top: room.top,
+      right: room.right,
+      bottom: room.bottom,
+    })),
     feeling,
     rng: random.value(),
   };

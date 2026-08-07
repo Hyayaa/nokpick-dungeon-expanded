@@ -78,6 +78,7 @@ import {
   waitTurn,
   zapWand,
 } from "../game/engine";
+import { P0_ROOM_PRESETS } from "../game/room-presets";
 import { completeFloorExit, resolveGameSession } from "../game/session";
 import {
   COMPANION_PASSIVE_SLOT_INDEXES,
@@ -10644,11 +10645,15 @@ export default function DungeonGame() {
       withdrawal.loadout,
       withdrawal.instances,
     );
+    const developerParams = new URLSearchParams(window.location.search);
     const expeditionSeed =
-      developerMode &&
-      new URLSearchParams(window.location.search).get("dev-floor") === "chasm"
+      developerMode && developerParams.get("dev-floor") === "chasm"
         ? 0x00000002
         : randomDungeonSeed();
+    const forcedRoomPresets =
+      developerMode && developerParams.get("dev-room") === "p0"
+        ? P0_ROOM_PRESETS
+        : [];
     const initialGame = createExpeditionGame(
       expeditionSeed,
       {
@@ -10663,6 +10668,7 @@ export default function DungeonGame() {
       },
       player,
       companions,
+      forcedRoomPresets,
     );
     setCampaign((current) => ({
       ...current,

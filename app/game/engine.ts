@@ -24,6 +24,7 @@ import {
   mapPointKey,
   updateFieldOfView,
 } from "./map";
+import type { P0RoomPreset } from "./room-presets";
 import { AUTO_SLOT_CATEGORIES, isWand } from "./magic";
 import {
   COMPANION_SKILLS,
@@ -1315,11 +1316,13 @@ const makeFloorState = (
   carriedPlayer?: Player,
   carriedCompanions?: Companion[],
   expeditionRules: ExpeditionRules = DEFAULT_EXPEDITION_RULES,
+  forcedRoomPresets: readonly P0RoomPreset[] = [],
 ) => {
   const generated = generateFloor(
     seed ^ Math.imul(floor, 0x9e3779b1),
     0,
     floorFeelingFor(seed, floor),
+    forcedRoomPresets,
   );
   const player = carriedPlayer
     ? {
@@ -1500,8 +1503,17 @@ export function createExpeditionGame(
   rules: ExpeditionRules,
   player: Player,
   companions: Companion[],
+  forcedRoomPresets: readonly P0RoomPreset[] = [],
 ): GameState {
-  const state = makeFloorState(seed, 1, 1, player, companions, rules);
+  const state = makeFloorState(
+    seed,
+    1,
+    1,
+    player,
+    companions,
+    rules,
+    forcedRoomPresets,
+  );
   state.pendingAugmentOffers = [];
   state.player.augments = {};
   state.logs = [
