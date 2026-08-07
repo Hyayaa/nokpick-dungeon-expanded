@@ -4,6 +4,19 @@ import {
   paintP0Room,
   type P0RoomPreset,
 } from "./room-presets";
+import {
+  SPECIAL_ROOM_REGISTRY,
+  isSpecialRoomPreset,
+  paintSpecialRoom,
+  specialRoomMetadata,
+  type SpecialRewardSlot,
+  type SpecialRoomPreset,
+} from "./special-rooms";
+import type {
+  DungeonSpecialRoom,
+  DungeonTrap,
+  GuaranteedFloorSpawn,
+} from "./types";
 
 const CARDINALS: Point[] = [
   { x: 1, y: 0 },
@@ -41,7 +54,13 @@ export type RoomPreset =
   | "cross"
   | "ruins"
   | "splitPools"
-  | "alcoves";
+  | "alcoves"
+  | "storage"
+  | "magicalFire"
+  | "toxicGas"
+  | "traps"
+  | "crystalChoice"
+  | "crystalPath";
 
 type Room = {
   id: string;
@@ -79,6 +98,11 @@ export type GeneratedFloor = {
     right: number;
     bottom: number;
   }>;
+  specialRooms: DungeonSpecialRoom[];
+  requiredFloorSpawns: GuaranteedFloorSpawn[];
+  traps: DungeonTrap[];
+  specialRewards: SpecialRewardSlot[];
+  toxicGasTiles: Point[];
   feeling: FloorFeeling;
   rng: number;
 };
@@ -118,17 +142,26 @@ const inside = (tiles: Tile[][], x: number, y: number) =>
   y >= 0 && y < tiles.length && x >= 0 && x < tiles[0].length;
 
 export const isDoor = (terrain: Terrain) =>
-  terrain === "door" || terrain === "openDoor" || terrain === "lockedDoor";
+  terrain === "door" ||
+  terrain === "openDoor" ||
+  terrain === "lockedDoor" ||
+  terrain === "crystalDoor" ||
+  terrain === "barricade";
 
 export const blocksSight = (terrain: Terrain) =>
   terrain === "wall" ||
   terrain === "door" ||
   terrain === "lockedDoor" ||
+  terrain === "crystalDoor" ||
+  terrain === "barricade" ||
   terrain === "highGrass";
 
 export const isWalkable = (terrain: Terrain, canUnlock = false) =>
   terrain !== "wall" &&
   terrain !== "chasm" &&
+  terrain !== "crystalDoor" &&
+  terrain !== "barricade" &&
+  terrain !== "magicalFire" &&
   (terrain !== "lockedDoor" || canUnlock);
 
 const roomInterior = (room: Room) => {
@@ -193,7 +226,7 @@ const paintRoom = (
   }
 
   const interior = roomInterior(room);
-  if (isP0RoomPreset(room.preset)) return;
+  if (isP0RoomPreset(room.preset) || isSpecialRoomPreset(room.preset)) return;
   if (
     room.preset === "entrance" ||
     room.preset === "exit" ||
@@ -831,6 +864,19 @@ const SPECIAL_PRESETS: RoomPreset[] = [
   "alcoves",
 ];
 
+const chooseSpecialGimmick = (random: ReturnType<typeof makeRandom>) => {
+  const total = SPECIAL_ROOM_REGISTRY.reduce(
+    (sum, entry) => sum + entry.weight,
+    0,
+  );
+  let roll = random.next() * total;
+  for (const entry of SPECIAL_ROOM_REGISTRY) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry.preset;
+  }
+  return SPECIAL_ROOM_REGISTRY[0].preset;
+};
+
 const SIZE_WEIGHTS: Partial<Record<RoomPreset, [number, number, number]>> = {
   sewerPipe: [3, 2, 1],
   ring: [9, 3, 1],
@@ -841,6 +887,12 @@ const SIZE_WEIGHTS: Partial<Record<RoomPreset, [number, number, number]>> = {
   chasmRoom: [4, 2, 1],
   circlePit: [4, 2, 1],
   cavesFissure: [9, 3, 1],
+  storage: [3, 1, 0],
+  magicalFire: [3, 1, 0],
+  toxicGas: [3, 1, 0],
+  traps: [3, 1, 0],
+  crystalChoice: [3, 1, 0],
+  crystalPath: [2, 1, 0],
   striped: [2, 1, 0],
   segmented: [9, 3, 1],
   pillars: [9, 3, 1],
@@ -859,6 +911,12 @@ const PRESET_MINIMUMS: Partial<Record<RoomPreset, number>> = {
   chasmRoom: 5,
   circlePit: 8,
   cavesFissure: 7,
+  storage: specialRoomMetadata("storage").minimumSize,
+  magicalFire: specialRoomMetadata("magicalFire").minimumSize,
+  toxicGas: specialRoomMetadata("toxicGas").minimumSize,
+  traps: specialRoomMetadata("traps").minimumSize,
+  crystalChoice: specialRoomMetadata("crystalChoice").minimumSize,
+  crystalPath: specialRoomMetadata("crystalPath").minimumSize,
   segmented: 7,
   pillars: 7,
 };
@@ -940,6 +998,7 @@ const curvedLoopAngle = (
 const roomSpecs = (
   random: ReturnType<typeof makeRandom>,
   forcedPresets: readonly P0RoomPreset[] = [],
+  forcedSpecialPreset?: SpecialRoomPreset,
 ) => {
   // Keep the large party-friendly room sizes, but use a tighter per-floor
   // graph so each expedition floor has fewer stops and shorter transfers.
@@ -1027,14 +1086,29 @@ const roomSpecs = (
     standards.push(spec);
     roomBudget -= spec.roomValue;
   }
-  const specials = Array.from({ length: specialCount }, (_, index) => ({
-    ...makeSpec(
-      `special-${index}`,
-      SPECIAL_PRESETS[random.int(0, SPECIAL_PRESETS.length - 1)],
-      "special",
-    ),
-    purpose: index === 0 ? "alchemy" as const : undefined,
-  }));
+  const selectedGimmick =
+    forcedSpecialPreset ??
+    (forcedPresets.length === 0 && random.next() < 0.62
+      ? chooseSpecialGimmick(random)
+      : undefined);
+  const specials: RoomSpec[] = [];
+  if (selectedGimmick) {
+    specials.push(
+      makeSpec("special-gimmick", selectedGimmick, "special"),
+    );
+  }
+  while (specials.length < specialCount) {
+    specials.push({
+      ...makeSpec(
+        `special-${specials.length}`,
+        SPECIAL_PRESETS[random.int(0, SPECIAL_PRESETS.length - 1)],
+        "special",
+      ),
+      purpose: specials.some((room) => room.purpose === "alchemy")
+        ? undefined
+        : "alchemy",
+    });
+  }
   return { entrance, exit, standards, specials };
 };
 
@@ -1312,10 +1386,12 @@ export function generateFloor(
   attempt = 0,
   feeling: FloorFeeling = "none",
   forcedPresets: readonly P0RoomPreset[] = [],
+  forcedSpecialPreset?: SpecialRoomPreset,
+  floor = 1,
 ): GeneratedFloor {
   const random = makeRandom(seed);
   const tunnelTerrain = feeling === "chasm" ? "specialFloor" : "floor";
-  const specs = roomSpecs(random, forcedPresets);
+  const specs = roomSpecs(random, forcedPresets, forcedSpecialPreset);
   // RegularLevel chooses evenly between LoopBuilder and FigureEightBuilder.
   const layout =
     random.next() < 0.5
@@ -1341,6 +1417,7 @@ export function generateFloor(
       }
     }
   });
+
   layout.rooms.forEach((room) => paintRoom(tiles, room, random));
 
   let lockedDoor: Point | null = null;
@@ -1482,6 +1559,27 @@ export function generateFloor(
     );
   });
 
+  const specialRooms: DungeonSpecialRoom[] = [];
+  const requiredFloorSpawns: GuaranteedFloorSpawn[] = [];
+  const traps: DungeonTrap[] = [];
+  const specialRewards: SpecialRewardSlot[] = [];
+  const toxicGasTiles: Point[] = [];
+  layout.rooms.forEach((room) => {
+    if (!isSpecialRoomPreset(room.preset)) return;
+    const result = paintSpecialRoom(
+      tiles,
+      { ...room, preset: room.preset },
+      roomDoors.get(room.id) ?? [],
+      random,
+      floor,
+    );
+    specialRooms.push(result.room);
+    requiredFloorSpawns.push(...result.requiredFloorSpawns);
+    traps.push(...result.traps);
+    specialRewards.push(...result.rewards);
+    toxicGasTiles.push(...result.toxicGasTiles);
+  });
+
   const entranceRoom = roomById.get(specs.entrance.id) ?? layout.rooms[0];
   const exitRoom =
     roomById.get(specs.exit.id) ?? layout.rooms.at(-1) ?? layout.rooms[0];
@@ -1493,7 +1591,9 @@ export function generateFloor(
   // RegularPainter only decorates room-approved empty cells, never the
   // connecting tunnels. SewerPainter uses water 0.30/5 and grass 0.20/4.
   const roomPaintable = new Set(
-    layout.rooms.flatMap((room) => roomInterior(room).map(pointKey)),
+    layout.rooms
+      .filter((room) => !isSpecialRoomPreset(room.preset))
+      .flatMap((room) => roomInterior(room).map(pointKey)),
   );
   const roomAnchorPoint = (room: Room) =>
     roomInterior(room)
@@ -1593,7 +1693,8 @@ export function generateFloor(
     const walkable = (px: number, py: number) =>
       Boolean(
         inside(tiles, px, py) &&
-          isWalkable(tiles[py][px].terrain, true),
+          (isWalkable(tiles[py][px].terrain, true) ||
+            isDoor(tiles[py][px].terrain)),
       );
     const wall = (px: number, py: number) =>
       inside(tiles, px, py) && tiles[py][px].terrain === "wall";
@@ -1624,9 +1725,8 @@ export function generateFloor(
     !reachable.has(pointKey(exit)) &&
     reachableAfterUnlock.has(pointKey(exit)) &&
     layout.rooms.every((room) =>
-      reachableAfterUnlock.has(
-        pointKey(roomAnchors.get(room.id) ?? room.center),
-      ),
+      isSpecialRoomPreset(room.preset) ||
+      reachableAfterUnlock.has(pointKey(roomAnchors.get(room.id) ?? room.center)),
     );
   if (!validLayout && attempt < 64) {
     // RegularLevel retries a rejected builder result. Advance deterministically
@@ -1636,6 +1736,8 @@ export function generateFloor(
       attempt + 1,
       feeling,
       forcedPresets,
+      forcedSpecialPreset,
+      floor,
     );
   }
   if (!validLayout) {
@@ -1654,6 +1756,13 @@ export function generateFloor(
       return distance !== undefined &&
         distance >= 4 &&
         !isDoor(tile.terrain) &&
+        !specialRooms.some(
+          (room) =>
+            x >= room.left &&
+            x <= room.right &&
+            y >= room.top &&
+            y <= room.bottom,
+        ) &&
         tile.terrain !== "entrance" &&
         tile.terrain !== "exit"
         ? [point]
@@ -1688,6 +1797,11 @@ export function generateFloor(
       right: room.right,
       bottom: room.bottom,
     })),
+    specialRooms,
+    requiredFloorSpawns,
+    traps,
+    specialRewards,
+    toxicGasTiles,
     feeling,
     rng: random.value(),
   };

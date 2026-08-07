@@ -79,6 +79,7 @@ import {
   zapWand,
 } from "../game/engine";
 import { P0_ROOM_PRESETS } from "../game/room-presets";
+import { isSpecialRoomPreset } from "../game/special-rooms";
 import { completeFloorExit, resolveGameSession } from "../game/session";
 import {
   COMPANION_PASSIVE_SLOT_INDEXES,
@@ -461,6 +462,7 @@ const UI_SCALE_OPTIONS = [0.8, 0.9, 1, 1.1, 1.2] as const;
 const FONT_SCALE_STORAGE_KEY = "shattered-web-font-scale";
 const LANGUAGE_STORAGE_KEY = "shattered-web-language";
 const CAMPAIGN_STORAGE_KEY = "shattered-web-campaign-v1";
+const ACTIVE_EXPEDITION_STORAGE_KEY = "shattered-web-active-expedition-v1";
 const AUTO_EXPLORATION_ENABLED = false;
 const FONT_SCALE_OPTIONS = [0.85, 1, 1.15, 1.3] as const;
 const UiLanguageContext = createContext<UiLanguage>("ko");
@@ -5881,6 +5883,7 @@ type DungeonRunProps = {
   onLanguageChange: (language: UiLanguage) => void;
   onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
+  onGameSave: (game: GameState) => void;
   onFinish: (
     outcome: ExpeditionOutcome,
     game: GameState,
@@ -5902,6 +5905,7 @@ function DungeonRun({
   onLanguageChange,
   onSoundEnabledChange,
   onDeveloperModeChange,
+  onGameSave,
   onFinish,
 }: DungeonRunProps) {
   const [game, setGame] = useState<GameState>(() => initialGame);
@@ -6039,7 +6043,8 @@ function DungeonRun({
   const commitGame = useCallback((next: GameState) => {
     gameRef.current = next;
     setGame(next);
-  }, []);
+    onGameSave(next);
+  }, [onGameSave]);
 
   useEffect(() => {
     onFinishRef.current = onFinish;
@@ -6294,6 +6299,7 @@ function DungeonRun({
         const sources = [
           "/assets/environment/tiles_sewers.png",
           "/assets/environment/water0.png",
+          "/assets/environment/terrain_features.png",
           "/assets/sprites/items.png",
           "/assets/sprites/player.png",
           ...enemyKinds.map((kind) => ENEMY_SPRITES[kind].file),
@@ -6313,9 +6319,12 @@ function DungeonRun({
           "/assets/environment/tiles_sewers.png",
         );
         const water = imagesBySource.get("/assets/environment/water0.png");
+        const terrainFeatures = imagesBySource.get(
+          "/assets/environment/terrain_features.png",
+        );
         const items = imagesBySource.get("/assets/sprites/items.png");
         const player = imagesBySource.get("/assets/sprites/player.png");
-        if (!tiles || !water || !items || !player) {
+        if (!tiles || !water || !terrainFeatures || !items || !player) {
           throw new Error("Essential map images are missing");
         }
         const enemies = enemyKinds.reduce(
@@ -6341,6 +6350,7 @@ function DungeonRun({
         assetsRef.current = {
           tiles,
           water,
+          terrainFeatures,
           items,
           player,
           enemies,
@@ -9590,7 +9600,12 @@ function DungeonRun({
               </span>
               <span>
                 <small>{text("열쇠", "Keys")}</small>
-                <b>{game.player.inventory.iron_key ?? 0}</b>
+                <b>
+                  {text("쇠", "Iron")} {game.player.inventory.iron_key ?? 0}
+                  {(game.player.inventory.crystal_key ?? 0) > 0
+                    ? ` · ${text("수정", "Crystal")} ${game.player.inventory.crystal_key}`
+                    : ""}
+                </b>
               </span>
               <TurnGauge
                 moveSpeed={controlledCompanion
@@ -10335,6 +10350,24 @@ export default function DungeonGame() {
           shop: createShopState(firstOfferSeed, current.expeditions),
         }));
       }
+      try {
+        const rawActive = window.localStorage.getItem(
+          ACTIVE_EXPEDITION_STORAGE_KEY,
+        );
+        const saved = rawActive
+          ? JSON.parse(rawActive) as ActiveExpedition
+          : null;
+        if (
+          saved?.dungeon?.id &&
+          saved.initialGame?.tiles?.length &&
+          saved.initialGame.player
+        ) {
+          setActiveExpedition(saved);
+          setScreen("dungeon");
+        }
+      } catch {
+        window.localStorage.removeItem(ACTIVE_EXPEDITION_STORAGE_KEY);
+      }
       const savedScale = Number(
         window.localStorage.getItem(UI_SCALE_STORAGE_KEY),
       );
@@ -10646,8 +10679,14 @@ export default function DungeonGame() {
       withdrawal.instances,
     );
     const developerParams = new URLSearchParams(window.location.search);
+    const requestedRoom = developerParams.get("dev-room");
+    const forcedSpecialRoom =
+      developerMode && requestedRoom && isSpecialRoomPreset(requestedRoom)
+        ? requestedRoom
+        : undefined;
     const expeditionSeed =
-      developerMode && developerParams.get("dev-floor") === "chasm"
+      developerMode &&
+        (developerParams.get("dev-floor") === "chasm" || forcedSpecialRoom)
         ? 0x00000002
         : randomDungeonSeed();
     const forcedRoomPresets =
@@ -10669,6 +10708,7 @@ export default function DungeonGame() {
       player,
       companions,
       forcedRoomPresets,
+      forcedSpecialRoom,
     );
     setCampaign((current) => ({
       ...current,
@@ -10676,6 +10716,10 @@ export default function DungeonGame() {
       expeditions: current.expeditions + 1,
     }));
     setActiveExpedition({ dungeon, initialGame });
+    window.localStorage.setItem(
+      ACTIVE_EXPEDITION_STORAGE_KEY,
+      JSON.stringify({ dungeon, initialGame }),
+    );
     setExpeditionResult(null);
     setScreen("dungeon");
   }, [
@@ -10734,6 +10778,7 @@ export default function DungeonGame() {
         return next;
       });
       setActiveExpedition(null);
+      window.localStorage.removeItem(ACTIVE_EXPEDITION_STORAGE_KEY);
       setSelectedDungeon(null);
       setScreen("results");
     },
@@ -10757,6 +10802,12 @@ export default function DungeonGame() {
         onLanguageChange={changeLanguage}
         onSoundEnabledChange={setSoundEnabled}
         onDeveloperModeChange={setDeveloperMode}
+        onGameSave={(game) => {
+          window.localStorage.setItem(
+            ACTIVE_EXPEDITION_STORAGE_KEY,
+            JSON.stringify({ dungeon: activeExpedition.dungeon, initialGame: game }),
+          );
+        }}
         onFinish={finishExpedition}
       />
     );

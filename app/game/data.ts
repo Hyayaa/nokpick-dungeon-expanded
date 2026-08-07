@@ -181,6 +181,14 @@ const ESSENTIAL_ITEM_DEFS: Record<string, ItemDefinition> = {
     sprite: 55,
     accent: "#d9d0a8",
   },
+  crystal_key: {
+    id: "crystal_key",
+    name: "수정 열쇠",
+    category: "key",
+    description: "현재 층의 수정문 하나를 열 수 있습니다. 다음 층으로 가져갈 수 없습니다.",
+    sprite: 56,
+    accent: "#78d7ec",
+  },
 };
 
 export const ITEM_DEFS: Record<string, ItemDefinition> = {

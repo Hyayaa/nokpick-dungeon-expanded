@@ -6,6 +6,10 @@ const water = new URL(
   "../../public/assets/environment/water0.png?inline",
   import.meta.url,
 ).href;
+const terrainFeatures = new URL(
+  "../../public/assets/environment/terrain_features.png?inline",
+  import.meta.url,
+).href;
 const items = new URL(
   "../../public/assets/sprites/items.png?inline",
   import.meta.url,
@@ -66,6 +70,7 @@ const cleric = new URL(
 const RUNTIME_IMAGE_SOURCES: Readonly<Record<string, string>> = {
   "/assets/environment/tiles_sewers.png": tilesSewers,
   "/assets/environment/water0.png": water,
+  "/assets/environment/terrain_features.png": terrainFeatures,
   "/assets/sprites/items.png": items,
   "/assets/sprites/player.png": player,
   "/assets/sprites/rat.png": rat,

@@ -17,7 +17,10 @@ export type Terrain =
   | "exit"
   | "door"
   | "openDoor"
-  | "lockedDoor";
+  | "lockedDoor"
+  | "crystalDoor"
+  | "barricade"
+  | "magicalFire";
 
 export type Tile = {
   terrain: Terrain;
@@ -117,6 +120,7 @@ export type StatusEffectId =
   | "rooted"
   | "haste"
   | "levitating"
+  | "purified"
   | "mindVision"
   | "magicSight"
   | "shielded"
@@ -162,6 +166,47 @@ export type DungeonWard = Point & {
   id: string;
   turns: number;
   power: number;
+};
+
+export type DungeonTrapKind =
+  | "gripping"
+  | "poisonDart"
+  | "explosive"
+  | "teleportation"
+  | "flashing"
+  | "toxicVent";
+
+export type DungeonTrap = Point & {
+  id: string;
+  kind: DungeonTrapKind;
+  active: boolean;
+  hidden: boolean;
+  revealed: boolean;
+  triggered: boolean;
+};
+
+export type SpecialRoomKind =
+  | "storage"
+  | "magicalFire"
+  | "toxicGas"
+  | "traps"
+  | "crystalChoice"
+  | "crystalPath";
+
+export type GuaranteedFloorSpawn = {
+  id: string;
+  defId: string;
+  roomKind: SpecialRoomKind;
+};
+
+export type DungeonSpecialRoom = {
+  id: string;
+  kind: SpecialRoomKind;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  requiredItemId?: string;
 };
 
 export type MagicVisualKind = "beam" | "bolt" | "cone" | "burst" | "cloud";
@@ -588,6 +633,9 @@ export type GameState = {
   objects: DungeonObject[];
   clouds: DungeonCloud[];
   wards: DungeonWard[];
+  traps?: DungeonTrap[];
+  specialRooms?: DungeonSpecialRoom[];
+  requiredFloorSpawns?: GuaranteedFloorSpawn[];
   floor: number;
   dungeonId: string;
   dungeonName: string;

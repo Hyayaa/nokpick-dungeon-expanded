@@ -187,6 +187,9 @@ export const cloneGame = (
       Math.max(3, cloud.turns, ...cloud.tiles.map((tile) => tile.remaining)),
   })),
   wards: (state.wards ?? []).map((ward) => ({ ...ward })),
+  traps: (state.traps ?? []).map((trap) => ({ ...trap })),
+  specialRooms: (state.specialRooms ?? []).map((room) => ({ ...room })),
+  requiredFloorSpawns: (state.requiredFloorSpawns ?? []).map((spawn) => ({ ...spawn })),
   logs: [...state.logs],
   // The expedition loot plan is immutable after the contract is accepted.
   // Floor placement clones an entry's instance before gameplay can mutate it,

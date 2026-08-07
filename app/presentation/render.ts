@@ -60,7 +60,9 @@ export const SEWER_TILE_FRAMES = Object.freeze({
   raisedDoor: RAISED_DOORS,
   raisedDoorOpen: RAISED_DOORS + 1,
   raisedDoorLocked: RAISED_DOORS + 2,
+  raisedDoorCrystal: RAISED_DOORS + 3,
   raisedDoorSideways: RAISED_DOORS + 4,
+  raisedBarricade: RAISED_OTHER + 1,
   raisedHighGrass: RAISED_OTHER + 2,
   raisedHighGrassAlt: RAISED_OTHER + 5,
   wallInternal: WALLS_INTERNAL,
@@ -81,7 +83,10 @@ const tileAt = (state: GameState, x: number, y: number): Terrain | null => {
 
 const wallLike = (terrain: Terrain | null) => terrain === "wall";
 const doorLike = (terrain: Terrain | null) =>
-  terrain === "door" || terrain === "openDoor" || terrain === "lockedDoor";
+  terrain === "door" ||
+  terrain === "openDoor" ||
+  terrain === "lockedDoor" ||
+  terrain === "crystalDoor";
 const stitchableWithWater = (terrain: Terrain | null) =>
   terrain === "floor" ||
   terrain === "specialFloor" ||
@@ -120,6 +125,8 @@ export function terrainVisual(state: GameState, x: number, y: number) {
   const terrain = tile.terrain;
 
   if (terrain === "floor") return floorVisual(tile.variant);
+  if (terrain === "magicalFire") return SEWER_TILE_FRAMES.specialFloor;
+  if (terrain === "barricade") return SEWER_TILE_FRAMES.raisedBarricade;
   if (terrain === "specialFloor") {
     return tile.variant >= 50
       ? SEWER_TILE_FRAMES.specialFloorAlt
@@ -175,6 +182,7 @@ export function terrainVisual(state: GameState, x: number, y: number) {
     // getRaisedDoorTile: Shattered chooses the sideways floor frame from the
     // tile ABOVE the door. A vertical doorway therefore keeps the complete
     // raised door frame (112/113/114), including its wall-backed lower half.
+    if (terrain === "crystalDoor") return SEWER_TILE_FRAMES.raisedDoorCrystal;
     const wallAbove = wallLike(tileAt(state, x, y - 1));
     if (wallAbove) return SEWER_TILE_FRAMES.raisedDoorSideways;
     if (terrain === "openDoor") return SEWER_TILE_FRAMES.raisedDoorOpen;
@@ -216,6 +224,8 @@ export function wallOverlayVisual(state: GameState, x: number, y: number) {
           ? SEWER_TILE_FRAMES.doorSidewaysOverhangClosed
           : terrain === "lockedDoor"
             ? SEWER_TILE_FRAMES.doorSidewaysOverhangLocked
+            : terrain === "crystalDoor"
+              ? SEWER_TILE_FRAMES.doorSidewaysOverhangLocked
             : SEWER_TILE_FRAMES.wallOverhang;
     if (!wallLike(tileAt(state, x + 1, y + 1))) visual += 1;
     if (!wallLike(tileAt(state, x - 1, y + 1))) visual += 2;
