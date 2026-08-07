@@ -10471,13 +10471,18 @@ export default function DungeonGame() {
   const handleCampaignSlotDrop = useCallback(
     (held: HeldSlotItem, target: ItemSlotAddress) => {
       const source = held.source;
-      if (source.zone === "warehouse" && target.zone === "shopSellTarget") {
+      if (
+        source.zone === "warehouse" &&
+        (target.zone === "shopSellTarget" ||
+          target.zone === "shopStock" ||
+          target.zone === "shopBuyback")
+      ) {
         handleShopSell(source.index);
         return;
       }
       if (
         (source.zone === "shopStock" || source.zone === "shopBuyback") &&
-        target.zone === "shopWarehouseTarget"
+        (target.zone === "shopWarehouseTarget" || target.zone === "warehouse")
       ) {
         const listingSource = source.zone === "shopStock" ? "stock" : "buyback";
         handleShopBuy(listingSource, source.listingId);

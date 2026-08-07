@@ -686,6 +686,18 @@ assert.notDeepEqual(
 );
 
 const stackSaleFixture = createPreparationTransferFixture();
+const rejectedSale = sellWarehouseItem(
+  stackSaleFixture.campaign,
+  WAREHOUSE_SLOT_COUNT - 1,
+);
+assert.equal(rejectedSale.changed, false);
+assert.equal(rejectedSale.campaign, stackSaleFixture.campaign);
+assert.equal(rejectedSale.goldDelta, 0);
+assert.equal(
+  rejectedSale.campaign.gold,
+  stackSaleFixture.campaign.gold,
+  "dropping an empty or invalid warehouse slot must not change items or gold",
+);
 const stackSalePrice = shopSalePrice(ITEM_DEFS.potion_healing);
 const stackSale = sellWarehouseItem(stackSaleFixture.campaign, 2);
 assert.equal(stackSale.changed, true);
@@ -814,13 +826,18 @@ assert.match(campaignHtml, /불꽃 대장간/, "the hub must expose the blacksmi
 assert.match(campaignHtml, /보유 골드[\s\S]*0/, "the hub must expose saved guild gold");
 assert.match(
   dungeonUiSource,
-  /source\.zone === "warehouse" && target\.zone === "shopSellTarget"[\s\S]*handleShopSell\(source\.index\)/,
-  "dropping a warehouse slot on the shop tab must execute a sale",
+  /source\.zone === "warehouse"[\s\S]*target\.zone === "shopSellTarget"[\s\S]*target\.zone === "shopStock"[\s\S]*target\.zone === "shopBuyback"[\s\S]*handleShopSell\(source\.index\)/,
+  "dropping a warehouse slot anywhere in the right shop area must execute the existing sale transaction",
 );
 assert.match(
   dungeonUiSource,
-  /source\.zone === "shopStock" \|\| source\.zone === "shopBuyback"[\s\S]*target\.zone === "shopWarehouseTarget"[\s\S]*handleShopBuy/,
-  "dragging shop or buyback stock to the warehouse tab must execute a purchase",
+  /source\.zone === "shopStock" \|\| source\.zone === "shopBuyback"[\s\S]*target\.zone === "shopWarehouseTarget" \|\| target\.zone === "warehouse"[\s\S]*handleShopBuy/,
+  "dragging shop or buyback stock into the left warehouse area must preserve purchase behavior",
+);
+assert.match(
+  dungeonUiSource,
+  /commerce-split-layout[\s\S]*CampaignWarehouseInventory[\s\S]*commerce-shop-panel/,
+  "the shop must render the shared warehouse on the left and shop stock on the right",
 );
 assert.match(
   dungeonUiSource,
