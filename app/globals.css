@@ -5804,13 +5804,13 @@ kbd {
   min-height: 0;
   max-height: none;
   flex: 1;
-  grid-auto-rows: auto;
+  grid-auto-rows: 48px;
   overflow-y: auto;
   scrollbar-color: #5b4339 #0a0d0b;
 }
 
 .blacksmith-warehouse-grid > .fixed-item-slot {
-  min-height: 0;
+  min-height: 48px;
 }
 
 .blacksmith-companion-panel .preparation-equipment-roster {
