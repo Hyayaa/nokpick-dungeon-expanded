@@ -401,6 +401,7 @@ type ItemSlotAddress =
   | { zone: "shopWarehouseTarget" }
   | { zone: "shopStock"; listingId: string }
   | { zone: "shopBuyback"; listingId: string }
+  | { zone: "smithyTarget" }
   | { zone: "preparationInventory"; index: number }
   | {
       zone: "preparationCompanionEquipment";
@@ -1115,6 +1116,467 @@ const resolveCompanionLoadoutItem = (
     isAuto: true,
   };
 };
+
+type ResolvedWarehouseItem = {
+  itemRef: string;
+  itemId: string;
+  instance: InventoryInstance | null;
+  quantity: number;
+};
+
+const resolveWarehouseItemRef = (
+  warehouse: WarehouseState,
+  itemRef: string,
+  instancesById = new Map(
+    warehouse.instances.map((instance) => [instance.id, instance]),
+  ),
+): ResolvedWarehouseItem | null => {
+  const inventoryInstance = instancesById.get(itemRef) ?? null;
+  const storedInstance =
+    inventoryInstance ?? warehouse.throwableProfiles[itemRef] ?? null;
+  const itemId =
+    storedInstance?.defId ??
+    ((warehouse.stacks[itemRef] ?? 0) > 0 ? itemRef : null);
+  if (!itemId) return null;
+  const quantity = inventoryInstance
+    ? 1
+    : warehouse.stacks[itemId] ?? 0;
+  const instance =
+    !inventoryInstance && ITEM_DEFS[itemId]?.category === "missile"
+      ? {
+          ...(storedInstance ?? {
+            id: `throwable-${itemId}`,
+            defId: itemId,
+          }),
+          charges: quantity,
+          maxCharges: quantity,
+          baseMaxCharges: quantity,
+        }
+      : storedInstance;
+  return { itemRef, itemId, instance, quantity };
+};
+
+function CampaignWarehouseInventory({
+  warehouse,
+  className,
+  hiddenItemRefs,
+  selectedIndex = null,
+  contextLabel = "창고",
+  emptyTitle = "보관된 아이템이 없습니다.",
+  emptyDescription = "원정을 마치고 전리품을 회수하면 이곳에 표시됩니다.",
+  isItemHighlighted,
+  isItemSelectable,
+  onItemSelect,
+}: {
+  warehouse: WarehouseState;
+  className: string;
+  hiddenItemRefs?: ReadonlySet<string>;
+  selectedIndex?: number | null;
+  contextLabel?: string;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  isItemHighlighted?: (entry: ResolvedWarehouseItem, index: number) => boolean;
+  isItemSelectable?: (entry: ResolvedWarehouseItem, index: number) => boolean;
+  onItemSelect?: (
+    entry: ResolvedWarehouseItem,
+    index: number,
+    anchor: DescriptionAnchor,
+  ) => void;
+}) {
+  const slotDrag = useActiveItemSlotDrag();
+  const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
+  const slots = normalizeStorageSlots(warehouse, WAREHOUSE_SLOT_COUNT);
+  const instancesById = new Map(
+    warehouse.instances.map((instance) => [instance.id, instance]),
+  );
+  const visibleEntries = slots.map((itemRef) =>
+    itemRef && !hiddenItemRefs?.has(itemRef)
+      ? resolveWarehouseItemRef(warehouse, itemRef, instancesById)
+      : null,
+  );
+  const inspectItem = (
+    entry: ResolvedWarehouseItem,
+    anchor: DescriptionAnchor,
+  ) =>
+    setItemPreview({
+      itemId: entry.itemId,
+      itemRef: entry.itemRef,
+      instance: entry.instance,
+      quantity: entry.quantity,
+      contextLabel,
+      anchor,
+    });
+
+  return (
+    <>
+      <div className={`fixed-item-grid ${className}`}>
+        {visibleEntries.map((entry, index) => {
+          const address: ItemSlotAddress = { zone: "warehouse", index };
+          if (!entry) {
+            return (
+              <div
+                className="fixed-item-slot is-empty"
+                key={`warehouse-slot-${index}`}
+                {...(slotDrag?.addressAttributes(address, null) ?? {})}
+              />
+            );
+          }
+          const selectable = Boolean(
+            onItemSelect && (isItemSelectable?.(entry, index) ?? true),
+          );
+          const highlighted = isItemHighlighted?.(entry, index) ?? false;
+          return (
+            <button
+              type="button"
+              className={[
+                "fixed-item-slot",
+                "is-filled",
+                selectedIndex === index ? "is-selected" : "",
+                highlighted ? "is-upgradeable-choice" : "",
+                selectable ? "is-selectable-choice" : "",
+                slotDrag?.heldAddressKey === itemSlotAddressKey(address)
+                  ? "is-drag-source"
+                  : "",
+              ].filter(Boolean).join(" ")}
+              key={`warehouse-slot-${index}`}
+              title={`${ITEM_DEFS[entry.itemId]?.name ?? entry.itemId} ×${entry.quantity}`}
+              onClick={(event) => {
+                const anchor = descriptionAnchorFromElement(event.currentTarget);
+                if (selectable) onItemSelect?.(entry, index, anchor);
+                else inspectItem(entry, anchor);
+              }}
+              onDoubleClick={(event) =>
+                inspectItem(
+                  entry,
+                  descriptionAnchorFromElement(event.currentTarget),
+                )
+              }
+              {...(slotDrag?.addressAttributes(address, {
+                itemRef: entry.itemRef,
+                itemId: entry.itemId,
+                quantity: entry.quantity,
+                grade: entry.instance?.grade,
+                upgradeLevel: entry.instance?.upgradeLevel,
+                charges: entry.instance?.charges,
+                maxCharges: entry.instance?.maxCharges,
+              }) ?? {})}
+            >
+              <ItemSlotContents
+                itemId={entry.itemId}
+                size={40}
+                instance={entry.instance}
+                quantity={entry.quantity}
+                showQuantity={entry.quantity > 1}
+              />
+            </button>
+          );
+        })}
+        {visibleEntries.every((entry) => !entry) && (
+          <div className="warehouse-empty">
+            <span>□</span>
+            <strong>{emptyTitle}</strong>
+            <p>{emptyDescription}</p>
+          </div>
+        )}
+      </div>
+      {itemPreview && (
+        <ItemDetailModal
+          game={null}
+          selected={{
+            itemId: itemPreview.itemId,
+            itemRef: itemPreview.itemRef,
+          }}
+          preview={itemPreview}
+          readOnly
+          onClose={() => setItemPreview(null)}
+        />
+      )}
+    </>
+  );
+}
+
+const campaignEquipmentSlotLabel = (target: LoadoutTarget) =>
+  target.kind === "equipment"
+    ? target.slot === "weapon"
+      ? "무기"
+      : "갑옷"
+    : isPartyQuickslotTarget(target)
+      ? `퀵슬롯 ${target.index - 1}`
+      : `패시브 ${target.index + 1}`;
+
+type ResolvedCompanionEquipment = ReturnType<
+  typeof resolveCompanionLoadoutItem
+>;
+
+function CampaignCompanionEquipmentRoster({
+  companions,
+  placement,
+  selectedCompanionIds = [],
+  controlledCompanionId = null,
+  sharedInventory,
+  selectedItemKey = null,
+  emptyMessage,
+  onCompanionToggle,
+  isCompanionToggleDisabled,
+  itemSelectionKey,
+  isItemHighlighted,
+  onItemSelect,
+}: {
+  companions: Companion[];
+  placement: "party" | "reserve" | "smithy";
+  selectedCompanionIds?: readonly string[];
+  controlledCompanionId?: string | null;
+  sharedInventory?: Pick<Player, "inventory" | "throwableProfiles">;
+  selectedItemKey?: string | null;
+  emptyMessage: string;
+  onCompanionToggle?: (companionId: string) => void;
+  isCompanionToggleDisabled?: (companion: Companion) => boolean;
+  itemSelectionKey?: (
+    companion: Companion,
+    target: LoadoutTarget,
+    entry: ResolvedCompanionEquipment,
+  ) => string | null;
+  isItemHighlighted?: (
+    companion: Companion,
+    target: LoadoutTarget,
+    entry: ResolvedCompanionEquipment,
+  ) => boolean;
+  onItemSelect?: (
+    companion: Companion,
+    target: LoadoutTarget,
+    entry: ResolvedCompanionEquipment,
+  ) => void;
+}) {
+  const slotDrag = useActiveItemSlotDrag();
+  const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
+  const [companionPreview, setCompanionPreview] = useState<{
+    companion: Companion;
+    anchor: DescriptionAnchor;
+  } | null>(null);
+  const inspectItem = (
+    companion: Companion,
+    entry: ResolvedCompanionEquipment,
+    anchor: DescriptionAnchor,
+  ) => {
+    if (!entry.itemId) return;
+    setItemPreview({
+      itemId: entry.itemId,
+      itemRef: entry.instance?.id ?? entry.itemId,
+      instance: entry.instance,
+      quantity: entry.quantity,
+      contextLabel: `${companion.name} 장착 장비`,
+      anchor,
+    });
+  };
+
+  return (
+    <>
+      <div
+        className={`preparation-equipment-roster ${
+          placement === "party"
+            ? "is-active-party"
+            : placement === "reserve"
+              ? "is-reserve-roster"
+              : "is-smithy-roster"
+        }`}
+      >
+        {companions.map((companion) => {
+          const definition = COMPANION_PRESENTATIONS[companion.classId];
+          const profession = COMPANION_PROFESSIONS[companion.professionId];
+          const selected = selectedCompanionIds.includes(companion.id);
+          const isControlled = controlledCompanionId === companion.id;
+          const portraitFrame = definition.animationSet === "companion"
+            ? companionFrameIndex(
+                companionArmorTier(companion),
+                COMPANION_IDLE_FRAMES[0],
+              )
+            : PLAYER_IDLE_FRAMES[0];
+          return (
+            <article
+              className={[
+                "preparation-owner-card",
+                selected ? "is-selected" : "",
+                placement === "reserve" ? "is-reserve" : "",
+                placement === "smithy" ? "is-smithy" : "",
+              ].filter(Boolean).join(" ")}
+              key={`${placement}-${companion.id}`}
+            >
+              <header>
+                <button
+                  type="button"
+                  className="prep-companion-portrait-button"
+                  onClick={(event) =>
+                    setCompanionPreview({
+                      companion,
+                      anchor: descriptionAnchorFromElement(event.currentTarget),
+                    })
+                  }
+                  aria-label={`${companion.name} 정보 보기`}
+                >
+                  <PixelSpriteFrame
+                    file={definition.sprite}
+                    sheetWidth={definition.sheetWidth}
+                    frameWidth={definition.frameWidth}
+                    frameHeight={definition.frameHeight}
+                    frame={portraitFrame}
+                    size={48}
+                  />
+                </button>
+                <div>
+                  <small>{isControlled ? "조작 캐릭터 · " : ""}{profession.nameKo}</small>
+                  <strong>{companion.name}</strong>
+                  <em>LV.{companion.level} · EXP {companion.xp}/{companion.nextXp || "MAX"}</em>
+                </div>
+                {onCompanionToggle && (
+                  <button
+                    type="button"
+                    onClick={() => onCompanionToggle(companion.id)}
+                    disabled={isCompanionToggleDisabled?.(companion) ?? false}
+                  >
+                    {selected ? "동행 해제" : "동행 선택"}
+                  </button>
+                )}
+              </header>
+              <div className="preparation-owner-slots">
+                {PARTY_LOADOUT_TARGETS.map((target) => {
+                  const entry = resolveCompanionLoadoutItem(
+                    companion,
+                    target,
+                    sharedInventory,
+                  );
+                  const itemId = entry.itemId;
+                  const itemRef = itemId ? entry.instance?.id ?? itemId : null;
+                  const address: ItemSlotAddress = {
+                    zone: "preparationCompanionEquipment",
+                    companionId: companion.id,
+                    target,
+                  };
+                  const selectionKey = itemSelectionKey?.(
+                    companion,
+                    target,
+                    entry,
+                  ) ?? null;
+                  const highlighted = isItemHighlighted?.(
+                    companion,
+                    target,
+                    entry,
+                  ) ?? false;
+                  return (
+                    <label
+                      className={
+                        isPartyQuickslotTarget(target)
+                          ? "is-quickslot"
+                          : "is-gear"
+                      }
+                      key={
+                        target.kind === "equipment"
+                          ? target.slot
+                          : `flex-${target.index}`
+                      }
+                    >
+                      <span>{campaignEquipmentSlotLabel(target)}</span>
+                      <button
+                        type="button"
+                        className={[
+                          "fixed-item-slot",
+                          "preparation-equipment-slot",
+                          itemId ? "is-filled" : "is-empty",
+                          highlighted ? "is-upgradeable-choice" : "",
+                          selectionKey && selectionKey === selectedItemKey
+                            ? "is-selected"
+                            : "",
+                          slotDrag?.heldAddressKey === itemSlotAddressKey(address)
+                            ? "is-drag-source"
+                            : "",
+                        ].filter(Boolean).join(" ")}
+                        title={itemId ? ITEM_DEFS[itemId]?.name : "빈 장비칸"}
+                        onClick={(event) => {
+                          if (!itemId || !itemRef) return;
+                          if (selectionKey && onItemSelect) {
+                            onItemSelect(companion, target, entry);
+                          } else {
+                            inspectItem(
+                              companion,
+                              entry,
+                              descriptionAnchorFromElement(event.currentTarget),
+                            );
+                          }
+                        }}
+                        onDoubleClick={(event) =>
+                          inspectItem(
+                            companion,
+                            entry,
+                            descriptionAnchorFromElement(event.currentTarget),
+                          )
+                        }
+                        {...(slotDrag?.addressAttributes(
+                          address,
+                          itemId && itemRef
+                            ? {
+                                itemRef,
+                                itemId,
+                                quantity: entry.quantity,
+                                grade: entry.instance?.grade,
+                                upgradeLevel: entry.instance?.upgradeLevel,
+                                charges: entry.instance?.charges,
+                                maxCharges: entry.instance?.maxCharges,
+                              }
+                            : null,
+                        ) ?? {})}
+                      >
+                        {itemId ? (
+                          <ItemSlotContents
+                            itemId={itemId}
+                            size={36}
+                            instance={entry.instance}
+                            quantity={entry.quantity}
+                            showQuantity={entry.isAuto}
+                          />
+                        ) : (
+                          <span className="empty-slot-glyph">+</span>
+                        )}
+                      </button>
+                    </label>
+                  );
+                })}
+              </div>
+            </article>
+          );
+        })}
+        {companions.length === 0 && (
+          <div
+            className={
+              placement === "reserve"
+                ? "preparation-reserve-empty"
+                : "preparation-party-empty"
+            }
+          >
+            {emptyMessage}
+          </div>
+        )}
+      </div>
+      {itemPreview && (
+        <ItemDetailModal
+          game={null}
+          selected={{
+            itemId: itemPreview.itemId,
+            itemRef: itemPreview.itemRef,
+          }}
+          preview={itemPreview}
+          readOnly
+          onClose={() => setItemPreview(null)}
+        />
+      )}
+      {companionPreview && (
+        <CompanionInspector
+          companion={companionPreview.companion}
+          anchor={companionPreview.anchor}
+          onClose={() => setCompanionPreview(null)}
+        />
+      )}
+    </>
+  );
+}
 
 function CompanionPanel({
   game,
@@ -4749,43 +5211,32 @@ function HubScreen({
   );
 }
 
-type CommerceTab = "warehouse" | "shop";
-
 function CommerceModal({
   campaign,
-  tab,
   notice,
-  onTabChange,
   onSell,
   onBuy,
   onClose,
 }: {
   campaign: CampaignSave;
-  tab: CommerceTab;
   notice: string | null;
-  onTabChange: (tab: CommerceTab) => void;
   onSell: (slotIndex: number) => boolean;
   onBuy: (source: ShopListingSource, listingId: string) => boolean;
   onClose: () => void;
 }) {
   const slotDrag = useActiveItemSlotDrag();
   const [selectedWarehouseIndex, setSelectedWarehouseIndex] = useState<number | null>(null);
+  const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
   const warehouse = campaign.warehouse;
   const stackEntries = Object.entries(warehouse.stacks)
     .filter(([, quantity]) => quantity > 0)
     .sort(([a], [b]) => (ITEM_DEFS[a]?.name ?? a).localeCompare(ITEM_DEFS[b]?.name ?? b));
   const slots = normalizeStorageSlots(warehouse, WAREHOUSE_SLOT_COUNT);
-  const instancesById = new Map(
-    warehouse.instances.map((instance) => [instance.id, instance]),
-  );
   const selectedRef = selectedWarehouseIndex === null
     ? null
     : slots[selectedWarehouseIndex] ?? null;
-  const selectedInstance = selectedRef
-    ? instancesById.get(selectedRef) ?? warehouse.throwableProfiles[selectedRef] ?? null
-    : null;
-  const selectedItemId = selectedRef
-    ? selectedInstance?.defId ?? (warehouse.stacks[selectedRef] > 0 ? selectedRef : null)
+  const selectedEntry = selectedRef
+    ? resolveWarehouseItemRef(warehouse, selectedRef)
     : null;
   const listingSections = [
     {
@@ -4814,177 +5265,126 @@ function CommerceModal({
           <div className="commerce-wallet"><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></div>
           <button type="button" onClick={onClose} aria-label="상점과 창고 닫기">×</button>
         </header>
-        <nav className="commerce-tabs" aria-label="창고와 상점" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "warehouse"}
-            className={tab === "warehouse" ? "is-active" : ""}
-            onClick={() => onTabChange("warehouse")}
+        {notice && <p className="commerce-notice" role="status">{notice}</p>}
+        <div className="commerce-split-layout">
+          <section
+            className="commerce-warehouse-panel commerce-column"
+            aria-labelledby="commerce-warehouse-title"
             {...(slotDrag?.addressAttributes({ zone: "shopWarehouseTarget" }, null) ?? {})}
           >
-            창고 <b>{warehouseItemCount(warehouse)}</b>
-            <small>상점 물품을 여기에 놓아 구매</small>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "shop"}
-            className={tab === "shop" ? "is-active" : ""}
-            onClick={() => onTabChange("shop")}
+            <header className="commerce-column-header">
+              <div><p className="eyebrow">WAREHOUSE</p><h3 id="commerce-warehouse-title">창고</h3></div>
+              <span>{warehouseItemCount(warehouse)}개</span>
+            </header>
+            <div className="warehouse-summary">
+              <span>총 보관 수량 <b>{warehouseItemCount(warehouse)}</b></span>
+              <span>종류 <b>{stackEntries.length + warehouse.instances.length}</b></span>
+              <em>상점 상품을 이 영역으로 옮기거나 구매 버튼을 누르세요.</em>
+            </div>
+            <CampaignWarehouseInventory
+              warehouse={warehouse}
+              className="warehouse-fixed-grid"
+              selectedIndex={selectedWarehouseIndex}
+              contextLabel="상점 왼쪽 창고"
+              onItemSelect={(_entry, index) => setSelectedWarehouseIndex(index)}
+            />
+            {selectedEntry && selectedWarehouseIndex !== null && (
+              <aside className="commerce-selection-bar">
+                <div>
+                  <small>{selectedEntry.instance ? "고유 장비 1개" : "스택 1개"}</small>
+                  <strong>{ITEM_DEFS[selectedEntry.itemId]?.name}</strong>
+                </div>
+                <b>{formatGold(shopSalePrice(ITEM_DEFS[selectedEntry.itemId], selectedEntry.instance))} G</b>
+                <button type="button" onClick={() => onSell(selectedWarehouseIndex)}>
+                  {selectedEntry.instance ? "장비 판매" : "1개 판매"}
+                </button>
+              </aside>
+            )}
+          </section>
+          <section
+            className="commerce-shop-panel commerce-column"
+            aria-labelledby="commerce-shop-title"
             {...(slotDrag?.addressAttributes({ zone: "shopSellTarget" }, null) ?? {})}
           >
-            상점 <b>{campaign.shop.stock.length + campaign.shop.buyback.length}</b>
-            <small>창고 물품을 여기에 놓아 판매</small>
-          </button>
-        </nav>
-        {notice && <p className="commerce-notice" role="status">{notice}</p>}
-        {tab === "warehouse" ? <div className="commerce-warehouse-panel" role="tabpanel">
-        <div className="warehouse-summary">
-          <span>총 보관 수량 <b>{warehouseItemCount(warehouse)}</b></span>
-          <span>종류 <b>{stackEntries.length + warehouse.instances.length}</b></span>
-        </div>
-        <div className="fixed-item-grid warehouse-fixed-grid">
-          {slots.map((itemRef, index) => {
-            const address: ItemSlotAddress = { zone: "warehouse", index };
-            const inventoryInstance = itemRef
-              ? instancesById.get(itemRef) ?? null
-              : null;
-            const storedInstance = itemRef
-              ? inventoryInstance ?? warehouse.throwableProfiles[itemRef] ?? null
-              : null;
-            const itemId = itemRef
-              ? storedInstance?.defId ??
-                (warehouse.stacks[itemRef] > 0 ? itemRef : null)
-              : null;
-            const quantity = itemId
-              ? inventoryInstance ? 1 : warehouse.stacks[itemId] ?? 0
-              : 0;
-            const instance =
-              itemId && !inventoryInstance &&
-              ITEM_DEFS[itemId]?.category === "missile"
-                ? {
-                    ...(storedInstance ?? {
-                      id: `throwable-${itemId}`,
-                      defId: itemId,
-                    }),
-                    charges: quantity,
-                    maxCharges: quantity,
-                    baseMaxCharges: quantity,
-                  }
-                : storedInstance;
-            return itemId ? (
-              <button
-                type="button"
-                className={[
-                  "fixed-item-slot",
-                  "is-filled",
-                  selectedWarehouseIndex === index ? "is-selected" : "",
-                  slotDrag?.heldAddressKey === itemSlotAddressKey(address)
-                    ? "is-drag-source"
-                    : "",
-                ].filter(Boolean).join(" ")}
-                key={`warehouse-slot-${index}`}
-                title={`${ITEM_DEFS[itemId]?.name ?? itemId} ×${quantity}`}
-                onClick={() => setSelectedWarehouseIndex(index)}
-                {...(slotDrag?.addressAttributes(address, {
-                  itemRef: itemRef!,
-                  itemId,
-                  quantity,
-                  grade: instance?.grade,
-                  upgradeLevel: instance?.upgradeLevel,
-                  charges: instance?.charges,
-                  maxCharges: instance?.maxCharges,
-                }) ?? {})}
-              >
-                <ItemSlotContents
-                  itemId={itemId}
-                  size={40}
-                  instance={instance}
-                  quantity={quantity}
-                  showQuantity={quantity > 1}
-                />
-              </button>
-            ) : (
-              <div
-                className="fixed-item-slot is-empty"
-                key={`warehouse-slot-${index}`}
-                {...(slotDrag?.addressAttributes(address, null) ?? {})}
-              />
-            );
-          })}
-          {stackEntries.length === 0 && warehouse.instances.length === 0 && (
-            <div className="warehouse-empty"><span>□</span><strong>보관된 아이템이 없습니다.</strong><p>원정을 마치고 전리품을 회수하면 이곳에 표시됩니다.</p></div>
-          )}
-        </div>
-        {selectedItemId && selectedWarehouseIndex !== null && (
-          <aside className="commerce-selection-bar">
-            <div>
-              <small>{selectedInstance ? "고유 장비 1개" : "스택 1개"}</small>
-              <strong>{ITEM_DEFS[selectedItemId]?.name}</strong>
+            <header className="commerce-column-header">
+              <div><p className="eyebrow">MARKET</p><h3 id="commerce-shop-title">상점</h3></div>
+              <span>{campaign.shop.stock.length + campaign.shop.buyback.length}종</span>
+            </header>
+            <p className="shop-refresh-note">창고 아이템을 이 영역에 놓으면 판매됩니다. 상점과 되사기 목록은 던전 귀환 때 갱신되며, 되사기 가격은 판매 당시 받은 금액과 같습니다.</p>
+            <div className="commerce-shop-scroll">
+              {listingSections.map((section) => (
+                <section className="shop-listing-section" key={section.source}>
+                  <header>
+                    <div><p className="eyebrow">{section.eyebrow}</p><h3>{section.title}</h3></div>
+                    <span>{section.listings.length}종</span>
+                  </header>
+                  <div className="shop-listing-grid">
+                    {section.listings.map((listing) => {
+                      const address: ItemSlotAddress = section.source === "stock"
+                        ? { zone: "shopStock", listingId: listing.id }
+                        : { zone: "shopBuyback", listingId: listing.id };
+                      const affordable = campaign.gold >= listing.unitPrice;
+                      return (
+                        <article className="shop-listing-card" key={listing.id}>
+                          <button
+                            type="button"
+                            className={[
+                              "fixed-item-slot",
+                              "is-filled",
+                              slotDrag?.heldAddressKey === itemSlotAddressKey(address) ? "is-drag-source" : "",
+                            ].filter(Boolean).join(" ")}
+                            title="클릭하면 설명을 보고, 길게 눌러 왼쪽 창고로 옮기면 구매합니다."
+                            aria-label={`${ITEM_DEFS[listing.itemId]?.name ?? listing.itemId} 설명 및 구매품 끌기`}
+                            onClick={(event) => setItemPreview({
+                              itemId: listing.itemId,
+                              itemRef: listing.instance?.id ?? listing.id,
+                              instance: listing.instance,
+                              quantity: listing.quantity,
+                              contextLabel: section.title,
+                              anchor: descriptionAnchorFromElement(event.currentTarget),
+                            })}
+                            {...(slotDrag?.addressAttributes(address, {
+                              itemRef: listing.instance?.id ?? listing.id,
+                              itemId: listing.itemId,
+                              quantity: listing.quantity,
+                              grade: listing.instance?.grade,
+                              upgradeLevel: listing.instance?.upgradeLevel,
+                              charges: listing.instance?.charges,
+                              maxCharges: listing.instance?.maxCharges,
+                            }) ?? {})}
+                          >
+                            <ItemSlotContents itemId={listing.itemId} size={40} instance={listing.instance} quantity={listing.quantity} showQuantity={listing.quantity > 1} />
+                          </button>
+                          <div>
+                            <small>{section.source === "buyback" ? "판매가 그대로" : ITEM_CATEGORY_NAMES[ITEM_DEFS[listing.itemId].category]}</small>
+                            <strong>{ITEM_DEFS[listing.itemId]?.name}</strong>
+                            <span>{listing.instance ? "고유 장비" : `재고 ${listing.quantity}개`}</span>
+                          </div>
+                          <b>{formatGold(listing.unitPrice)} G</b>
+                          <button type="button" disabled={!affordable} onClick={() => onBuy(section.source, listing.id)}>
+                            {affordable ? "구매" : "골드 부족"}
+                          </button>
+                        </article>
+                      );
+                    })}
+                    {section.listings.length === 0 && <p className="shop-empty">{section.empty}</p>}
+                  </div>
+                </section>
+              ))}
             </div>
-            <b>{formatGold(shopSalePrice(ITEM_DEFS[selectedItemId], selectedInstance))} G</b>
-            <button type="button" onClick={() => onSell(selectedWarehouseIndex)}>
-              {selectedInstance ? "장비 판매" : "1개 판매"}
-            </button>
-          </aside>
-        )}
-        </div> : <div className="commerce-shop-panel" role="tabpanel">
-          <p className="shop-refresh-note">상점 목록과 되사기 목록은 던전에서 귀환할 때 함께 갱신됩니다. 되사기는 판매 당시 받은 금액과 정확히 같은 가격입니다.</p>
-          {listingSections.map((section) => (
-            <section className="shop-listing-section" key={section.source}>
-              <header>
-                <div><p className="eyebrow">{section.eyebrow}</p><h3>{section.title}</h3></div>
-                <span>{section.listings.length}종</span>
-              </header>
-              <div className="shop-listing-grid">
-                {section.listings.map((listing) => {
-                  const address: ItemSlotAddress = section.source === "stock"
-                    ? { zone: "shopStock", listingId: listing.id }
-                    : { zone: "shopBuyback", listingId: listing.id };
-                  const affordable = campaign.gold >= listing.unitPrice;
-                  return (
-                    <article className="shop-listing-card" key={listing.id}>
-                      <button
-                        type="button"
-                        className={[
-                          "fixed-item-slot",
-                          "is-filled",
-                          slotDrag?.heldAddressKey === itemSlotAddressKey(address) ? "is-drag-source" : "",
-                        ].filter(Boolean).join(" ")}
-                        title="길게 눌러 창고 탭에 놓으면 구매합니다."
-                        aria-label={`${ITEM_DEFS[listing.itemId]?.name ?? listing.itemId} 구매품 끌기`}
-                        {...(slotDrag?.addressAttributes(address, {
-                          itemRef: listing.instance?.id ?? listing.id,
-                          itemId: listing.itemId,
-                          quantity: listing.quantity,
-                          grade: listing.instance?.grade,
-                          upgradeLevel: listing.instance?.upgradeLevel,
-                          charges: listing.instance?.charges,
-                          maxCharges: listing.instance?.maxCharges,
-                        }) ?? {})}
-                      >
-                        <ItemSlotContents itemId={listing.itemId} size={40} instance={listing.instance} quantity={listing.quantity} showQuantity={listing.quantity > 1} />
-                      </button>
-                      <div>
-                        <small>{section.source === "buyback" ? "판매가 그대로" : ITEM_CATEGORY_NAMES[ITEM_DEFS[listing.itemId].category]}</small>
-                        <strong>{ITEM_DEFS[listing.itemId]?.name}</strong>
-                        <span>{listing.instance ? "고유 장비" : `재고 ${listing.quantity}개`}</span>
-                      </div>
-                      <b>{formatGold(listing.unitPrice)} G</b>
-                      <button type="button" disabled={!affordable} onClick={() => onBuy(section.source, listing.id)}>
-                        {affordable ? "구매" : "골드 부족"}
-                      </button>
-                    </article>
-                  );
-                })}
-                {section.listings.length === 0 && <p className="shop-empty">{section.empty}</p>}
-              </div>
-            </section>
-          ))}
-        </div>}
+          </section>
+        </div>
         <footer><button type="button" onClick={onClose}>닫기</button></footer>
       </section>
+      {itemPreview && (
+        <ItemDetailModal
+          game={null}
+          selected={{ itemId: itemPreview.itemId, itemRef: itemPreview.itemRef }}
+          preview={itemPreview}
+          readOnly
+          onClose={() => setItemPreview(null)}
+        />
+      )}
     </div>
   );
 }
@@ -5002,19 +5402,52 @@ function BlacksmithModal({
   onUpgrade: (target: SmithyTarget) => void;
   onClose: () => void;
 }) {
+  const slotDrag = useActiveItemSlotDrag();
   const candidates = listSmithyCandidates(campaign);
+  const upgradeableCandidates = candidates.filter((candidate) => {
+    const grade = resolveItemGrade(
+      ITEM_DEFS[candidate.itemId],
+      candidate.instance,
+    );
+    return smithyNextGrade(grade) !== null;
+  });
   const [selectedKey, setSelectedKey] = useState<string | null>(
-    candidates[0] ? smithyTargetKey(candidates[0].target) : null,
+    upgradeableCandidates[0]
+      ? smithyTargetKey(upgradeableCandidates[0].target)
+      : null,
   );
   const selected = candidates.find(
     (candidate) => smithyTargetKey(candidate.target) === selectedKey,
-  ) ?? candidates[0] ?? null;
+  ) ?? upgradeableCandidates[0] ?? null;
   const currentGrade = selected
     ? resolveItemGrade(ITEM_DEFS[selected.itemId], selected.instance)
     : null;
   const nextGrade = currentGrade ? smithyNextGrade(currentGrade) : null;
   const cost = currentGrade ? smithyUpgradeCost(currentGrade) : null;
   const canAfford = cost !== null && campaign.gold >= cost;
+  const candidateForInstance = (instance: InventoryInstance | null) =>
+    instance
+      ? candidates.find((candidate) => candidate.instance.id === instance.id) ?? null
+      : null;
+  const upgradeableCandidateForInstance = (
+    instance: InventoryInstance | null,
+  ) => {
+    const candidate = candidateForInstance(instance);
+    if (!candidate) return null;
+    const grade = resolveItemGrade(
+      ITEM_DEFS[candidate.itemId],
+      candidate.instance,
+    );
+    return smithyNextGrade(grade) ? candidate : null;
+  };
+  const selectedWarehouseIndex = selected?.target.kind === "warehouse"
+    ? normalizeStorageSlots(campaign.warehouse, WAREHOUSE_SLOT_COUNT).indexOf(
+        selected.target.instanceId,
+      )
+    : null;
+  const selectedTargetKey = selected
+    ? smithyTargetKey(selected.target)
+    : null;
 
   return (
     <div className="modal-backdrop blacksmith-backdrop">
@@ -5027,30 +5460,63 @@ function BlacksmithModal({
         <p className="blacksmith-lead">골드를 지불해 장비의 기본 등급을 한 단계 올립니다. 강화 수치와 추가 인챈트는 유지되며, 첫 고유 인챈트는 장비 등급과 함께 상승합니다.</p>
         {notice && <p className="commerce-notice" role="status">{notice}</p>}
         <div className="blacksmith-layout">
-          <div className="blacksmith-item-list" aria-label="강화할 장비 목록">
-            {candidates.map((candidate) => {
-              const key = smithyTargetKey(candidate.target);
-              const grade = resolveItemGrade(ITEM_DEFS[candidate.itemId], candidate.instance);
-              return (
-                <button
-                  type="button"
-                  className={key === smithyTargetKey(selected?.target ?? candidate.target) ? "is-selected" : ""}
-                  onClick={() => setSelectedKey(key)}
-                  key={key}
-                >
-                  <span className="blacksmith-item-icon"><ItemSlotContents itemId={candidate.itemId} size={38} instance={candidate.instance} quantity={1} /></span>
-                  <span><small>{candidate.ownerLabel}</small><strong>{ITEM_DEFS[candidate.itemId]?.name}</strong></span>
-                  <b data-item-grade={grade}>{grade}</b>
-                </button>
-              );
-            })}
-            {candidates.length === 0 && <p className="blacksmith-empty">강화할 수 있는 장비가 없습니다.</p>}
+          <div className="blacksmith-source-panels">
+            <section className="blacksmith-source-panel" aria-labelledby="blacksmith-warehouse-title">
+              <header className="commerce-column-header">
+                <div><p className="eyebrow">WAREHOUSE</p><h3 id="blacksmith-warehouse-title">창고</h3></div>
+                <span>{warehouseItemCount(campaign.warehouse)}개</span>
+              </header>
+              <p>모든 보유 아이템을 표시합니다. 빛나는 장비만 강화 대상으로 선택할 수 있습니다.</p>
+              <CampaignWarehouseInventory
+                warehouse={campaign.warehouse}
+                className="blacksmith-warehouse-grid"
+                selectedIndex={selectedWarehouseIndex}
+                contextLabel="대장간 창고"
+                isItemHighlighted={(entry) =>
+                  Boolean(upgradeableCandidateForInstance(entry.instance))
+                }
+                isItemSelectable={(entry) =>
+                  Boolean(upgradeableCandidateForInstance(entry.instance))
+                }
+                onItemSelect={(entry) => {
+                  const candidate = upgradeableCandidateForInstance(entry.instance);
+                  if (candidate) setSelectedKey(smithyTargetKey(candidate.target));
+                }}
+              />
+            </section>
+            <section className="blacksmith-source-panel blacksmith-companion-panel" aria-labelledby="blacksmith-companion-title">
+              <header className="commerce-column-header">
+                <div><p className="eyebrow">COMPANIONS</p><h3 id="blacksmith-companion-title">동료 장비</h3></div>
+                <span>{campaign.companions.length}명</span>
+              </header>
+              <p>모든 동료와 현재 장착 중인 장비를 표시합니다.</p>
+              <CampaignCompanionEquipmentRoster
+                companions={campaign.companions}
+                placement="smithy"
+                selectedItemKey={selectedTargetKey}
+                emptyMessage="등록된 동료가 없습니다."
+                itemSelectionKey={(_companion, _target, entry) => {
+                  const candidate = upgradeableCandidateForInstance(entry.instance);
+                  return candidate ? smithyTargetKey(candidate.target) : null;
+                }}
+                isItemHighlighted={(_companion, _target, entry) =>
+                  Boolean(upgradeableCandidateForInstance(entry.instance))
+                }
+                onItemSelect={(_companion, _target, entry) => {
+                  const candidate = upgradeableCandidateForInstance(entry.instance);
+                  if (candidate) setSelectedKey(smithyTargetKey(candidate.target));
+                }}
+              />
+            </section>
           </div>
           <aside className="blacksmith-workbench">
             {selected && currentGrade ? (
               <>
                 <div className="blacksmith-selected-item">
-                  <span className="blacksmith-item-icon is-large"><ItemSlotContents itemId={selected.itemId} size={52} instance={selected.instance} quantity={1} /></span>
+                  <span
+                    className="blacksmith-item-icon is-large blacksmith-target-slot"
+                    {...(slotDrag?.addressAttributes({ zone: "smithyTarget" }, null) ?? {})}
+                  ><ItemSlotContents itemId={selected.itemId} size={52} instance={selected.instance} quantity={1} /></span>
                   <div><small>{selected.ownerLabel}</small><h3>{ITEM_DEFS[selected.itemId]?.name}</h3><span>{ITEM_CATEGORY_NAMES[ITEM_DEFS[selected.itemId].category]}</span></div>
                 </div>
                 <div className="blacksmith-grade-step">
@@ -5073,7 +5539,13 @@ function BlacksmithModal({
                 )}
               </>
             ) : (
-              <p className="blacksmith-empty">왼쪽에서 장비를 선택하세요.</p>
+              <div
+                className="blacksmith-empty blacksmith-empty-target"
+                {...(slotDrag?.addressAttributes({ zone: "smithyTarget" }, null) ?? {})}
+              >
+                <span className="blacksmith-item-icon is-large"><i aria-hidden="true">+</i></span>
+                <p>왼쪽의 빛나는 장비를 선택하거나 이 칸에 놓으세요.</p>
+              </div>
             )}
           </aside>
         </div>
@@ -5104,26 +5576,15 @@ function PreparationScreen({
 }) {
   const slotDrag = useActiveItemSlotDrag();
   const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
-  const [companionPreview, setCompanionPreview] = useState<{
-    companion: Companion;
-    anchor: DescriptionAnchor;
-  } | null>(null);
   const occupiedBagSlots = selectedLoadoutSlotCount(loadout);
   const selectedRefs = new Set([
     ...Object.keys(loadout.stacks).filter((itemId) => loadout.stacks[itemId] > 0),
     ...loadout.instanceIds,
   ]);
-  const warehouseSlots = normalizeStorageSlots(
-    campaign.warehouse,
-    WAREHOUSE_SLOT_COUNT,
-  );
   const bagSlots = normalizeFixedSlots(
     loadout.slotRefs,
     [...selectedRefs],
     MAX_INVENTORY_SLOTS,
-  );
-  const instancesById = new Map(
-    campaign.warehouse.instances.map((instance) => [instance.id, instance]),
   );
   const preparationSharedInventory = {
     inventory: loadout.stacks,
@@ -5148,37 +5609,8 @@ function PreparationScreen({
       }),
     ),
   };
-  const resolveStoredItem = (itemRef: string) => {
-    const inventoryInstance = instancesById.get(itemRef) ?? null;
-    const storedInstance =
-      inventoryInstance ??
-      campaign.warehouse.throwableProfiles[itemRef] ??
-      null;
-    const itemId = storedInstance?.defId ??
-      (campaign.warehouse.stacks[itemRef] > 0 ? itemRef : null);
-    if (!itemId) return null;
-    const quantity = inventoryInstance
-      ? 1
-      : campaign.warehouse.stacks[itemId] ?? 0;
-    const instance =
-      !inventoryInstance && ITEM_DEFS[itemId]?.category === "missile"
-        ? {
-            ...(storedInstance ?? {
-              id: `throwable-${itemId}`,
-              defId: itemId,
-            }),
-            charges: quantity,
-            maxCharges: quantity,
-            baseMaxCharges: quantity,
-          }
-        : storedInstance;
-    return {
-      itemRef,
-      itemId,
-      instance,
-      quantity,
-    };
-  };
+  const resolveStoredItem = (itemRef: string) =>
+    resolveWarehouseItemRef(campaign.warehouse, itemRef);
   const renderStoredSlot = (
     address: ItemSlotAddress,
     itemRef: string | null,
@@ -5236,71 +5668,6 @@ function PreparationScreen({
       </button>
     );
   };
-  const equipmentTargets = PARTY_LOADOUT_TARGETS;
-  const equipmentSlotLabel = (target: LoadoutTarget) =>
-    target.kind === "equipment"
-      ? target.slot === "weapon" ? "무기" : "갑옷"
-      : isPartyQuickslotTarget(target)
-        ? `퀵슬롯 ${target.index - 1}`
-        : `패시브 ${target.index + 1}`;
-  const renderEquipmentSlot = (
-    address: ItemSlotAddress,
-    entry: ReturnType<typeof resolvePlayerLoadoutItem> | ReturnType<typeof resolveCompanionLoadoutItem>,
-    key: string,
-  ) => {
-    const itemId = entry.itemId;
-    const itemRef = itemId ? entry.instance?.id ?? itemId : null;
-    return (
-      <button
-        type="button"
-        className={[
-          "fixed-item-slot",
-          "preparation-equipment-slot",
-          itemId ? "is-filled" : "is-empty",
-          slotDrag?.heldAddressKey === itemSlotAddressKey(address)
-            ? "is-drag-source"
-            : "",
-        ].filter(Boolean).join(" ")}
-        key={key}
-        title={itemId ? ITEM_DEFS[itemId]?.name : "빈 장비칸"}
-        onClick={(event) => {
-          if (!itemId || !itemRef) return;
-          setItemPreview({
-            itemId,
-            itemRef,
-            instance: entry.instance,
-            quantity: entry.quantity,
-            contextLabel:
-              "동료 장비",
-            anchor: descriptionAnchorFromElement(event.currentTarget),
-          });
-        }}
-        {...(slotDrag?.addressAttributes(
-          address,
-          itemId && itemRef
-            ? {
-                itemRef,
-                itemId,
-                quantity: entry.quantity,
-                upgradeLevel: entry.instance?.upgradeLevel,
-                charges: entry.instance?.charges,
-                maxCharges: entry.instance?.maxCharges,
-              }
-            : null,
-        ) ?? {})}
-      >
-        {itemId ? (
-          <ItemSlotContents
-            itemId={itemId}
-            size={36}
-            instance={entry.instance}
-            quantity={entry.quantity}
-            showQuantity={entry.isAuto}
-          />
-        ) : <span className="empty-slot-glyph">+</span>}
-      </button>
-    );
-  };
   const selectedCompanions = selectedCompanionIds.flatMap((companionId) => {
     const companion = campaign.companions.find(
       (candidate) => candidate.id === companionId,
@@ -5310,96 +5677,6 @@ function PreparationScreen({
   const reserveCompanions = campaign.companions.filter(
     (companion) => !selectedCompanionIds.includes(companion.id),
   );
-  const renderCompanionCard = (
-    companion: Companion,
-    placement: "party" | "reserve",
-  ) => {
-    const definition = COMPANION_PRESENTATIONS[companion.classId];
-    const profession = COMPANION_PROFESSIONS[companion.professionId];
-    const selected = selectedCompanionIds.includes(companion.id);
-    const disabled = !selected && selectedCompanionIds.length >= 3;
-    const isControlled = placement === "party" && selectedCompanionIds[0] === companion.id;
-    const portraitFrame = definition.animationSet === "companion"
-      ? companionFrameIndex(
-          companionArmorTier(companion),
-          COMPANION_IDLE_FRAMES[0],
-        )
-      : PLAYER_IDLE_FRAMES[0];
-    return (
-      <article
-        className={[
-          "preparation-owner-card",
-          selected ? "is-selected" : "",
-          placement === "reserve" ? "is-reserve" : "",
-        ].filter(Boolean).join(" ")}
-        key={`${placement}-${companion.id}`}
-      >
-        <header>
-          <button
-            type="button"
-            className="prep-companion-portrait-button"
-            onClick={(event) =>
-              setCompanionPreview({
-                companion,
-                anchor: descriptionAnchorFromElement(event.currentTarget),
-              })
-            }
-            aria-label={`${companion.name} 정보 보기`}
-          >
-            <PixelSpriteFrame
-              file={definition.sprite}
-              sheetWidth={definition.sheetWidth}
-              frameWidth={definition.frameWidth}
-              frameHeight={definition.frameHeight}
-              frame={portraitFrame}
-              size={48}
-            />
-          </button>
-          <div>
-            <small>{isControlled ? "조작 캐릭터 · " : ""}{profession.nameKo}</small>
-            <strong>{companion.name}</strong>
-            <em>LV.{companion.level} · EXP {companion.xp}/{companion.nextXp || "MAX"}</em>
-          </div>
-          <button
-            type="button"
-            onClick={() => onCompanionToggle(companion.id)}
-            disabled={disabled}
-          >
-            {selected ? "동행 해제" : "동행 선택"}
-          </button>
-        </header>
-        <div className="preparation-owner-slots">
-          {equipmentTargets.map((target) => (
-            <label
-              className={isPartyQuickslotTarget(target) ? "is-quickslot" : "is-gear"}
-              key={
-                target.kind === "equipment"
-                  ? target.slot
-                  : `flex-${target.index}`
-              }
-            >
-              <span>{equipmentSlotLabel(target)}</span>
-              {renderEquipmentSlot(
-                {
-                  zone: "preparationCompanionEquipment",
-                  companionId: companion.id,
-                  target,
-                },
-                resolveCompanionLoadoutItem(
-                  companion,
-                  target,
-                  preparationSharedInventory,
-                ),
-                `prep-${companion.id}-${
-                  target.kind === "equipment" ? target.slot : target.index
-                }`,
-              )}
-            </label>
-          ))}
-        </div>
-      </article>
-    );
-  };
   return (
     <main className="campaign-page preparation-page">
       <header className="preparation-header">
@@ -5435,15 +5712,12 @@ function PreparationScreen({
           <section className="preparation-panel preparation-storage-panel">
             <header><div><small>02</small><h2>창고 인벤토리</h2></div><span>{warehouseItemCount(campaign.warehouse)}개</span></header>
             <p>아이템을 길게 눌러 위 가방이나 오른쪽 장비칸으로 옮깁니다.</p>
-            <div className="fixed-item-grid preparation-storage-grid">
-              {warehouseSlots.map((itemRef, index) =>
-                renderStoredSlot(
-                  { zone: "warehouse", index },
-                  itemRef && !selectedRefs.has(itemRef) ? itemRef : null,
-                  `prep-warehouse-${index}`,
-                ),
-              )}
-            </div>
+            <CampaignWarehouseInventory
+              warehouse={campaign.warehouse}
+              className="preparation-storage-grid"
+              hiddenItemRefs={selectedRefs}
+              contextLabel="창고"
+            />
           </section>
         </div>
 
@@ -5452,16 +5726,15 @@ function PreparationScreen({
             <div><small>03</small><h2>동행 원정대 장비</h2></div>
             <span>{selectedCompanions.length}/3명 · 첫 번째 인원이 조작 캐릭터</span>
           </header>
-          <div className="preparation-equipment-roster is-active-party">
-            {selectedCompanions.map((companion) =>
-              renderCompanionCard(companion, "party"),
-            )}
-            {selectedCompanions.length === 0 && (
-              <div className="preparation-party-empty">
-                아래 대기 목록에서 조작할 첫 동료를 선택해 주세요.
-              </div>
-            )}
-          </div>
+          <CampaignCompanionEquipmentRoster
+            companions={selectedCompanions}
+            placement="party"
+            selectedCompanionIds={selectedCompanionIds}
+            controlledCompanionId={selectedCompanionIds[0] ?? null}
+            sharedInventory={preparationSharedInventory}
+            emptyMessage="아래 대기 목록에서 조작할 첫 동료를 선택해 주세요."
+            onCompanionToggle={onCompanionToggle}
+          />
         </section>
 
         <section className="preparation-reserve-panel">
@@ -5469,16 +5742,18 @@ function PreparationScreen({
             <div><small>04</small><h2>동행하지 않는 동료</h2></div>
             <span>{reserveCompanions.length}명 대기</span>
           </header>
-          <div className="preparation-equipment-roster is-reserve-roster">
-            {reserveCompanions.map((companion) =>
-              renderCompanionCard(companion, "reserve"),
-            )}
-            {reserveCompanions.length === 0 && (
-              <div className="preparation-reserve-empty">
-                모든 동료가 이번 원정에 동행합니다.
-              </div>
-            )}
-          </div>
+          <CampaignCompanionEquipmentRoster
+            companions={reserveCompanions}
+            placement="reserve"
+            selectedCompanionIds={selectedCompanionIds}
+            sharedInventory={preparationSharedInventory}
+            emptyMessage="모든 동료가 이번 원정에 동행합니다."
+            onCompanionToggle={onCompanionToggle}
+            isCompanionToggleDisabled={(companion) =>
+              !selectedCompanionIds.includes(companion.id) &&
+              selectedCompanionIds.length >= 3
+            }
+          />
         </section>
       </div>
       <footer className="preparation-footer">
@@ -5495,13 +5770,6 @@ function PreparationScreen({
           preview={itemPreview}
           readOnly
           onClose={() => setItemPreview(null)}
-        />
-      )}
-      {companionPreview && (
-        <CompanionInspector
-          companion={companionPreview.companion}
-          anchor={companionPreview.anchor}
-          onClose={() => setCompanionPreview(null)}
         />
       )}
     </main>
@@ -9998,7 +10266,6 @@ export default function DungeonGame() {
   const [campaignHydrated, setCampaignHydrated] = useState(false);
   const [screen, setScreen] = useState<CampaignScreen>("hub");
   const [commerceOpen, setCommerceOpen] = useState(false);
-  const [commerceTab, setCommerceTab] = useState<CommerceTab>("warehouse");
   const [blacksmithOpen, setBlacksmithOpen] = useState(false);
   const [facilityNotice, setFacilityNotice] = useState<string | null>(null);
   const [hubHelpOpen, setHubHelpOpen] = useState(false);
@@ -10205,7 +10472,7 @@ export default function DungeonGame() {
     (held: HeldSlotItem, target: ItemSlotAddress) => {
       const source = held.source;
       if (source.zone === "warehouse" && target.zone === "shopSellTarget") {
-        if (handleShopSell(source.index)) setCommerceTab("shop");
+        handleShopSell(source.index);
         return;
       }
       if (
@@ -10213,9 +10480,7 @@ export default function DungeonGame() {
         target.zone === "shopWarehouseTarget"
       ) {
         const listingSource = source.zone === "shopStock" ? "stock" : "buyback";
-        if (handleShopBuy(listingSource, source.listingId)) {
-          setCommerceTab("warehouse");
-        }
+        handleShopBuy(listingSource, source.listingId);
         return;
       }
       if (
@@ -10265,12 +10530,7 @@ export default function DungeonGame() {
           {commerceOpen && (
             <CommerceModal
               campaign={campaign}
-              tab={commerceTab}
               notice={facilityNotice}
-              onTabChange={(nextTab) => {
-                setCommerceTab(nextTab);
-                setFacilityNotice(null);
-              }}
               onSell={handleShopSell}
               onBuy={handleShopBuy}
               onClose={() => {
@@ -10482,13 +10742,11 @@ export default function DungeonGame() {
       developerMode={developerMode}
       onSelectDungeon={openPreparation}
       onOpenWarehouse={() => {
-        setCommerceTab("warehouse");
         setCommerceOpen(true);
         setBlacksmithOpen(false);
         setFacilityNotice(null);
       }}
       onOpenShop={() => {
-        setCommerceTab("shop");
         setCommerceOpen(true);
         setBlacksmithOpen(false);
         setFacilityNotice(null);

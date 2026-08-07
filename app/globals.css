@@ -5378,7 +5378,48 @@ kbd {
 }
 
 .commerce-modal {
-  width: min(1040px, calc(100vw - 28px));
+  width: min(1180px, calc(100vw - 28px));
+}
+
+.commerce-split-layout {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+}
+
+.commerce-column {
+  display: flex;
+  min-width: 0;
+  min-height: min(570px, calc(100vh - 190px));
+  flex-direction: column;
+  background: #0a0e0c;
+}
+
+.commerce-column + .commerce-column {
+  border-left: 1px solid #3a403b;
+}
+
+.commerce-column-header {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: #0d120f;
+}
+
+.commerce-column-header h3 {
+  margin: 2px 0 0;
+  color: #d9dccf;
+  font-size: 15px;
+}
+
+.commerce-column-header > span {
+  color: var(--gold-bright);
+  font-family: var(--pixel);
+  font-size: 10px;
 }
 
 .commerce-modal > header,
@@ -5502,7 +5543,8 @@ kbd {
 }
 
 .commerce-warehouse-panel .warehouse-fixed-grid {
-  max-height: min(395px, calc(100vh - 370px));
+  max-height: min(390px, calc(100vh - 365px));
+  flex: 1;
 }
 
 .commerce-warehouse-panel .fixed-item-slot.is-selected {
@@ -5567,7 +5609,14 @@ kbd {
 }
 
 .commerce-shop-panel {
-  max-height: min(560px, calc(100vh - 265px));
+  max-height: none;
+  overflow: hidden;
+  scrollbar-color: #4a514b #0a0d0b;
+}
+
+.commerce-shop-scroll {
+  min-height: 0;
+  flex: 1;
   overflow-y: auto;
   scrollbar-color: #4a514b #0a0d0b;
 }
@@ -5666,7 +5715,7 @@ kbd {
 }
 
 .blacksmith-modal {
-  width: min(920px, calc(100vw - 28px));
+  width: min(1180px, calc(100vw - 28px));
   max-height: min(760px, calc(100vh - 30px));
   overflow: hidden;
   border: 1px solid #66443b;
@@ -5706,8 +5755,101 @@ kbd {
 
 .blacksmith-layout {
   display: grid;
-  grid-template-columns: minmax(290px, 0.9fr) minmax(320px, 1.1fr);
-  min-height: 430px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(330px, 0.85fr);
+  min-height: min(570px, calc(100vh - 225px));
+}
+
+.blacksmith-source-panels {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(245px, 0.85fr) minmax(280px, 1.15fr);
+  border-right: 1px solid #3b302b;
+  background: #0a0e0c;
+}
+
+.blacksmith-source-panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.blacksmith-source-panel + .blacksmith-source-panel {
+  border-top: 1px solid #3b302b;
+}
+
+.blacksmith-source-panel > p {
+  margin: 0;
+  padding: 7px 14px;
+  border-bottom: 1px solid #292d29;
+  color: #777d77;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.blacksmith-warehouse-grid {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px 14px;
+  scrollbar-color: #5b4339 #0a0d0b;
+}
+
+.blacksmith-companion-panel .is-smithy-roster {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  scrollbar-color: #5b4339 #0a0d0b;
+}
+
+.preparation-owner-card.is-smithy {
+  border-color: #37312d;
+  background: #0c100e;
+}
+
+.preparation-owner-card.is-smithy > header {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.fixed-item-slot.is-upgradeable-choice {
+  border-color: #b66b4d;
+  background: #1a120f;
+  box-shadow:
+    inset 0 0 0 1px rgba(231, 128, 83, 0.26),
+    0 0 11px rgba(222, 102, 57, 0.28);
+}
+
+.fixed-item-slot.is-upgradeable-choice:hover,
+.fixed-item-slot.is-upgradeable-choice:focus-visible,
+.fixed-item-slot.is-upgradeable-choice.is-selected {
+  border-color: #ef9b72;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 177, 135, 0.34),
+    0 0 16px rgba(230, 105, 61, 0.42);
+}
+
+.blacksmith-target-slot {
+  border-color: #b66b4d;
+  box-shadow: 0 0 18px rgba(222, 102, 57, 0.24);
+}
+
+.blacksmith-empty-target {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+}
+
+.blacksmith-empty-target i {
+  color: #a96349;
+  font-family: var(--pixel);
+  font-size: 24px;
+  font-style: normal;
+}
+
+.blacksmith-empty-target p {
+  margin: 0;
 }
 
 .blacksmith-item-list {
@@ -7417,6 +7559,30 @@ button.fixed-item-slot.is-filled:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .commerce-split-layout,
+  .blacksmith-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .commerce-column {
+    min-height: 420px;
+  }
+
+  .commerce-column + .commerce-column {
+    border-top: 1px solid #3a403b;
+    border-left: 0;
+  }
+
+  .blacksmith-modal {
+    overflow-y: auto;
+  }
+
+  .blacksmith-source-panels {
+    min-height: 620px;
+    border-right: 0;
+    border-bottom: 1px solid #3b302b;
+  }
+
   .preparation-grid {
     grid-template-columns: 1fr;
   }
@@ -7581,12 +7747,7 @@ button.fixed-item-slot.is-filled:focus-visible {
   }
 
   .blacksmith-layout {
-    grid-template-columns: 1fr;
     min-height: 0;
-  }
-
-  .blacksmith-modal {
-    overflow-y: auto;
   }
 
   .blacksmith-item-list {
