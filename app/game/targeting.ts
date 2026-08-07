@@ -49,7 +49,7 @@ const activeObjectKeys = (objects: readonly DungeonObject[]) =>
       .map(pointKey),
   );
 
-const linePoints = (from: Point, to: Point) => {
+export const linePoints = (from: Point, to: Point) => {
   const points: Point[] = [];
   let x = from.x;
   let y = from.y;

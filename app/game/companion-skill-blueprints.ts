@@ -2,90 +2,34 @@ import {
   COMPANION_SKILLS,
   type CompanionSkillDefinition,
 } from "./companion-skills";
-import type { CompanionSkillId, StatusEffectId } from "./types";
+import type { CompanionSkillId } from "./types";
+import type {
+  CombatSkillAreaAnchor,
+  CombatSkillBlueprint,
+  CombatSkillImpactMode,
+  CombatSkillMechanicTag,
+  CombatSkillScalarKey,
+  CombatSkillScalars,
+  CombatSkillSpecialEffect,
+  CombatSkillTravelMode,
+} from "./combat-skills";
 
-export type CompanionSkillTravelMode =
-  | "none"
-  | "leap"
-  | "teleport"
-  | "charge";
+export type CompanionSkillTravelMode = CombatSkillTravelMode;
 
-export type CompanionSkillImpactMode =
-  | "burst"
-  | "shockwave"
-  | "fragments"
-  | "thrust"
-  | "slash"
-  | "healing"
-  | "sigil"
-  | "drain";
+export type CompanionSkillImpactMode = CombatSkillImpactMode;
 
-export type CompanionSkillAreaAnchor = "caster" | "target";
+export type CompanionSkillAreaAnchor = CombatSkillAreaAnchor;
 
-export type CompanionSkillMechanicTag =
-  | "area"
-  | "chain"
-  | "cloud"
-  | "conductive"
-  | "equipment"
-  | "healing"
-  | "line"
-  | "movement"
-  | "push"
-  | "status"
-  | "summon"
-  | "threshold"
-  | "weapon";
+export type CompanionSkillMechanicTag = CombatSkillMechanicTag;
 
-export type CompanionSkillScalarKey =
-  | "power"
-  | "secondaryPower"
-  | "radius"
-  | "pushDistance"
-  | "statusTurns"
-  | "durationTurns"
-  | "hitCount"
-  | "targetCount"
-  | "chainRange"
-  | "thresholdRatio"
-  | "healRatio";
+export type CompanionSkillScalarKey = CombatSkillScalarKey;
 
-export type CompanionSkillScalars = Readonly<
-  Partial<Record<CompanionSkillScalarKey, number>>
->;
+export type CompanionSkillScalars = CombatSkillScalars;
 
-export type CompanionSkillSpecialEffect =
-  | {
-      id: string;
-      kind: "damage";
-      target: "target" | "area";
-      power: number;
-      radius?: number;
-    }
-  | {
-      id: string;
-      kind: "status";
-      target: "target" | "area";
-      statusId: StatusEffectId;
-      turns: number;
-      potency?: number;
-      radius?: number;
-    }
-  | {
-      id: string;
-      kind: "healing";
-      target: "caster";
-      ratio: number;
-    };
+export type CompanionSkillSpecialEffect = CombatSkillSpecialEffect;
 
-export type CompanionSkillBlueprint = CompanionSkillDefinition & {
-  travelMode: CompanionSkillTravelMode;
-  impactMode: CompanionSkillImpactMode;
-  areaAnchor: CompanionSkillAreaAnchor;
-  mechanics: readonly CompanionSkillMechanicTag[];
-  scalars: CompanionSkillScalars;
-  specialEffects: readonly CompanionSkillSpecialEffect[];
-};
+export type CompanionSkillBlueprint = CompanionSkillDefinition &
+  Omit<CombatSkillBlueprint<CompanionSkillId>, keyof CompanionSkillDefinition | "footprint" | "name" | "description">;
 
 export type CompanionSkillScalarModifier = {
   add?: number;
