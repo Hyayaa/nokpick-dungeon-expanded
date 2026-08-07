@@ -3,6 +3,7 @@ import {
   createExpeditionGame,
   createNewGame,
   descendFloor,
+  pathTo,
   playerStep,
   throwItem,
   useItem as consumeItem,
@@ -19,6 +20,15 @@ import {
   SPECIAL_ROOM_REGISTRY,
   type SpecialRoomPreset,
 } from "../app/game/special-rooms";
+import {
+  createDeveloperTestMap,
+  DEVELOPER_TEST_MAP_ID,
+} from "../app/game/developer-test-map";
+import {
+  SEWER_TILE_FRAMES,
+  terrainVisual,
+  wallOverlayVisual,
+} from "../app/presentation/render";
 import type { GameState, Point } from "../app/game/types";
 
 const seed = 0x51ec1a17;
@@ -74,6 +84,105 @@ assert.equal(
   2,
   "potion-solution and crystal-key compatibility groups must be registry data",
 );
+
+{
+  const showcase = createDeveloperTestMap(base);
+  const repeated = createDeveloperTestMap(base);
+  assert.equal(showcase.dungeonId, DEVELOPER_TEST_MAP_ID);
+  assert.deepEqual(showcase.tiles, repeated.tiles, "showcase geometry must stay fixed");
+  assert.deepEqual(showcase.traps, repeated.traps, "showcase traps must stay fixed");
+  for (const terrain of [
+    "floor",
+    "specialFloor",
+    "wall",
+    "grass",
+    "highGrass",
+    "water",
+    "chasm",
+    "door",
+    "openDoor",
+    "lockedDoor",
+    "crystalDoor",
+    "barricade",
+  ] as const) {
+    assert.ok(pointsWithTerrain(showcase, terrain).length > 0, `${terrain} must be exhibited`);
+  }
+  const showcasedTrapKinds = new Set((showcase.traps ?? []).map((trap) => trap.kind));
+  for (const kind of ["gripping", "poisonDart", "explosive", "teleportation", "flashing"] as const) {
+    assert.ok(showcasedTrapKinds.has(kind), `${kind} trap must be exhibited`);
+  }
+  assert.deepEqual(
+    new Set((showcase.specialRooms ?? []).map((room) => room.kind)),
+    new Set(P0_SPECIAL_ROOM_PRESETS),
+  );
+  assert.deepEqual(
+    new Set(showcase.objects.map((object) => object.kind)),
+    new Set(["chest", "crystalChest", "tomb", "alchemy"]),
+  );
+  assert.ok(showcase.clouds.some((cloud) => cloud.variant === "magicalFire"));
+  assert.ok(showcase.clouds.some((cloud) => cloud.kind === "fire" && !cloud.variant));
+  assert.ok(showcase.clouds.some((cloud) => cloud.kind === "frost"));
+  assert.ok(showcase.clouds.some((cloud) => cloud.kind === "toxic"));
+
+  const sidewaysCrystalDoor = { x: 27, y: 10 };
+  assert.equal(
+    terrainVisual(showcase, sidewaysCrystalDoor.x, sidewaysCrystalDoor.y),
+    SEWER_TILE_FRAMES.raisedDoorSideways,
+  );
+  assert.equal(
+    wallOverlayVisual(showcase, sidewaysCrystalDoor.x, sidewaysCrystalDoor.y - 1),
+    SEWER_TILE_FRAMES.doorSidewaysCrystal,
+  );
+  const raisedCrystalDoor = { x: 36, y: 9 };
+  assert.equal(
+    terrainVisual(showcase, raisedCrystalDoor.x, raisedCrystalDoor.y),
+    SEWER_TILE_FRAMES.raisedDoorCrystal,
+  );
+  assert.equal(
+    wallOverlayVisual(showcase, raisedCrystalDoor.x, raisedCrystalDoor.y - 1),
+    SEWER_TILE_FRAMES.doorOverhangCrystal,
+  );
+
+  showcase.enemies = [];
+  delete showcase.player.inventory.iron_key;
+  delete showcase.player.inventory.crystal_key;
+  const firstDoor = pointsWithTerrain(showcase, "crystalDoor")[0];
+  const firstStep = stageNextTo(showcase, firstDoor);
+  assert.equal(pathTo(showcase, firstDoor).length, 0, "keyless click must not enter a crystal door");
+  showcase.player.inventory.iron_key = 1;
+  const wrongKey = playerStep(showcase, firstStep.dx, firstStep.dy);
+  assert.equal(wrongKey.consumedTurn, false);
+  assert.equal(wrongKey.state.tiles[firstDoor.y][firstDoor.x].terrain, "crystalDoor");
+  assert.equal(wrongKey.state.player.inventory.iron_key, 1);
+
+  showcase.player.inventory.crystal_key = 1;
+  const clickPath = pathTo(showcase, firstDoor);
+  assert.deepEqual(clickPath.at(-1), firstDoor, "a keyed crystal door click must route into its interaction tile");
+  const turnBefore = showcase.turn;
+  const opened = playerStep(showcase, firstStep.dx, firstStep.dy).state;
+  assert.equal(opened.tiles[firstDoor.y][firstDoor.x].terrain, "openDoor");
+  assert.equal(opened.player.inventory.crystal_key ?? 0, 0);
+  assert.equal(opened.turn, turnBefore + 1);
+  const reloadedShowcase = JSON.parse(JSON.stringify(opened)) as GameState;
+  assert.equal(reloadedShowcase.tiles[firstDoor.y][firstDoor.x].terrain, "openDoor");
+  assert.equal(reloadedShowcase.player.inventory.crystal_key ?? 0, 0);
+
+  const secondDoor = pointsWithTerrain(opened, "crystalDoor")[0];
+  const secondStep = stageNextTo(opened, secondDoor);
+  const secondAttempt = playerStep(opened, secondStep.dx, secondStep.dy);
+  assert.equal(secondAttempt.consumedTurn, false, "one key must not open two crystal doors");
+  assert.equal(secondAttempt.state.tiles[secondDoor.y][secondDoor.x].terrain, "crystalDoor");
+
+  const keyIsolationGame = JSON.parse(JSON.stringify(opened)) as GameState;
+  const lockedDoor = pointsWithTerrain(keyIsolationGame, "lockedDoor")[0];
+  const lockedStep = stageNextTo(keyIsolationGame, lockedDoor);
+  keyIsolationGame.player.inventory.crystal_key = 1;
+  delete keyIsolationGame.player.inventory.iron_key;
+  const crystalOnIronDoor = playerStep(keyIsolationGame, lockedStep.dx, lockedStep.dy);
+  assert.equal(crystalOnIronDoor.consumedTurn, false);
+  assert.equal(crystalOnIronDoor.state.tiles[lockedDoor.y][lockedDoor.x].terrain, "lockedDoor");
+  assert.equal(crystalOnIronDoor.state.player.inventory.crystal_key, 1);
+}
 
 for (const preset of P0_SPECIAL_ROOM_PRESETS) {
   const game = gameFor(preset);

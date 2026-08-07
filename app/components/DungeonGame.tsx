@@ -80,6 +80,11 @@ import {
 } from "../game/engine";
 import { P0_ROOM_PRESETS } from "../game/room-presets";
 import { isSpecialRoomPreset } from "../game/special-rooms";
+import {
+  createDeveloperTestMap,
+  DEVELOPER_TEST_MAP_ID,
+  DEVELOPER_TEST_MAP_SEED,
+} from "../game/developer-test-map";
 import { completeFloorExit, resolveGameSession } from "../game/session";
 import {
   COMPANION_PASSIVE_SLOT_INDEXES,
@@ -464,6 +469,29 @@ const LANGUAGE_STORAGE_KEY = "shattered-web-language";
 const CAMPAIGN_STORAGE_KEY = "shattered-web-campaign-v1";
 const ACTIVE_EXPEDITION_STORAGE_KEY = "shattered-web-active-expedition-v1";
 const AUTO_EXPLORATION_ENABLED = false;
+const DEVELOPER_TEST_DUNGEON: DungeonDefinition = {
+  id: DEVELOPER_TEST_MAP_ID,
+  themeId: "developer-showcase",
+  nameKo: "전체 맵 요소 테스트",
+  nameEn: "Dungeon Showcase Map",
+  subtitleKo: "개발자 전용 고정 맵",
+  subtitleEn: "Developer-only fixed map",
+  descriptionKo: "지형, 문, 위험 요소, 특수방과 오브젝트를 한 번에 검증합니다.",
+  descriptionEn: "Validates terrain, doors, hazards, special rooms, and objects in one fixed map.",
+  difficulty: 1,
+  difficultyGrade: "F",
+  difficultyLabelKo: "개발자",
+  difficultyLabelEn: "Developer",
+  floorCount: 1,
+  difficultyScale: 1,
+  mainDropIds: [],
+  specialRoomPlan: [],
+  lootPlan: [],
+  goldPlan: [],
+  completionGold: 0,
+  goldTarget: 0,
+  accent: "#78d7ec",
+};
 const FONT_SCALE_OPTIONS = [0.85, 1, 1.15, 1.3] as const;
 const UiLanguageContext = createContext<UiLanguage>("ko");
 const useUiLanguage = () => useContext(UiLanguageContext);
@@ -3905,6 +3933,7 @@ function SettingsModal({
   onLanguageChange,
   onSoundEnabledChange,
   onDeveloperModeChange,
+  onEnterTestMap,
   onClose,
 }: {
   uiScale: number;
@@ -3917,6 +3946,7 @@ function SettingsModal({
   onLanguageChange: (language: UiLanguage) => void;
   onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
+  onEnterTestMap?: () => void;
   onClose: () => void;
 }) {
   const text = (korean: string, english: string) =>
@@ -4096,6 +4126,22 @@ function SettingsModal({
                 : text("꺼짐", "Off")}
             </button>
           </div>
+          {developerMode && onEnterTestMap && (
+            <div className="developer-setting">
+              <div>
+                <span>{text("테스트 맵", "Showcase Map")}</span>
+                <p>
+                  {text(
+                    "고정 배치된 전체 맵 요소와 특수 상호작용을 바로 확인합니다.",
+                    "Open the fixed developer map for terrain and interaction checks.",
+                  )}
+                </p>
+              </div>
+              <button type="button" onClick={onEnterTestMap}>
+                {text("입장", "Enter")}
+              </button>
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -10577,6 +10623,44 @@ export default function DungeonGame() {
   );
   const campaignSlotDrag = useItemSlotDrag(handleCampaignSlotDrop);
 
+  const enterDeveloperTestMap = useCallback(() => {
+    if (!developerMode) return;
+    const party = campaign.companions
+      .slice(0, 3)
+      .map((companion) => normalizeCompanionForHub(companion));
+    const leader = party[0];
+    if (!leader) return;
+    const base = createExpeditionGame(
+      DEVELOPER_TEST_MAP_SEED,
+      {
+        dungeonId: DEVELOPER_TEST_MAP_ID,
+        dungeonName: DEVELOPER_TEST_DUNGEON.nameKo,
+        maxFloor: 1,
+        difficultyScale: 1,
+        difficulty: 1,
+        mainDropIds: [],
+        specialRoomPlan: [],
+        lootPlan: [],
+        goldPlan: [],
+      },
+      companionToPlayer(leader),
+      party.slice(1),
+    );
+    const initialGame = createDeveloperTestMap(base);
+    const active = {
+      dungeon: DEVELOPER_TEST_DUNGEON,
+      initialGame,
+    };
+    setActiveExpedition(active);
+    window.localStorage.setItem(
+      ACTIVE_EXPEDITION_STORAGE_KEY,
+      JSON.stringify(active),
+    );
+    setExpeditionResult(null);
+    setHubSettingsOpen(false);
+    setScreen("dungeon");
+  }, [campaign.companions, developerMode]);
+
   const renderCampaignSurface = (content: ReactNode) => (
     <ItemSlotDragContext.Provider value={campaignSlotDrag}>
       <UiLanguageContext.Provider value={language}>
@@ -10643,6 +10727,7 @@ export default function DungeonGame() {
               onLanguageChange={changeLanguage}
               onSoundEnabledChange={setSoundEnabled}
               onDeveloperModeChange={setDeveloperMode}
+              onEnterTestMap={enterDeveloperTestMap}
               onClose={() => setHubSettingsOpen(false)}
             />
           )}
@@ -10742,6 +10827,14 @@ export default function DungeonGame() {
     ) => {
       const finishedDungeon =
         activeExpedition?.dungeon ?? selectedDungeon ?? dungeonOffers[0];
+      if (finishedDungeon.id === DEVELOPER_TEST_MAP_ID) {
+        setActiveExpedition(null);
+        setExpeditionResult(null);
+        window.localStorage.removeItem(ACTIVE_EXPEDITION_STORAGE_KEY);
+        setSelectedDungeon(null);
+        setScreen("hub");
+        return;
+      }
       const rolledOfferSeed = randomDungeonSeed();
       const nextOfferSeed =
         rolledOfferSeed === campaign.offerSeed
