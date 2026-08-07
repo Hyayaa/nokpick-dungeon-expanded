@@ -927,9 +927,14 @@ assert.match(
   /commerce-split-layout[\s\S]*CampaignWarehouseInventory[\s\S]*commerce-shop-panel/,
   "the shop must render the shared warehouse on the left and shop stock on the right",
 );
+assert.doesNotMatch(
+  dungeonUiSource,
+  /shopBuyback|BUYBACK|>되사기</,
+  "the shop must not render a separate buyback panel or listing",
+);
 assert.match(
   dungeonUiSource,
-  /blacksmith-source-panels[\s\S]*CampaignWarehouseInventory[\s\S]*companions=\{campaign\.companions\}[\s\S]*CampaignCompanionEquipmentRoster/,
+  /blacksmith-source-panels[\s\S]*className="preparation-storage-grid blacksmith-warehouse-grid"[\s\S]*companions=\{campaign\.companions\}[\s\S]*placement="reserve"/,
   "the blacksmith must show the shared full warehouse above the complete companion equipment roster",
 );
 assert.match(
