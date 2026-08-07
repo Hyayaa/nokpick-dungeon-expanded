@@ -79,6 +79,12 @@ import {
   zapWand,
 } from "../game/engine";
 import { P0_ROOM_PRESETS } from "../game/room-presets";
+import { isSpecialRoomPreset } from "../game/special-rooms";
+import {
+  createDeveloperTestMap,
+  DEVELOPER_TEST_MAP_ID,
+  DEVELOPER_TEST_MAP_SEED,
+} from "../game/developer-test-map";
 import { completeFloorExit, resolveGameSession } from "../game/session";
 import {
   COMPANION_PASSIVE_SLOT_INDEXES,
@@ -461,7 +467,31 @@ const UI_SCALE_OPTIONS = [0.8, 0.9, 1, 1.1, 1.2] as const;
 const FONT_SCALE_STORAGE_KEY = "shattered-web-font-scale";
 const LANGUAGE_STORAGE_KEY = "shattered-web-language";
 const CAMPAIGN_STORAGE_KEY = "shattered-web-campaign-v1";
+const ACTIVE_EXPEDITION_STORAGE_KEY = "shattered-web-active-expedition-v1";
 const AUTO_EXPLORATION_ENABLED = false;
+const DEVELOPER_TEST_DUNGEON: DungeonDefinition = {
+  id: DEVELOPER_TEST_MAP_ID,
+  themeId: "developer-showcase",
+  nameKo: "전체 맵 요소 테스트",
+  nameEn: "Dungeon Showcase Map",
+  subtitleKo: "개발자 전용 고정 맵",
+  subtitleEn: "Developer-only fixed map",
+  descriptionKo: "지형, 문, 위험 요소, 특수방과 오브젝트를 한 번에 검증합니다.",
+  descriptionEn: "Validates terrain, doors, hazards, special rooms, and objects in one fixed map.",
+  difficulty: 1,
+  difficultyGrade: "F",
+  difficultyLabelKo: "개발자",
+  difficultyLabelEn: "Developer",
+  floorCount: 1,
+  difficultyScale: 1,
+  mainDropIds: [],
+  specialRoomPlan: [],
+  lootPlan: [],
+  goldPlan: [],
+  completionGold: 0,
+  goldTarget: 0,
+  accent: "#78d7ec",
+};
 const FONT_SCALE_OPTIONS = [0.85, 1, 1.15, 1.3] as const;
 const UiLanguageContext = createContext<UiLanguage>("ko");
 const useUiLanguage = () => useContext(UiLanguageContext);
@@ -3903,6 +3933,7 @@ function SettingsModal({
   onLanguageChange,
   onSoundEnabledChange,
   onDeveloperModeChange,
+  onEnterTestMap,
   onClose,
 }: {
   uiScale: number;
@@ -3915,6 +3946,7 @@ function SettingsModal({
   onLanguageChange: (language: UiLanguage) => void;
   onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
+  onEnterTestMap?: () => void;
   onClose: () => void;
 }) {
   const text = (korean: string, english: string) =>
@@ -4094,6 +4126,22 @@ function SettingsModal({
                 : text("꺼짐", "Off")}
             </button>
           </div>
+          {developerMode && onEnterTestMap && (
+            <div className="developer-setting">
+              <div>
+                <span>{text("테스트 맵", "Showcase Map")}</span>
+                <p>
+                  {text(
+                    "고정 배치된 전체 맵 요소와 특수 상호작용을 바로 확인합니다.",
+                    "Open the fixed developer map for terrain and interaction checks.",
+                  )}
+                </p>
+              </div>
+              <button type="button" onClick={onEnterTestMap}>
+                {text("입장", "Enter")}
+              </button>
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -4890,6 +4938,7 @@ function DeveloperDungeonLoot({
     ground: "바닥",
     object: "오브젝트",
     enemy: "적 드롭",
+    specialReward: "특수방 보상",
   } as const;
   const displayEntries: Array<{
     key: string;
@@ -5881,6 +5930,7 @@ type DungeonRunProps = {
   onLanguageChange: (language: UiLanguage) => void;
   onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
+  onGameSave: (game: GameState) => void;
   onFinish: (
     outcome: ExpeditionOutcome,
     game: GameState,
@@ -5902,6 +5952,7 @@ function DungeonRun({
   onLanguageChange,
   onSoundEnabledChange,
   onDeveloperModeChange,
+  onGameSave,
   onFinish,
 }: DungeonRunProps) {
   const [game, setGame] = useState<GameState>(() => initialGame);
@@ -6039,7 +6090,8 @@ function DungeonRun({
   const commitGame = useCallback((next: GameState) => {
     gameRef.current = next;
     setGame(next);
-  }, []);
+    onGameSave(next);
+  }, [onGameSave]);
 
   useEffect(() => {
     onFinishRef.current = onFinish;
@@ -6294,6 +6346,7 @@ function DungeonRun({
         const sources = [
           "/assets/environment/tiles_sewers.png",
           "/assets/environment/water0.png",
+          "/assets/environment/terrain_features.png",
           "/assets/sprites/items.png",
           "/assets/sprites/player.png",
           ...enemyKinds.map((kind) => ENEMY_SPRITES[kind].file),
@@ -6313,9 +6366,12 @@ function DungeonRun({
           "/assets/environment/tiles_sewers.png",
         );
         const water = imagesBySource.get("/assets/environment/water0.png");
+        const terrainFeatures = imagesBySource.get(
+          "/assets/environment/terrain_features.png",
+        );
         const items = imagesBySource.get("/assets/sprites/items.png");
         const player = imagesBySource.get("/assets/sprites/player.png");
-        if (!tiles || !water || !items || !player) {
+        if (!tiles || !water || !terrainFeatures || !items || !player) {
           throw new Error("Essential map images are missing");
         }
         const enemies = enemyKinds.reduce(
@@ -6341,6 +6397,7 @@ function DungeonRun({
         assetsRef.current = {
           tiles,
           water,
+          terrainFeatures,
           items,
           player,
           enemies,
@@ -9590,7 +9647,12 @@ function DungeonRun({
               </span>
               <span>
                 <small>{text("열쇠", "Keys")}</small>
-                <b>{game.player.inventory.iron_key ?? 0}</b>
+                <b>
+                  {text("쇠", "Iron")} {game.player.inventory.iron_key ?? 0}
+                  {(game.player.inventory.crystal_key ?? 0) > 0
+                    ? ` · ${text("수정", "Crystal")} ${game.player.inventory.crystal_key}`
+                    : ""}
+                </b>
               </span>
               <TurnGauge
                 moveSpeed={controlledCompanion
@@ -10335,6 +10397,24 @@ export default function DungeonGame() {
           shop: createShopState(firstOfferSeed, current.expeditions),
         }));
       }
+      try {
+        const rawActive = window.localStorage.getItem(
+          ACTIVE_EXPEDITION_STORAGE_KEY,
+        );
+        const saved = rawActive
+          ? JSON.parse(rawActive) as ActiveExpedition
+          : null;
+        if (
+          saved?.dungeon?.id &&
+          saved.initialGame?.tiles?.length &&
+          saved.initialGame.player
+        ) {
+          setActiveExpedition(saved);
+          setScreen("dungeon");
+        }
+      } catch {
+        window.localStorage.removeItem(ACTIVE_EXPEDITION_STORAGE_KEY);
+      }
       const savedScale = Number(
         window.localStorage.getItem(UI_SCALE_STORAGE_KEY),
       );
@@ -10543,6 +10623,44 @@ export default function DungeonGame() {
   );
   const campaignSlotDrag = useItemSlotDrag(handleCampaignSlotDrop);
 
+  const enterDeveloperTestMap = useCallback(() => {
+    if (!developerMode) return;
+    const party = campaign.companions
+      .slice(0, 3)
+      .map((companion) => normalizeCompanionForHub(companion));
+    const leader = party[0];
+    if (!leader) return;
+    const base = createExpeditionGame(
+      DEVELOPER_TEST_MAP_SEED,
+      {
+        dungeonId: DEVELOPER_TEST_MAP_ID,
+        dungeonName: DEVELOPER_TEST_DUNGEON.nameKo,
+        maxFloor: 1,
+        difficultyScale: 1,
+        difficulty: 1,
+        mainDropIds: [],
+        specialRoomPlan: [],
+        lootPlan: [],
+        goldPlan: [],
+      },
+      companionToPlayer(leader),
+      party.slice(1),
+    );
+    const initialGame = createDeveloperTestMap(base);
+    const active = {
+      dungeon: DEVELOPER_TEST_DUNGEON,
+      initialGame,
+    };
+    setActiveExpedition(active);
+    window.localStorage.setItem(
+      ACTIVE_EXPEDITION_STORAGE_KEY,
+      JSON.stringify(active),
+    );
+    setExpeditionResult(null);
+    setHubSettingsOpen(false);
+    setScreen("dungeon");
+  }, [campaign.companions, developerMode]);
+
   const renderCampaignSurface = (content: ReactNode) => (
     <ItemSlotDragContext.Provider value={campaignSlotDrag}>
       <UiLanguageContext.Provider value={language}>
@@ -10609,6 +10727,7 @@ export default function DungeonGame() {
               onLanguageChange={changeLanguage}
               onSoundEnabledChange={setSoundEnabled}
               onDeveloperModeChange={setDeveloperMode}
+              onEnterTestMap={enterDeveloperTestMap}
               onClose={() => setHubSettingsOpen(false)}
             />
           )}
@@ -10646,8 +10765,14 @@ export default function DungeonGame() {
       withdrawal.instances,
     );
     const developerParams = new URLSearchParams(window.location.search);
+    const requestedRoom = developerParams.get("dev-room");
+    const forcedSpecialRoom =
+      developerMode && requestedRoom && isSpecialRoomPreset(requestedRoom)
+        ? requestedRoom
+        : undefined;
     const expeditionSeed =
-      developerMode && developerParams.get("dev-floor") === "chasm"
+      developerMode &&
+        (developerParams.get("dev-room") === "p0" || forcedSpecialRoom)
         ? 0x00000002
         : randomDungeonSeed();
     const forcedRoomPresets =
@@ -10663,12 +10788,14 @@ export default function DungeonGame() {
         difficultyScale: dungeon.difficultyScale,
         difficulty: dungeon.difficulty,
         mainDropIds: [...dungeon.mainDropIds],
+        specialRoomPlan: dungeon.specialRoomPlan,
         lootPlan: dungeon.lootPlan,
         goldPlan: dungeon.goldPlan,
       },
       player,
       companions,
       forcedRoomPresets,
+      forcedSpecialRoom,
     );
     setCampaign((current) => ({
       ...current,
@@ -10676,6 +10803,10 @@ export default function DungeonGame() {
       expeditions: current.expeditions + 1,
     }));
     setActiveExpedition({ dungeon, initialGame });
+    window.localStorage.setItem(
+      ACTIVE_EXPEDITION_STORAGE_KEY,
+      JSON.stringify({ dungeon, initialGame }),
+    );
     setExpeditionResult(null);
     setScreen("dungeon");
   }, [
@@ -10696,6 +10827,14 @@ export default function DungeonGame() {
     ) => {
       const finishedDungeon =
         activeExpedition?.dungeon ?? selectedDungeon ?? dungeonOffers[0];
+      if (finishedDungeon.id === DEVELOPER_TEST_MAP_ID) {
+        setActiveExpedition(null);
+        setExpeditionResult(null);
+        window.localStorage.removeItem(ACTIVE_EXPEDITION_STORAGE_KEY);
+        setSelectedDungeon(null);
+        setScreen("hub");
+        return;
+      }
       const rolledOfferSeed = randomDungeonSeed();
       const nextOfferSeed =
         rolledOfferSeed === campaign.offerSeed
@@ -10734,6 +10873,7 @@ export default function DungeonGame() {
         return next;
       });
       setActiveExpedition(null);
+      window.localStorage.removeItem(ACTIVE_EXPEDITION_STORAGE_KEY);
       setSelectedDungeon(null);
       setScreen("results");
     },
@@ -10757,6 +10897,12 @@ export default function DungeonGame() {
         onLanguageChange={changeLanguage}
         onSoundEnabledChange={setSoundEnabled}
         onDeveloperModeChange={setDeveloperMode}
+        onGameSave={(game) => {
+          window.localStorage.setItem(
+            ACTIVE_EXPEDITION_STORAGE_KEY,
+            JSON.stringify({ dungeon: activeExpedition.dungeon, initialGame: game }),
+          );
+        }}
         onFinish={finishExpedition}
       />
     );

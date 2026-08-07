@@ -3,7 +3,7 @@ name: Feature branch test site
 on:
   push:
     branches:
-      - feature/room-presets
+      - "feature/**"
   workflow_dispatch:
 
 permissions:
@@ -34,14 +34,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Refresh downloadable source archive
-        run: bash scripts/build-source-archive.sh
-
       - name: Build static game
         run: |
           npm run build:local
-          mkdir -p local-dist/source
-          cp public/source/shattered-web-dungeon-source.zip local-dist/source/
 
       - name: Adapt root asset paths for project Pages
         env:

@@ -9,6 +9,7 @@ const PROJECTILE_BLOCKING_TERRAIN = new Set<Terrain>([
   "wall",
   "door",
   "lockedDoor",
+  "crystalDoor",
 ]);
 
 const pointKey = (point: Point) => `${point.x},${point.y}`;

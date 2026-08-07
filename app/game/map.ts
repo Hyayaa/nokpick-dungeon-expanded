@@ -4,6 +4,18 @@ import {
   paintP0Room,
   type P0RoomPreset,
 } from "./room-presets";
+import {
+  isSpecialRoomPreset,
+  paintSpecialRoom,
+  specialRoomMetadata,
+  type SpecialRewardSlot,
+  type SpecialRoomPreset,
+} from "./special-rooms";
+import type {
+  DungeonSpecialRoom,
+  DungeonTrap,
+  GuaranteedFloorSpawn,
+} from "./types";
 
 const CARDINALS: Point[] = [
   { x: 1, y: 0 },
@@ -41,7 +53,13 @@ export type RoomPreset =
   | "cross"
   | "ruins"
   | "splitPools"
-  | "alcoves";
+  | "alcoves"
+  | "storage"
+  | "magicalFire"
+  | "toxicGas"
+  | "traps"
+  | "crystalChoice"
+  | "crystalPath";
 
 type Room = {
   id: string;
@@ -70,7 +88,10 @@ export type GeneratedFloor = {
   alchemyPoint: Point;
   corridorWidths: Array<1 | 3>;
   corridorLengths: number[];
+  corridorKinds: Array<"normal" | "chasm">;
   roomCount: number;
+  ordinaryRoomCount: number;
+  ordinaryRoomBudget: number;
   roomPresets: RoomPreset[];
   roomRegions: Array<{
     preset: RoomPreset;
@@ -79,21 +100,13 @@ export type GeneratedFloor = {
     right: number;
     bottom: number;
   }>;
-  feeling: FloorFeeling;
+  specialRooms: DungeonSpecialRoom[];
+  requiredFloorSpawns: GuaranteedFloorSpawn[];
+  traps: DungeonTrap[];
+  specialRewards: SpecialRewardSlot[];
+  toxicGasTiles: Point[];
+  magicalFireTiles: Point[];
   rng: number;
-};
-
-export type FloorFeeling = "none" | "chasm";
-
-// Level.Feeling.CHASM is one outcome of Random.Int(14) after the first floor.
-// Keep the feeling roll separate from the builder RNG so ordinary floors retain
-// their existing room layout while the same campaign seed stays deterministic.
-export const floorFeelingFor = (seed: number, floor: number): FloorFeeling => {
-  if (floor <= 1) return "none";
-  const floorSeed = (seed ^ Math.imul(floor, 0x9e3779b1)) >>> 0;
-  const feelingRoll =
-    (Math.imul(floorSeed ^ 0x51ed270b, 1664525) + 1013904223) >>> 0;
-  return feelingRoll % 14 === 0 ? "chasm" : "none";
 };
 
 const pointKey = (point: Point) => `${point.x},${point.y}`;
@@ -118,17 +131,25 @@ const inside = (tiles: Tile[][], x: number, y: number) =>
   y >= 0 && y < tiles.length && x >= 0 && x < tiles[0].length;
 
 export const isDoor = (terrain: Terrain) =>
-  terrain === "door" || terrain === "openDoor" || terrain === "lockedDoor";
+  terrain === "door" ||
+  terrain === "openDoor" ||
+  terrain === "lockedDoor" ||
+  terrain === "crystalDoor" ||
+  terrain === "barricade";
 
 export const blocksSight = (terrain: Terrain) =>
   terrain === "wall" ||
   terrain === "door" ||
   terrain === "lockedDoor" ||
+  terrain === "crystalDoor" ||
+  terrain === "barricade" ||
   terrain === "highGrass";
 
 export const isWalkable = (terrain: Terrain, canUnlock = false) =>
   terrain !== "wall" &&
   terrain !== "chasm" &&
+  terrain !== "crystalDoor" &&
+  terrain !== "barricade" &&
   (terrain !== "lockedDoor" || canUnlock);
 
 const roomInterior = (room: Room) => {
@@ -193,7 +214,7 @@ const paintRoom = (
   }
 
   const interior = roomInterior(room);
-  if (isP0RoomPreset(room.preset)) return;
+  if (isP0RoomPreset(room.preset) || isSpecialRoomPreset(room.preset)) return;
   if (
     room.preset === "entrance" ||
     room.preset === "exit" ||
@@ -448,7 +469,7 @@ const connectRooms = (
   second: Room,
   usedDoorPoints: Set<string>,
   width: 1 | 3,
-  tunnelTerrain: Extract<Terrain, "floor" | "specialFloor">,
+  chasmCorridor: boolean,
 ) => {
   let firstDoor: Point;
   let secondDoor: Point;
@@ -546,17 +567,17 @@ const connectRooms = (
   );
   if (!path) return null;
 
+  const walkwayRadius = width === 3 ? 1 : 0;
   path.forEach((point) => {
-    const radius = width === 3 ? 1 : 0;
-    for (let y = point.y - radius; y <= point.y + radius; y += 1) {
-      for (let x = point.x - radius; x <= point.x + radius; x += 1) {
+    for (let y = point.y - walkwayRadius; y <= point.y + walkwayRadius; y += 1) {
+      for (let x = point.x - walkwayRadius; x <= point.x + walkwayRadius; x += 1) {
         if (
           !inside(tiles, x, y) ||
           roomPoints.has(`${x},${y}`)
         ) {
           continue;
         }
-        tiles[y][x].terrain = tunnelTerrain;
+        tiles[y][x].terrain = "floor";
       }
     }
   });
@@ -570,6 +591,8 @@ const connectRooms = (
     axis: horizontal ? ("horizontal" as const) : ("vertical" as const),
     width,
     length: path.length,
+    kind: chasmCorridor ? ("chasm" as const) : ("normal" as const),
+    path,
   };
 };
 
@@ -841,6 +864,12 @@ const SIZE_WEIGHTS: Partial<Record<RoomPreset, [number, number, number]>> = {
   chasmRoom: [4, 2, 1],
   circlePit: [4, 2, 1],
   cavesFissure: [9, 3, 1],
+  storage: [3, 1, 0],
+  magicalFire: [3, 1, 0],
+  toxicGas: [3, 1, 0],
+  traps: [3, 1, 0],
+  crystalChoice: [3, 1, 0],
+  crystalPath: [2, 1, 0],
   striped: [2, 1, 0],
   segmented: [9, 3, 1],
   pillars: [9, 3, 1],
@@ -859,6 +888,12 @@ const PRESET_MINIMUMS: Partial<Record<RoomPreset, number>> = {
   chasmRoom: 5,
   circlePit: 8,
   cavesFissure: 7,
+  storage: specialRoomMetadata("storage").minimumSize,
+  magicalFire: specialRoomMetadata("magicalFire").minimumSize,
+  toxicGas: specialRoomMetadata("toxicGas").minimumSize,
+  traps: specialRoomMetadata("traps").minimumSize,
+  crystalChoice: specialRoomMetadata("crystalChoice").minimumSize,
+  crystalPath: specialRoomMetadata("crystalPath").minimumSize,
   segmented: 7,
   pillars: 7,
 };
@@ -940,12 +975,20 @@ const curvedLoopAngle = (
 const roomSpecs = (
   random: ReturnType<typeof makeRandom>,
   forcedPresets: readonly P0RoomPreset[] = [],
+  forcedSpecialPreset?: SpecialRoomPreset,
 ) => {
   // Keep the large party-friendly room sizes, but use a tighter per-floor
   // graph so each expedition floor has fewer stops and shorter transfers.
   const standardRoll = random.next();
-  const standardCount =
-    standardRoll < 0.25 ? 6 : standardRoll < 0.8 ? 7 : 8;
+  const standardCount = forcedSpecialPreset === "crystalPath"
+    ? standardRoll < 0.25
+      ? 6
+      : standardRoll < 0.8
+        ? 7
+        : 8
+    : standardRoll < 0.55
+      ? 5
+      : 6;
   const specialCount = random.next() < 0.7 ? 1 : 2;
   const makeSpec = (
     id: string,
@@ -1027,14 +1070,25 @@ const roomSpecs = (
     standards.push(spec);
     roomBudget -= spec.roomValue;
   }
-  const specials = Array.from({ length: specialCount }, (_, index) => ({
-    ...makeSpec(
-      `special-${index}`,
-      SPECIAL_PRESETS[random.int(0, SPECIAL_PRESETS.length - 1)],
-      "special",
-    ),
-    purpose: index === 0 ? "alchemy" as const : undefined,
-  }));
+  const selectedGimmick = forcedSpecialPreset;
+  const specials: RoomSpec[] = [];
+  if (selectedGimmick) {
+    specials.push(
+      makeSpec("special-gimmick", selectedGimmick, "special"),
+    );
+  }
+  while (specials.length < specialCount) {
+    specials.push({
+      ...makeSpec(
+        `special-${specials.length}`,
+        SPECIAL_PRESETS[random.int(0, SPECIAL_PRESETS.length - 1)],
+        "special",
+      ),
+      purpose: specials.some((room) => room.purpose === "alchemy")
+        ? undefined
+        : "alchemy",
+    });
+  }
   return { entrance, exit, standards, specials };
 };
 
@@ -1310,12 +1364,12 @@ const normalizeLayout = (layout: FloorLayout) => {
 export function generateFloor(
   seed: number,
   attempt = 0,
-  feeling: FloorFeeling = "none",
   forcedPresets: readonly P0RoomPreset[] = [],
+  forcedSpecialPreset?: SpecialRoomPreset,
+  floor = 1,
 ): GeneratedFloor {
   const random = makeRandom(seed);
-  const tunnelTerrain = feeling === "chasm" ? "specialFloor" : "floor";
-  const specs = roomSpecs(random, forcedPresets);
+  const specs = roomSpecs(random, forcedPresets, forcedSpecialPreset);
   // RegularLevel chooses evenly between LoopBuilder and FigureEightBuilder.
   const layout =
     random.next() < 0.5
@@ -1324,7 +1378,7 @@ export function generateFloor(
   const { width, height } = normalizeLayout(layout);
   const tiles: Tile[][] = Array.from({ length: height }, () =>
     Array.from({ length: width }, () => ({
-      terrain: (feeling === "chasm" ? "chasm" : "wall") as Terrain,
+      terrain: "wall" as Terrain,
       discovered: false,
       visible: false,
       discoveredMask: 0,
@@ -1341,6 +1395,7 @@ export function generateFloor(
       }
     }
   });
+
   layout.rooms.forEach((room) => paintRoom(tiles, room, random));
 
   let lockedDoor: Point | null = null;
@@ -1364,6 +1419,12 @@ export function generateFloor(
   );
   const corridorWidths: Array<1 | 3> = [];
   const corridorLengths: number[] = [];
+  const corridorKinds: Array<"normal" | "chasm"> = [];
+  const corridorPlans: Array<{
+    width: 1 | 3;
+    kind: "normal" | "chasm";
+    path: Point[];
+  }> = [];
   let corridorPlanningFailed = false;
   for (const [edgeIndex, edge] of layout.edges.entries()) {
     const first = roomById.get(edge.from);
@@ -1379,7 +1440,7 @@ export function generateFloor(
       second,
       usedDoorPoints,
       wideEdgeIndexes.has(edgeIndex) ? 3 : 1,
-      tunnelTerrain,
+      random.next() < 0.2,
     );
     if (!connection) {
       corridorPlanningFailed = true;
@@ -1387,6 +1448,12 @@ export function generateFloor(
     }
     corridorWidths.push(connection.width);
     corridorLengths.push(connection.length);
+    corridorKinds.push(connection.kind);
+    corridorPlans.push({
+      width: connection.width,
+      kind: connection.kind,
+      path: connection.path,
+    });
     carveRoomAccess(tiles, first, connection.firstDoor);
     carveRoomAccess(tiles, second, connection.secondDoor);
     roomDoors.set(first.id, [
@@ -1448,9 +1515,11 @@ export function generateFloor(
     const terrain = tiles[y][x].terrain;
     const setUnlessDoor = (px: number, py: number) => {
       if (!inside(tiles, px, py) || isDoor(tiles[py][px].terrain)) return;
-      tiles[py][px].terrain = roomPoints.has(`${px},${py}`)
-        ? "floor"
-        : tunnelTerrain;
+      if (roomPoints.has(`${px},${py}`)) {
+        tiles[py][px].terrain = "floor";
+      } else if (tiles[py][px].terrain !== "specialFloor") {
+        tiles[py][px].terrain = "floor";
+      }
     };
     const setWallUnlessDoor = (px: number, py: number) => {
       if (!inside(tiles, px, py) || isDoor(tiles[py][px].terrain)) return;
@@ -1482,6 +1551,29 @@ export function generateFloor(
     );
   });
 
+  const specialRooms: DungeonSpecialRoom[] = [];
+  const requiredFloorSpawns: GuaranteedFloorSpawn[] = [];
+  const traps: DungeonTrap[] = [];
+  const specialRewards: SpecialRewardSlot[] = [];
+  const toxicGasTiles: Point[] = [];
+  const magicalFireTiles: Point[] = [];
+  layout.rooms.forEach((room) => {
+    if (!isSpecialRoomPreset(room.preset)) return;
+    const result = paintSpecialRoom(
+      tiles,
+      { ...room, preset: room.preset },
+      roomDoors.get(room.id) ?? [],
+      random,
+      floor,
+    );
+    specialRooms.push(result.room);
+    requiredFloorSpawns.push(...result.requiredFloorSpawns);
+    traps.push(...result.traps);
+    specialRewards.push(...result.rewards);
+    toxicGasTiles.push(...result.toxicGasTiles);
+    magicalFireTiles.push(...result.magicalFireTiles);
+  });
+
   const entranceRoom = roomById.get(specs.entrance.id) ?? layout.rooms[0];
   const exitRoom =
     roomById.get(specs.exit.id) ?? layout.rooms.at(-1) ?? layout.rooms[0];
@@ -1493,7 +1585,9 @@ export function generateFloor(
   // RegularPainter only decorates room-approved empty cells, never the
   // connecting tunnels. SewerPainter uses water 0.30/5 and grass 0.20/4.
   const roomPaintable = new Set(
-    layout.rooms.flatMap((room) => roomInterior(room).map(pointKey)),
+    layout.rooms
+      .filter((room) => !isSpecialRoomPreset(room.preset))
+      .flatMap((room) => roomInterior(room).map(pointKey)),
   );
   const roomAnchorPoint = (room: Room) =>
     roomInterior(room)
@@ -1593,7 +1687,8 @@ export function generateFloor(
     const walkable = (px: number, py: number) =>
       Boolean(
         inside(tiles, px, py) &&
-          isWalkable(tiles[py][px].terrain, true),
+          (isWalkable(tiles[py][px].terrain, true) ||
+            isDoor(tiles[py][px].terrain)),
       );
     const wall = (px: number, py: number) =>
       inside(tiles, px, py) && tiles[py][px].terrain === "wall";
@@ -1615,6 +1710,7 @@ export function generateFloor(
     !corridorPlanningFailed &&
     corridorWidths.length === layout.edges.length &&
     corridorLengths.length === layout.edges.length &&
+    corridorKinds.length === layout.edges.length &&
     corridorLengths.every((length) => length <= MAX_CORRIDOR_LENGTH) &&
     corridorWidths.filter((width) => width === 3).length ===
       expectedWideCorridors &&
@@ -1624,9 +1720,8 @@ export function generateFloor(
     !reachable.has(pointKey(exit)) &&
     reachableAfterUnlock.has(pointKey(exit)) &&
     layout.rooms.every((room) =>
-      reachableAfterUnlock.has(
-        pointKey(roomAnchors.get(room.id) ?? room.center),
-      ),
+      isSpecialRoomPreset(room.preset) ||
+      reachableAfterUnlock.has(pointKey(roomAnchors.get(room.id) ?? room.center)),
     );
   if (!validLayout && attempt < 64) {
     // RegularLevel retries a rejected builder result. Advance deterministically
@@ -1634,8 +1729,9 @@ export function generateFloor(
     return generateFloor(
       (seed + 0x9e3779b9 + attempt * 0x85ebca6b) >>> 0,
       attempt + 1,
-      feeling,
       forcedPresets,
+      forcedSpecialPreset,
+      floor,
     );
   }
   if (!validLayout) {
@@ -1647,6 +1743,45 @@ export function generateFloor(
         `exitLocked=${!reachable.has(pointKey(exit))}, exitReachable=${reachableAfterUnlock.has(pointKey(exit))})`,
     );
   }
+
+  // Corridor geometry is validated against the ordinary stone layout first.
+  // Converting only existing walls to CHASM and existing floor to bridge tiles
+  // cannot remove a walkable route or intrude into a room/crossing corridor.
+  corridorPlans
+    .filter((corridor) => corridor.kind === "chasm")
+    .forEach((corridor) => {
+      const walkwayRadius = corridor.width === 3 ? 1 : 0;
+      corridor.path.forEach((point) => {
+        const chasmRadius = walkwayRadius + 1;
+        for (let y = point.y - chasmRadius; y <= point.y + chasmRadius; y += 1) {
+          for (let x = point.x - chasmRadius; x <= point.x + chasmRadius; x += 1) {
+            if (
+              !inside(tiles, x, y) ||
+              roomPoints.has(`${x},${y}`) ||
+              tiles[y][x].terrain !== "wall"
+            ) {
+              continue;
+            }
+            tiles[y][x].terrain = "chasm";
+          }
+        }
+      });
+      corridor.path.forEach((point) => {
+        for (let y = point.y - walkwayRadius; y <= point.y + walkwayRadius; y += 1) {
+          for (let x = point.x - walkwayRadius; x <= point.x + walkwayRadius; x += 1) {
+            if (
+              !inside(tiles, x, y) ||
+              roomPoints.has(`${x},${y}`) ||
+              tiles[y][x].terrain !== "floor"
+            ) {
+              continue;
+            }
+            tiles[y][x].terrain = "specialFloor";
+          }
+        }
+      });
+    });
+
   const keyCandidates = tiles.flatMap((row, y) =>
     row.flatMap((tile, x) => {
       const point = { x, y };
@@ -1654,6 +1789,13 @@ export function generateFloor(
       return distance !== undefined &&
         distance >= 4 &&
         !isDoor(tile.terrain) &&
+        !specialRooms.some(
+          (room) =>
+            x >= room.left &&
+            x <= room.right &&
+            y >= room.top &&
+            y <= room.bottom,
+        ) &&
         tile.terrain !== "entrance" &&
         tile.terrain !== "exit"
         ? [point]
@@ -1679,7 +1821,13 @@ export function generateFloor(
     alchemyPoint,
     corridorWidths,
     corridorLengths,
+    corridorKinds,
     roomCount: layout.rooms.length,
+    ordinaryRoomCount: specs.standards.length,
+    ordinaryRoomBudget: specs.standards.reduce(
+      (total, room) => total + room.roomValue,
+      0,
+    ),
     roomPresets: layout.rooms.map((room) => room.preset),
     roomRegions: layout.rooms.map((room) => ({
       preset: room.preset,
@@ -1688,7 +1836,12 @@ export function generateFloor(
       right: room.right,
       bottom: room.bottom,
     })),
-    feeling,
+    specialRooms,
+    requiredFloorSpawns,
+    traps,
+    specialRewards,
+    toxicGasTiles,
+    magicalFireTiles,
     rng: random.value(),
   };
 }

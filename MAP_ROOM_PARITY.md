@@ -26,9 +26,27 @@
 | CaveRoom | 자연 동굴 윤곽 | wall, floor | 미구현 | P2 |
 | HallwayRoom | 길쭉한 통로형 방 | wall, floor | 미구현 | P2 |
 | Library 계열 일반 방 | 서가·링·분할 도서관 | library/region 장식 | 미구현 | P2 |
-| SpecialRoom 계열 | 함정·보상·몬스터·키 의존 방 | 방별 추가 시스템 | 미구현 | P3 |
 | SecretRoom 계열 | 비밀문과 발견 규칙 | secret door, 보상 | 미구현 | P3 |
 | Quest/Boss room | 퀘스트·보스 전용 생성 규칙 | 전용 상태·보상 | 미구현 | P3 |
+
+## SpecialRoom
+
+| room | gimmick | required item | required system | 상태 | 우선순위 |
+| --- | --- | --- | --- | --- | --- |
+| StorageRoom | 가연성 barricade 뒤 다중 보상 | 액체 화염 물약 | guaranteed floor spawn, fire interaction | 구현 | P0 |
+| MagicalFireRoom | 통과 가능하지만 매우 위험한 지속성 강화 화염 장판 뒤 보상 | 서리 물약 | persistent DungeonCloud, frost 전역 소화 | 구현 | P0 |
+| ToxicGasRoom | 유독 가스와 비활성 통풍구 | 정화 물약 | DungeonCloud, purified 상태 | 구현 | P0 |
+| TrapsRoom | 지역별 지원 함정 또는 CHASM 횡단 | 부유 물약 | 공통 trap state, levitation 이동 | 구현 | P0 |
+| CrystalChoiceRoom | 두 보상 중 하나 선택 | 수정 열쇠 1개 | CrystalKey/CrystalDoor | 구현 | P0 |
+| CrystalPathRoom | 깊이에 따라 가치가 오르는 6구획 | 수정 열쇠 3개 | 공통 crystal-key 소비 | 구현 | P0 |
+| PoolRoom | 피라냐 수조 | 투명화 물약 | aquatic enemy | 후속 | P1 |
+| SentryRoom | 고정 감시포탑 사거리 돌파 | 신속 물약 | turret/beam AI | 후속 | P1 |
+| CrystalVaultRoom | 제한 열쇠 보물 금고 | 수정 열쇠 | vault 보상 배치 | 후속 | P1 |
+| PitRoom / WeakFloorRoom | 낙하·층간 연결 | 방별 대응 | 층간 낙하 상태 | 후속 | P1 |
+
+지원 trap은 gripping, poison dart, explosive, teleportation, flashing으로 제한한다. 소환·분해 광선·별도 차원 계열은 필요한 시스템이 없어 현재 room pool에 넣지 않는다.
+
+특수방 종류·필수 해결 아이템·핵심 보상은 던전 전체 loot/special plan에서 먼저 확정한다. 방 painter는 아이템을 다시 뽑지 않고, 배치 가능한 reward slot만 제공한다.
 
 ## 후속 작업 가이드
 

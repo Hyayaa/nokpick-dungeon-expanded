@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import {
   findPath,
-  floorFeelingFor,
   generateFloor,
   isWalkable,
 } from "../app/game/map";
@@ -9,12 +8,13 @@ import type { GameState, Terrain, Tile } from "../app/game/types";
 import { SEWER_TILE_FRAMES, terrainVisual } from "../app/presentation/render";
 
 const seed = 0x43a5c7e1;
-const first = generateFloor(seed, 0, "chasm");
-const repeated = generateFloor(seed, 0, "chasm");
+const first = generateFloor(seed);
+const repeated = generateFloor(seed);
 
-assert.equal(first.feeling, "chasm");
 assert.ok(first.tiles.flat().some((tile) => tile.terrain === "chasm"));
 assert.ok(first.tiles.flat().some((tile) => tile.terrain === "specialFloor"));
+assert.ok(first.corridorKinds.includes("normal"));
+assert.ok(first.corridorKinds.includes("chasm"));
 assert.deepEqual(
   first.tiles,
   repeated.tiles,
@@ -71,22 +71,14 @@ assert.equal(
   "special floor variation must use the seeded tile variant",
 );
 
-const chasmFeelings = Array.from({ length: 280 }, (_, index) =>
-  floorFeelingFor(seed + index, 2),
-).filter((feeling) => feeling === "chasm").length;
+const corridorKinds = Array.from({ length: 48 }, (_, index) =>
+  generateFloor((seed + index * 7919) >>> 0).corridorKinds,
+).flat();
+const chasmCorridors = corridorKinds.filter((kind) => kind === "chasm").length;
+const chasmRatio = chasmCorridors / corridorKinds.length;
 assert.ok(
-  chasmFeelings > 8 && chasmFeelings < 32,
-  "chasm feeling must remain a low-probability variation",
-);
-assert.equal(
-  floorFeelingFor(seed, 1),
-  "none",
-  "the first floor cannot roll a chasm feeling",
-);
-assert.equal(
-  floorFeelingFor(0x00000002, 2),
-  "chasm",
-  "the developer test seed must force a chasm on floor two",
+  chasmRatio >= 0.14 && chasmRatio <= 0.26,
+  `corridor-level chasm allocation must stay near twenty percent, got ${chasmRatio}`,
 );
 
 console.log("chasm terrain, generation, pathfinding, and rendering checks passed");

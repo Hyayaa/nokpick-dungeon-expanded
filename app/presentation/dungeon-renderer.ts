@@ -117,6 +117,7 @@ export type DefeatedCompanionVisual = {
 export type GameAssets = {
   tiles: HTMLImageElement;
   water: HTMLImageElement;
+  terrainFeatures: HTMLImageElement;
   items: HTMLImageElement;
   player: HTMLImageElement;
   enemies: Record<EnemyKind, HTMLImageElement>;
@@ -560,6 +561,32 @@ export function startDungeonRenderer({
         }
       }
       context.globalAlpha = 1;
+      const trapFrames = {
+        gripping: 16,
+        poisonDart: 33,
+        explosive: 50,
+        teleportation: 67,
+        flashing: 84,
+        toxicVent: 96,
+      } as const;
+      for (const trap of state.traps ?? []) {
+        if (!inViewport(trap.x, trap.y)) continue;
+        if (
+          !revealAll &&
+          (!trap.revealed || !state.tiles[trap.y]?.[trap.x]?.discovered)
+        ) continue;
+        drawSheetFrame(
+          context,
+          assets.terrainFeatures,
+          trap.active ? trapFrames[trap.kind] : 0,
+          16,
+          16,
+          screenX(trap.x * TILE_SIZE),
+          screenY(trap.y * TILE_SIZE),
+          tileScreenSize,
+          tileScreenSize,
+        );
+      }
       drawPixelEffects(
         context,
         pixelEffectBuckets.ground,

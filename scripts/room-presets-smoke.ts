@@ -8,8 +8,8 @@ import {
 import type { Point } from "../app/game/types";
 
 const seed = 0x6d2f41b7;
-const generated = generateFloor(seed, 0, "none", P0_ROOM_PRESETS);
-const repeated = generateFloor(seed, 0, "none", P0_ROOM_PRESETS);
+const generated = generateFloor(seed, 0, P0_ROOM_PRESETS);
+const repeated = generateFloor(seed, 0, P0_ROOM_PRESETS);
 
 assert.deepEqual(generated.tiles, repeated.tiles, "fixed seeds must reproduce P0 room terrain");
 assert.deepEqual(
@@ -108,6 +108,42 @@ assert.deepEqual(
   "all P0 presets must be reachable through the random standard-room pool",
 );
 
+const generationSample = Array.from({ length: 48 }, (_, index) =>
+  generateFloor((seed + index * 104729) >>> 0),
+);
+assert.ok(
+  generationSample.some(
+    (floor) =>
+      floor.corridorKinds.includes("normal") &&
+      floor.corridorKinds.includes("chasm"),
+  ),
+  "a deterministic representative floor must mix normal and chasm corridors",
+);
+const averageOrdinaryBudget = generationSample.reduce(
+  (total, floor) => total + floor.ordinaryRoomBudget,
+  0,
+) / generationSample.length;
+const ordinaryReduction = 1 - averageOrdinaryBudget / 7;
+assert.ok(
+  ordinaryReduction >= 0.2 && ordinaryReduction <= 0.25,
+  `ordinary-room budget must fall by 20-25%, got ${ordinaryReduction}`,
+);
+const corridorKinds = generationSample.flatMap((floor) => floor.corridorKinds);
+const chasmRatio =
+  corridorKinds.filter((kind) => kind === "chasm").length /
+  corridorKinds.length;
+assert.ok(
+  chasmRatio >= 0.14 && chasmRatio <= 0.26,
+  `seeded chasm corridors must remain near 20%, got ${chasmRatio}`,
+);
+assert.deepEqual(
+  generationSample.map((floor) => floor.corridorKinds),
+  Array.from({ length: 48 }, (_, index) =>
+    generateFloor((seed + index * 104729) >>> 0).corridorKinds,
+  ),
+  "corridor kinds must be deterministic for each seed",
+);
+
 const base = createNewGame(seed);
 const expedition = createExpeditionGame(
   seed,
@@ -118,6 +154,7 @@ const expedition = createExpeditionGame(
     difficultyScale: base.difficultyScale,
     difficulty: base.difficulty,
     mainDropIds: [...base.mainDropIds],
+    specialRoomPlan: base.specialRoomPlan,
     lootPlan: base.lootPlan,
     goldPlan: base.goldPlan,
   },

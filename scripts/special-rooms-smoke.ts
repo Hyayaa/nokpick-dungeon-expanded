@@ -1,0 +1,392 @@
+import assert from "node:assert/strict";
+import {
+  createExpeditionGame,
+  createNewGame,
+  descendFloor,
+  pathTo,
+  playerStep,
+  throwItem,
+  useItem as consumeItem,
+  waitTurn,
+} from "../app/game/engine";
+import { findPath, isWalkable } from "../app/game/map";
+import {
+  DUNGEON_DEFINITIONS,
+  generateDungeonOffers,
+  selectMainLootEntries,
+} from "../app/game/campaign";
+import {
+  P0_SPECIAL_ROOM_PRESETS,
+  SPECIAL_ROOM_REGISTRY,
+  type SpecialRoomPreset,
+} from "../app/game/special-rooms";
+import {
+  createDeveloperTestMap,
+  DEVELOPER_TEST_MAP_ID,
+} from "../app/game/developer-test-map";
+import {
+  SEWER_TILE_FRAMES,
+  terrainVisual,
+  wallOverlayVisual,
+} from "../app/presentation/render";
+import type { GameState, Point } from "../app/game/types";
+
+const seed = 0x51ec1a17;
+const base = createNewGame(seed);
+const rules = {
+  dungeonId: base.dungeonId,
+  dungeonName: base.dungeonName,
+  maxFloor: base.maxFloor,
+  difficultyScale: base.difficultyScale,
+  difficulty: base.difficulty,
+  mainDropIds: [...base.mainDropIds],
+  specialRoomPlan: [],
+  lootPlan: [],
+  goldPlan: [],
+};
+const gameFor = (preset: SpecialRoomPreset, gameSeed = seed) =>
+  createExpeditionGame(
+    gameSeed,
+    rules,
+    base.player,
+    [],
+    [],
+    preset,
+  );
+const pointsWithTerrain = (game: GameState, terrain: string) =>
+  game.tiles.flatMap((row, y) =>
+    row.flatMap((tile, x) => tile.terrain === terrain ? [{ x, y }] : []),
+  );
+const roomContains = (
+  room: NonNullable<GameState["specialRooms"]>[number],
+  point: Point,
+) =>
+  point.x >= room.left && point.x <= room.right &&
+  point.y >= room.top && point.y <= room.bottom;
+const stageNextTo = (game: GameState, target: Point) => {
+  const approach = [
+    { x: target.x - 1, y: target.y },
+    { x: target.x + 1, y: target.y },
+    { x: target.x, y: target.y - 1 },
+    { x: target.x, y: target.y + 1 },
+  ].find((point) => {
+    const terrain = game.tiles[point.y]?.[point.x]?.terrain;
+    return terrain && isWalkable(terrain, false);
+  });
+  assert.ok(approach, "an adjacent staging point must exist");
+  game.player.x = approach.x;
+  game.player.y = approach.y;
+  return { dx: target.x - approach.x, dy: target.y - approach.y };
+};
+
+assert.equal(
+  new Set(SPECIAL_ROOM_REGISTRY.map((entry) => entry.compatibilityGroup)).size,
+  2,
+  "potion-solution and crystal-key compatibility groups must be registry data",
+);
+
+{
+  const showcase = createDeveloperTestMap(base);
+  const repeated = createDeveloperTestMap(base);
+  assert.equal(showcase.dungeonId, DEVELOPER_TEST_MAP_ID);
+  assert.deepEqual(showcase.tiles, repeated.tiles, "showcase geometry must stay fixed");
+  assert.deepEqual(showcase.traps, repeated.traps, "showcase traps must stay fixed");
+  for (const terrain of [
+    "floor",
+    "specialFloor",
+    "wall",
+    "grass",
+    "highGrass",
+    "water",
+    "chasm",
+    "door",
+    "openDoor",
+    "lockedDoor",
+    "crystalDoor",
+    "barricade",
+  ] as const) {
+    assert.ok(pointsWithTerrain(showcase, terrain).length > 0, `${terrain} must be exhibited`);
+  }
+  const showcasedTrapKinds = new Set((showcase.traps ?? []).map((trap) => trap.kind));
+  for (const kind of ["gripping", "poisonDart", "explosive", "teleportation", "flashing"] as const) {
+    assert.ok(showcasedTrapKinds.has(kind), `${kind} trap must be exhibited`);
+  }
+  assert.deepEqual(
+    new Set((showcase.specialRooms ?? []).map((room) => room.kind)),
+    new Set(P0_SPECIAL_ROOM_PRESETS),
+  );
+  assert.deepEqual(
+    new Set(showcase.objects.map((object) => object.kind)),
+    new Set(["chest", "crystalChest", "tomb", "alchemy"]),
+  );
+  assert.ok(showcase.clouds.some((cloud) => cloud.variant === "magicalFire"));
+  assert.ok(showcase.clouds.some((cloud) => cloud.kind === "fire" && !cloud.variant));
+  assert.ok(showcase.clouds.some((cloud) => cloud.kind === "frost"));
+  assert.ok(showcase.clouds.some((cloud) => cloud.kind === "toxic"));
+
+  const sidewaysCrystalDoor = { x: 27, y: 10 };
+  assert.equal(
+    terrainVisual(showcase, sidewaysCrystalDoor.x, sidewaysCrystalDoor.y),
+    SEWER_TILE_FRAMES.raisedDoorSideways,
+  );
+  assert.equal(
+    wallOverlayVisual(showcase, sidewaysCrystalDoor.x, sidewaysCrystalDoor.y - 1),
+    SEWER_TILE_FRAMES.doorSidewaysCrystal,
+  );
+  const raisedCrystalDoor = { x: 36, y: 9 };
+  assert.equal(
+    terrainVisual(showcase, raisedCrystalDoor.x, raisedCrystalDoor.y),
+    SEWER_TILE_FRAMES.raisedDoorCrystal,
+  );
+  assert.equal(
+    wallOverlayVisual(showcase, raisedCrystalDoor.x, raisedCrystalDoor.y - 1),
+    SEWER_TILE_FRAMES.doorOverhangCrystal,
+  );
+
+  showcase.enemies = [];
+  delete showcase.player.inventory.iron_key;
+  delete showcase.player.inventory.crystal_key;
+  const firstDoor = pointsWithTerrain(showcase, "crystalDoor")[0];
+  const firstStep = stageNextTo(showcase, firstDoor);
+  assert.equal(pathTo(showcase, firstDoor).length, 0, "keyless click must not enter a crystal door");
+  showcase.player.inventory.iron_key = 1;
+  const wrongKey = playerStep(showcase, firstStep.dx, firstStep.dy);
+  assert.equal(wrongKey.consumedTurn, false);
+  assert.equal(wrongKey.state.tiles[firstDoor.y][firstDoor.x].terrain, "crystalDoor");
+  assert.equal(wrongKey.state.player.inventory.iron_key, 1);
+
+  showcase.player.inventory.crystal_key = 1;
+  const clickPath = pathTo(showcase, firstDoor);
+  assert.deepEqual(clickPath.at(-1), firstDoor, "a keyed crystal door click must route into its interaction tile");
+  const turnBefore = showcase.turn;
+  const opened = playerStep(showcase, firstStep.dx, firstStep.dy).state;
+  assert.equal(opened.tiles[firstDoor.y][firstDoor.x].terrain, "openDoor");
+  assert.equal(opened.player.inventory.crystal_key ?? 0, 0);
+  assert.equal(opened.turn, turnBefore + 1);
+  const reloadedShowcase = JSON.parse(JSON.stringify(opened)) as GameState;
+  assert.equal(reloadedShowcase.tiles[firstDoor.y][firstDoor.x].terrain, "openDoor");
+  assert.equal(reloadedShowcase.player.inventory.crystal_key ?? 0, 0);
+
+  const secondDoor = pointsWithTerrain(opened, "crystalDoor")[0];
+  const secondStep = stageNextTo(opened, secondDoor);
+  const secondAttempt = playerStep(opened, secondStep.dx, secondStep.dy);
+  assert.equal(secondAttempt.consumedTurn, false, "one key must not open two crystal doors");
+  assert.equal(secondAttempt.state.tiles[secondDoor.y][secondDoor.x].terrain, "crystalDoor");
+
+  const keyIsolationGame = JSON.parse(JSON.stringify(opened)) as GameState;
+  const lockedDoor = pointsWithTerrain(keyIsolationGame, "lockedDoor")[0];
+  const lockedStep = stageNextTo(keyIsolationGame, lockedDoor);
+  keyIsolationGame.player.inventory.crystal_key = 1;
+  delete keyIsolationGame.player.inventory.iron_key;
+  const crystalOnIronDoor = playerStep(keyIsolationGame, lockedStep.dx, lockedStep.dy);
+  assert.equal(crystalOnIronDoor.consumedTurn, false);
+  assert.equal(crystalOnIronDoor.state.tiles[lockedDoor.y][lockedDoor.x].terrain, "lockedDoor");
+  assert.equal(crystalOnIronDoor.state.player.inventory.crystal_key, 1);
+}
+
+for (const preset of P0_SPECIAL_ROOM_PRESETS) {
+  const game = gameFor(preset);
+  const repeated = gameFor(preset);
+  assert.deepEqual(game.tiles, repeated.tiles, `${preset} terrain must be seeded`);
+  assert.deepEqual(game.traps, repeated.traps, `${preset} traps must be seeded`);
+  assert.deepEqual(
+    game.groundItems.filter((item) => item.id.includes("required")),
+    repeated.groundItems.filter((item) => item.id.includes("required")),
+    `${preset} required loot location must be seeded`,
+  );
+  const room = game.specialRooms?.find((candidate) => candidate.kind === preset);
+  assert.ok(room, `${preset} must generate through the shared room preset path`);
+  for (const requirement of game.requiredFloorSpawns ?? []) {
+    const item = game.groundItems.find((candidate) => candidate.id === requirement.id);
+    assert.ok(item, `${preset} must place ${requirement.defId}`);
+    assert.ok(!roomContains(room, item), `${requirement.defId} must be outside its puzzle room`);
+    assert.notEqual(game.tiles[item.y][item.x].terrain, "chasm");
+    assert.ok(
+      findPath(game.tiles, game.player, item, new Set(), false).length > 0,
+      `${requirement.defId} must be reachable without unlocking a reward room`,
+    );
+  }
+  assert.ok(
+    (game.traps ?? []).every((trap) =>
+      !game.groundItems.some((item) => item.x === trap.x && item.y === trap.y) &&
+      !game.enemies.some((enemy) => enemy.x === trap.x && enemy.y === trap.y),
+    ),
+    `${preset} traps must not overlap ordinary spawns`,
+  );
+}
+
+{
+  const game = gameFor("storage");
+  game.enemies = [];
+  const barricade = pointsWithTerrain(game, "barricade")[0];
+  assert.ok(barricade);
+  const step = stageNextTo(game, barricade);
+  game.player.inventory.potion_liquid_flame = 1;
+  const burned = throwItem(game, "potion_liquid_flame", barricade).state;
+  assert.equal(burned.tiles[barricade.y][barricade.x].terrain, "floor");
+  const entered = playerStep(burned, step.dx, step.dy);
+  assert.equal(entered.state.player.x, barricade.x);
+  assert.equal(entered.state.player.y, barricade.y);
+}
+
+{
+  const game = gameFor("magicalFire");
+  game.enemies = [];
+  const magicalCloud = game.clouds.find(
+    (cloud) => cloud.variant === "magicalFire",
+  );
+  const fire = magicalCloud?.tiles[0];
+  assert.ok(fire);
+  assert.ok(
+    ["floor", "specialFloor"].includes(game.tiles[fire.y][fire.x].terrain),
+    "magical fire must sit on ordinary walkable terrain",
+  );
+  const step = stageNextTo(game, fire);
+  const enteredFire = playerStep(game, step.dx, step.dy);
+  assert.equal(enteredFire.consumedTurn, true);
+  assert.ok(enteredFire.state.player.hp < game.player.hp);
+  assert.ok(
+    enteredFire.state.player.statuses.some(
+      (status) => status.id === "burning" && status.power >= 4,
+    ),
+  );
+  const persisted = waitTurn(enteredFire.state).state;
+  assert.ok(persisted.clouds.some((cloud) => cloud.variant === "magicalFire"));
+  persisted.player.inventory.potion_frost = 1;
+  stageNextTo(persisted, fire);
+  const cooled = throwItem(persisted, "potion_frost", fire).state;
+  assert.ok(cooled.clouds.every((cloud) => cloud.variant !== "magicalFire"));
+  const entered = playerStep(cooled, step.dx, step.dy);
+  assert.equal(entered.state.player.x, fire.x);
+}
+
+{
+  const game = gameFor("toxicGas");
+  const room = game.specialRooms?.find((candidate) => candidate.kind === "toxicGas");
+  assert.ok(room);
+  game.player.x = Math.floor((room.left + room.right) / 2);
+  game.player.y = Math.floor((room.top + room.bottom) / 2);
+  game.player.inventory.potion_purity = 1;
+  const purified = consumeItem(game, "potion_purity").state;
+  assert.ok(purified.player.statuses.some((status) => status.id === "purified"));
+  assert.ok(purified.clouds.every((cloud) => cloud.kind !== "toxic"));
+}
+
+{
+  let trapGame: GameState | null = null;
+  for (let candidateSeed = 1; candidateSeed <= 24; candidateSeed += 1) {
+    const candidate = gameFor("traps", candidateSeed);
+    if ((candidate.traps ?? []).some((trap) => trap.active)) {
+      trapGame = candidate;
+      break;
+    }
+  }
+  assert.ok(trapGame, "a supported deterministic trap variant must generate");
+  trapGame.enemies = [];
+  const trap = trapGame.traps?.find((candidate) => candidate.active);
+  assert.ok(trap);
+  const step = stageNextTo(trapGame, trap);
+  const triggered = playerStep(trapGame, step.dx, step.dy).state;
+  assert.equal(triggered.traps?.find((candidate) => candidate.id === trap.id)?.triggered, true);
+
+  let chasmGame: GameState | null = null;
+  for (let candidateSeed = 1; candidateSeed <= 24; candidateSeed += 1) {
+    const candidate = gameFor("traps", candidateSeed);
+    if (pointsWithTerrain(candidate, "chasm").some((point) =>
+      candidate.specialRooms?.some((room) => room.kind === "traps" && roomContains(room, point)))) {
+      chasmGame = candidate;
+      break;
+    }
+  }
+  assert.ok(chasmGame, "a deterministic CHASM trap variant must generate");
+  const chasm = pointsWithTerrain(chasmGame, "chasm").find((point) =>
+    chasmGame?.specialRooms?.some((room) => room.kind === "traps" && roomContains(room, point)));
+  assert.ok(chasm);
+  const chasmStep = stageNextTo(chasmGame, chasm);
+  assert.equal(playerStep(chasmGame, chasmStep.dx, chasmStep.dy).consumedTurn, false);
+  chasmGame.player.statuses.push({ id: "levitating", turns: 10, power: 1 });
+  assert.equal(playerStep(chasmGame, chasmStep.dx, chasmStep.dy).consumedTurn, true);
+}
+
+const consumeCrystalDoors = (preset: "crystalChoice" | "crystalPath", keyCount: number) => {
+  let game = gameFor(preset);
+  game.enemies = [];
+  game.groundItems = game.groundItems.filter((item) => item.defId !== "crystal_key");
+  game.player.inventory.crystal_key = keyCount;
+  const doors = pointsWithTerrain(game, "crystalDoor");
+  assert.ok(doors.length > keyCount);
+  for (const door of doors.slice(0, keyCount)) {
+    const step = stageNextTo(game, door);
+    game = playerStep(game, step.dx, step.dy).state;
+    assert.equal(game.tiles[door.y][door.x].terrain, "openDoor");
+  }
+  assert.equal(game.player.inventory.crystal_key ?? 0, 0);
+  const blockedDoor = doors[keyCount];
+  const blockedStep = stageNextTo(game, blockedDoor);
+  const blocked = playerStep(game, blockedStep.dx, blockedStep.dy);
+  assert.equal(blocked.state.tiles[blockedDoor.y][blockedDoor.x].terrain, "crystalDoor");
+  assert.equal(blocked.consumedTurn, false);
+  return { game: blocked.state, opened: doors.slice(0, keyCount), blockedDoor };
+};
+
+const choice = consumeCrystalDoors("crystalChoice", 1);
+const path = consumeCrystalDoors("crystalPath", 3);
+assert.equal(path.opened.length, 3);
+const reloaded = JSON.parse(JSON.stringify(choice.game)) as GameState;
+assert.equal(reloaded.player.inventory.crystal_key ?? 0, 0);
+assert.equal(reloaded.tiles[choice.opened[0].y][choice.opened[0].x].terrain, "openDoor");
+assert.equal(reloaded.tiles[choice.blockedDoor.y][choice.blockedDoor.x].terrain, "crystalDoor");
+
+for (const dungeon of DUNGEON_DEFINITIONS) {
+  const potionRooms = dungeon.specialRoomPlan.filter(
+    (entry) =>
+      SPECIAL_ROOM_REGISTRY.find((room) => room.preset === entry.preset)
+        ?.compatibilityGroup === "potion-solution",
+  );
+  assert.ok(potionRooms.length >= 1 && potionRooms.length <= 2);
+  assert.equal(new Set(potionRooms.map((room) => room.floor)).size, potionRooms.length);
+  const majorLoot = selectMainLootEntries(dungeon.lootPlan);
+  assert.equal(majorLoot.length, 2);
+  assert.ok(majorLoot.every((entry) => entry.source === "specialReward"));
+  assert.ok(
+    majorLoot.every((entry) =>
+      potionRooms.some(
+        (room) => room.floor === entry.floor && room.preset === entry.roomKind,
+      )),
+  );
+  const runestones = dungeon.lootPlan.filter(
+    (entry) => entry.purpose === "runeStone",
+  );
+  assert.ok(Math.abs(runestones.length - dungeon.floorCount) <= 1);
+  assert.ok(
+    [...new Set(runestones.map((entry) => entry.floor))].every(
+      (floor) => runestones.filter((entry) => entry.floor === floor).length <= 2,
+    ),
+  );
+}
+
+const plannedDungeon = DUNGEON_DEFINITIONS[0];
+const plannedPotionFloor = plannedDungeon.specialRoomPlan.find(
+  (entry) =>
+    SPECIAL_ROOM_REGISTRY.find((room) => room.preset === entry.preset)
+      ?.compatibilityGroup === "potion-solution",
+)!.floor;
+let plannedGame = createExpeditionGame(
+  seed,
+  plannedDungeon,
+  base.player,
+  [],
+);
+while (plannedGame.floor < plannedPotionFloor) plannedGame = descendFloor(plannedGame);
+const placedPlanIds = new Set([
+  ...plannedGame.groundItems.map((item) => item.dungeonLootId),
+  ...plannedGame.objects.flatMap((object) => object.lootPlanEntryIds ?? []),
+]);
+selectMainLootEntries(plannedDungeon.lootPlan)
+  .filter((entry) => entry.floor === plannedPotionFloor)
+  .forEach((entry) => assert.ok(placedPlanIds.has(entry.id)));
+
+assert.deepEqual(generateDungeonOffers(seed), generateDungeonOffers(seed));
+assert.notDeepEqual(generateDungeonOffers(seed), generateDungeonOffers(seed + 1));
+
+console.log("special rooms, guaranteed loot, traps, crystal choices, determinism, and reload checks passed");

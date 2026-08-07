@@ -17,6 +17,18 @@ export const TERRAIN_DETAILS: Record<
     descriptionKo: "특별한 효과 없이 걸을 수 있는 바닥입니다.",
     descriptionEn: "Ordinary walkable dungeon floor.",
   },
+  specialFloor: {
+    nameKo: "특수 석재 바닥",
+    nameEn: "Special Stone Floor",
+    descriptionKo: "특수방과 다리를 표시하는 안전한 바닥입니다.",
+    descriptionEn: "Safe floor used for special chambers and bridges.",
+  },
+  chasm: {
+    nameKo: "낭떠러지",
+    nameEn: "Chasm",
+    descriptionKo: "평소에는 건널 수 없으며 부유 중에만 안전하게 이동할 수 있습니다.",
+    descriptionEn: "Impassable normally, but safely traversable while levitating.",
+  },
   grass: {
     nameKo: "짧은 풀",
     nameEn: "Short Grass",
@@ -64,6 +76,18 @@ export const TERRAIN_DETAILS: Record<
     nameEn: "Locked Door",
     descriptionKo: "이 층의 쇠 열쇠가 있어야 열 수 있습니다. 상호작용에는 1턴이 듭니다.",
     descriptionEn: "Requires this floor's iron key and costs one turn to unlock.",
+  },
+  crystalDoor: {
+    nameKo: "수정문",
+    nameEn: "Crystal Door",
+    descriptionKo: "이 층의 수정 열쇠 하나를 소비해야 열 수 있는 보상문입니다.",
+    descriptionEn: "A reward door that consumes one crystal key from this floor.",
+  },
+  barricade: {
+    nameKo: "바리케이드",
+    nameEn: "Barricade",
+    descriptionKo: "열쇠로 열 수 없는 가연성 장벽입니다. 화염으로 태울 수 있습니다.",
+    descriptionEn: "A flammable barrier that cannot be opened by a key.",
   },
 };
 

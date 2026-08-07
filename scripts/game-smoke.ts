@@ -1023,31 +1023,12 @@ for (const dungeon of DUNGEON_DEFINITIONS) {
     featuredEntries.map((entry) => entry.defId),
     `${dungeon.nameKo} must advertise the exact planned instances selected as main loot`,
   );
-  const bestEligibleGradeByItem = new Map<string, number>();
-  dungeon.lootPlan.forEach((entry) => {
-    const definition = ITEM_DEFS[entry.defId];
-    if (
-      !definition ||
-      ["seed", "potion", "stone"].includes(definition.category)
-    ) return;
-    const grade = itemGradeIndex(resolveItemGrade(definition, entry.instance));
-    bestEligibleGradeByItem.set(
-      entry.defId,
-      Math.max(bestEligibleGradeByItem.get(entry.defId) ?? -1, grade),
-    );
-  });
-  const expectedTopGrades = [...bestEligibleGradeByItem.values()]
-    .sort((a, b) => b - a)
-    .slice(0, 2);
-  const featuredGrades = featuredEntries
-    .map((entry) =>
-      itemGradeIndex(resolveItemGrade(ITEM_DEFS[entry.defId], entry.instance)),
-    )
-    .sort((a, b) => b - a);
-  assert.deepEqual(
-    featuredGrades,
-    expectedTopGrades,
-    `${dungeon.nameKo} must feature the two highest grades in its complete pre-generated loot plan`,
+  assert.ok(
+    featuredEntries.every(
+      (entry) =>
+        entry.purpose === "majorLoot" && entry.source === "specialReward",
+    ),
+    `${dungeon.nameKo} must bind advertised instances to special-room reward slots`,
   );
   assert.equal(
     dungeon.difficultyGrade,
@@ -1073,18 +1054,12 @@ for (const dungeon of DUNGEON_DEFINITIONS) {
   const plannedRunestones = dungeon.lootPlan.filter(
     (entry) => ITEM_DEFS[entry.defId]?.category === "stone",
   );
-  assert.equal(
-    plannedRunestones.length,
-    1,
-    `${dungeon.nameKo} must plan exactly one runestone`,
-  );
-  assert.deepEqual(
-    {
-      floor: plannedRunestones[0]?.floor,
-      source: plannedRunestones[0]?.source,
-    },
-    { floor: 2, source: "ground" },
-    `${dungeon.nameKo} must place its guaranteed runestone on floor two`,
+  assert.ok(
+    Math.abs(plannedRunestones.length - dungeon.floorCount) <= 1 &&
+      plannedRunestones.every(
+        (entry) => entry.source === "ground" && entry.purpose === "runeStone",
+      ),
+    `${dungeon.nameKo} must pre-plan about one runestone per floor`,
   );
   assert.ok(
     dungeon.goldPlan.every(
@@ -1462,9 +1437,12 @@ for (let seed = 1; seed <= 24; seed += 1) {
     if (scrollExpedition.floor >= scrollExpedition.maxFloor) break;
     scrollExpedition = descendFloor(scrollExpedition);
   }
-  assert.ok(
-    plannedScrolls === 1 || plannedScrolls === 2,
-    `seed ${seed} must plan only one or two scrolls for the full dungeon`,
+  assert.equal(
+    plannedScrolls,
+    sewerRules.lootPlan.filter(
+      (entry) => ITEM_DEFS[entry.defId]?.category === "scroll",
+    ).length,
+    `seed ${seed} must read the immutable dungeon-wide scroll plan`,
   );
   assert.equal(
     spawnedScrolls,
@@ -1564,12 +1542,14 @@ const expectedPlacedGold = {
   enemy: sewerRules.goldPlan
     .filter((entry) => entry.source === "enemy")
     .reduce((total, entry) => total + entry.amount, 0),
-  runestones: 1,
+  runestones: sewerRules.lootPlan.filter(
+    (entry) => ITEM_DEFS[entry.defId]?.category === "stone",
+  ).length,
 };
 assert.deepEqual(
   collectPlacedDungeonGold(0x3150a1),
   expectedPlacedGold,
-  "the first map layout must place every gold pile, monster drop, and floor-two runestone",
+  "the first map layout must place every gold pile, monster drop, and planned runestone",
 );
 assert.deepEqual(
   collectPlacedDungeonGold(0x3150a2),
