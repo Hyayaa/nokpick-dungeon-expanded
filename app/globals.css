@@ -5379,12 +5379,18 @@ kbd {
 
 .commerce-modal {
   width: min(1180px, calc(100vw - 28px));
+  height: min(760px, calc(100vh - 30px));
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .commerce-split-layout {
   display: grid;
+  flex: 1;
   min-height: 0;
   grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  overflow: hidden;
 }
 
 .commerce-column {
@@ -5543,7 +5549,8 @@ kbd {
 }
 
 .commerce-warehouse-panel .warehouse-fixed-grid {
-  max-height: min(390px, calc(100vh - 365px));
+  max-height: none;
+  min-height: 0;
   flex: 1;
 }
 
@@ -5796,21 +5803,12 @@ kbd {
   scrollbar-color: #5b4339 #0a0d0b;
 }
 
-.blacksmith-companion-panel .is-smithy-roster {
+.blacksmith-companion-panel .is-reserve-roster {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
   padding: 10px;
   scrollbar-color: #5b4339 #0a0d0b;
-}
-
-.preparation-owner-card.is-smithy {
-  border-color: #37312d;
-  background: #0c100e;
-}
-
-.preparation-owner-card.is-smithy > header {
-  grid-template-columns: auto minmax(0, 1fr);
 }
 
 .fixed-item-slot.is-upgradeable-choice {
