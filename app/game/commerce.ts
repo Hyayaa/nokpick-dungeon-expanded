@@ -494,6 +494,54 @@ export const smithyNextGrade = (grade: ItemGrade): ItemGrade | null => {
 export const smithyUpgradeCost = (grade: ItemGrade): number | null =>
   grade === "S" ? null : BLACKSMITH_UPGRADE_COST[grade];
 
+export type SmithyRequirement = {
+  resourceKind: "currency" | "item";
+  resourceId: string;
+  required: number;
+  owned: number;
+  satisfied: boolean;
+};
+
+type SmithyRequirementDefinition = Pick<
+  SmithyRequirement,
+  "resourceKind" | "resourceId" | "required"
+>;
+
+const smithyRequirementDefinitions = (
+  grade: ItemGrade,
+): SmithyRequirementDefinition[] => {
+  const goldCost = smithyUpgradeCost(grade);
+  if (goldCost === null) return [];
+  return [
+    {
+      resourceKind: "currency",
+      resourceId: "gold",
+      required: goldCost,
+    },
+  ];
+};
+
+export function smithyUpgradeRequirements(
+  campaign: CampaignSave,
+  grade: ItemGrade,
+): SmithyRequirement[] {
+  return smithyRequirementDefinitions(grade).map((requirement) => {
+    const owned = requirement.resourceKind === "currency"
+      ? requirement.resourceId === "gold"
+        ? campaign.gold
+        : 0
+      : (campaign.warehouse.stacks[requirement.resourceId] ?? 0) +
+        campaign.warehouse.instances.filter(
+          (instance) => instance.defId === requirement.resourceId,
+        ).length;
+    return {
+      ...requirement,
+      owned,
+      satisfied: owned >= requirement.required,
+    };
+  });
+}
+
 export type SmithyTarget =
   | { kind: "warehouse"; instanceId: string }
   | {
@@ -642,7 +690,8 @@ export function upgradeCampaignEquipmentGrade(
     });
   }
   const cost = smithyUpgradeCost(fromGrade)!;
-  if (campaign.gold < cost) {
+  const requirements = smithyUpgradeRequirements(campaign, fromGrade);
+  if (!requirements.every((requirement) => requirement.satisfied)) {
     return smithyFailure(campaign, "not-enough-gold", {
       itemId: candidate.itemId,
       fromGrade,

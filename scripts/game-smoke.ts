@@ -96,6 +96,7 @@ import {
   shopSalePrice,
   smithyNextGrade,
   smithyUpgradeCost,
+  smithyUpgradeRequirements,
   upgradeCampaignEquipmentGrade,
 } from "../app/game/commerce";
 import {
@@ -780,6 +781,27 @@ assert.deepEqual(
 assert.equal(smithyNextGrade("A"), "S");
 assert.equal(smithyNextGrade("S"), null);
 assert.equal(smithyUpgradeCost("S"), null);
+const smithyRequirementFixture = createPreparationTransferFixture();
+smithyRequirementFixture.campaign.gold = 1_599;
+assert.deepEqual(
+  smithyUpgradeRequirements(smithyRequirementFixture.campaign, "F"),
+  [
+    {
+      resourceKind: "currency",
+      resourceId: "gold",
+      required: 1_600,
+      owned: 1_599,
+      satisfied: false,
+    },
+  ],
+  "smithy costs must expose extensible resource requirements without adding unapproved item costs",
+);
+smithyRequirementFixture.campaign.gold = 1_600;
+assert.equal(
+  smithyUpgradeRequirements(smithyRequirementFixture.campaign, "F")[0].satisfied,
+  true,
+  "the current gold requirement must become satisfied at the existing exact cost",
+);
 const smithyFixture = createPreparationTransferFixture();
 smithyFixture.sword.grade = "F";
 smithyFixture.sword.traits = [
@@ -902,6 +924,11 @@ assert.match(
   dungeonUiSource,
   /target\.zone === "smithyTarget"[\s\S]*listSmithyCandidates\(campaign\)[\s\S]*smithyNextGrade\(grade\)[\s\S]*setBlacksmithTarget\(candidate\.target\)/,
   "only an existing upgradeable smithy candidate may register through drag and drop",
+);
+assert.match(
+  dungeonUiSource,
+  /smithyUpgradeRequirements\(campaign, currentGrade\)[\s\S]*requirements\.every[\s\S]*resourceKind[\s\S]*resourceId[\s\S]*requirement\.owned[\s\S]*requirement\.required[\s\S]*requirement\.satisfied/,
+  "the blacksmith must render each requirement's resource, owned amount, required amount, and satisfaction state",
 );
 assert.match(
   dungeonUiSource,

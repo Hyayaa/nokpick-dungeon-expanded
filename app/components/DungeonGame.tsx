@@ -143,7 +143,7 @@ import {
   sellWarehouseItem,
   shopSalePrice,
   smithyNextGrade,
-  smithyUpgradeCost,
+  smithyUpgradeRequirements,
   upgradeCampaignEquipmentGrade,
   type ShopListingSource,
   type SmithyTarget,
@@ -5425,8 +5425,20 @@ function BlacksmithModal({
     ? resolveItemGrade(ITEM_DEFS[selected.itemId], selected.instance)
     : null;
   const nextGrade = currentGrade ? smithyNextGrade(currentGrade) : null;
-  const cost = currentGrade ? smithyUpgradeCost(currentGrade) : null;
-  const canAfford = cost !== null && campaign.gold >= cost;
+  const requirements = currentGrade
+    ? smithyUpgradeRequirements(campaign, currentGrade)
+    : [];
+  const requirementsMet =
+    nextGrade !== null &&
+    requirements.length > 0 &&
+    requirements.every((requirement) => requirement.satisfied);
+  const unmetRequirement = requirements.find(
+    (requirement) => !requirement.satisfied,
+  ) ?? null;
+  const requirementLabel = (resourceId: string, resourceKind: "currency" | "item") =>
+    resourceKind === "currency" && resourceId === "gold"
+      ? "골드"
+      : ITEM_DEFS[resourceId]?.name ?? resourceId;
   const candidateForInstance = (instance: InventoryInstance | null) =>
     instance
       ? candidates.find((candidate) => candidate.instance.id === instance.id) ?? null
@@ -5526,14 +5538,32 @@ function BlacksmithModal({
                   <i aria-hidden="true">→</i>
                   <span data-item-grade={nextGrade ?? currentGrade}><small>{nextGrade ? "강화 후" : "최고 등급"}</small><b>{nextGrade ?? currentGrade}</b></span>
                 </div>
-                {nextGrade && cost !== null ? (
+                {nextGrade && requirements.length > 0 ? (
                   <>
-                    <dl>
-                      <div><dt>강화 비용</dt><dd>{formatGold(cost)} G</dd></div>
-                      <div><dt>보유 골드</dt><dd>{formatGold(campaign.gold)} G</dd></div>
+                    <dl className="blacksmith-requirement-list">
+                      {requirements.map((requirement) => (
+                        <div
+                          className={requirement.satisfied ? "is-satisfied" : "is-missing"}
+                          key={`${requirement.resourceKind}:${requirement.resourceId}`}
+                        >
+                          <dt>
+                            <small>{requirement.resourceKind === "currency" ? "통화" : "재료"}</small>
+                            <strong>{requirementLabel(requirement.resourceId, requirement.resourceKind)}</strong>
+                          </dt>
+                          <dd>
+                            <span>보유 {requirement.resourceId === "gold" ? `${formatGold(requirement.owned)} G` : `${requirement.owned}개`}</span>
+                            <span>필요 {requirement.resourceId === "gold" ? `${formatGold(requirement.required)} G` : `${requirement.required}개`}</span>
+                            <b>{requirement.satisfied ? "충족" : "부족"}</b>
+                          </dd>
+                        </div>
+                      ))}
                     </dl>
-                    <button type="button" className="blacksmith-upgrade-button" disabled={!canAfford} onClick={() => onUpgrade(selected.target)}>
-                      {canAfford ? `${currentGrade} → ${nextGrade} 등급 강화` : `${formatGold(cost - campaign.gold)} G 부족`}
+                    <button type="button" className="blacksmith-upgrade-button" disabled={!requirementsMet} onClick={() => onUpgrade(selected.target)}>
+                      {requirementsMet
+                        ? `${currentGrade} → ${nextGrade} 등급 강화`
+                        : unmetRequirement?.resourceId === "gold"
+                          ? `${formatGold(unmetRequirement.required - unmetRequirement.owned)} G 부족`
+                          : `${unmetRequirement ? requirementLabel(unmetRequirement.resourceId, unmetRequirement.resourceKind) : "강화 재료"} 부족`}
                     </button>
                   </>
                 ) : (

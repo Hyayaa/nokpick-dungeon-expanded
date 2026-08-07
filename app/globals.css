@@ -6026,6 +6026,56 @@ kbd {
   font-size: 10px;
 }
 
+.blacksmith-requirement-list > div {
+  align-items: center;
+  gap: 14px;
+}
+
+.blacksmith-requirement-list dt,
+.blacksmith-requirement-list dd {
+  display: grid;
+  gap: 3px;
+}
+
+.blacksmith-requirement-list dt small {
+  color: #716d68;
+  font-size: 7px;
+}
+
+.blacksmith-requirement-list dt strong {
+  color: #d9d5ca;
+  font-size: 10px;
+}
+
+.blacksmith-requirement-list dd {
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  justify-content: end;
+  font-family: inherit;
+}
+
+.blacksmith-requirement-list dd span {
+  color: #8b8780;
+  font-size: 8px;
+}
+
+.blacksmith-requirement-list dd b {
+  min-width: 34px;
+  padding: 3px 5px;
+  border: 1px solid currentColor;
+  font-family: var(--pixel);
+  font-size: 8px;
+  text-align: center;
+}
+
+.blacksmith-requirement-list .is-satisfied dd b {
+  color: #8ed19e;
+}
+
+.blacksmith-requirement-list .is-missing dd b {
+  color: #df8062;
+}
+
 .blacksmith-upgrade-button {
   min-height: 44px;
   border: 1px solid #a25c43;
