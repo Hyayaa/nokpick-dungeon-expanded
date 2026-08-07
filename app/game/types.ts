@@ -355,6 +355,7 @@ export type GroundItem = Point & {
   instance?: InventoryInstance;
   lootOrigin?: LootOrigin;
   dungeonLootId?: string;
+  questId?: string;
 };
 
 export type DungeonObjectKind =
@@ -439,6 +440,66 @@ export type Enemy = Point & {
   statuses: StatusEffect[];
   drop?: EnemyDrop | null;
   goldDrop?: number;
+  questId?: string;
+  uniqueName?: string;
+};
+
+export type QuestKind = "uniqueEnemy" | "recoverItem";
+
+export type QuestStatus =
+  | "available"
+  | "active"
+  | "readyToTurnIn"
+  | "completed";
+
+export type QuestDefinition = {
+  id: string;
+  kind: QuestKind;
+  titleKo: string;
+  titleEn: string;
+  descriptionKo: string;
+  descriptionEn: string;
+  objectiveKo: string;
+  objectiveEn: string;
+  npcNameKo: string;
+  npcNameEn: string;
+  npcClassId: CompanionClassId;
+  targetEnemyKind?: EnemyKind;
+  targetNameKo?: string;
+  targetNameEn?: string;
+  questItemId?: string;
+  rewardItemId: string;
+  rewardQuantity: number;
+  floor: number;
+};
+
+export type QuestState = {
+  questId: string;
+  status: QuestStatus;
+  progress: number;
+  required: number;
+  acceptedAtTurn?: number;
+  readyAtTurn?: number;
+  completedAtTurn?: number;
+  roomEnteredAtTurn?: number;
+};
+
+export type QuestNpc = Point & {
+  id: string;
+  questId: string;
+  nameKo: string;
+  nameEn: string;
+  classId: CompanionClassId;
+};
+
+export type QuestRoom = {
+  id: string;
+  questId: string;
+  kind: QuestKind;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
 };
 
 export type Equipment = {
@@ -658,6 +719,9 @@ export type GameState = {
   traps?: DungeonTrap[];
   specialRooms?: DungeonSpecialRoom[];
   requiredFloorSpawns?: GuaranteedFloorSpawn[];
+  quests?: QuestState[];
+  questNpcs?: QuestNpc[];
+  questRooms?: QuestRoom[];
   floor: number;
   dungeonId: string;
   dungeonName: string;
@@ -769,6 +833,11 @@ export type ActionResult = {
   interacted?: boolean;
   enchanted?: boolean;
   alchemyOpened?: boolean;
+  questInteraction?: {
+    npcId: string;
+    questId: string;
+    status: QuestStatus;
+  };
   interactionKind?: ActionInteractionKind;
   reachedExit?: boolean;
   soundCues?: GameSoundCue[];
