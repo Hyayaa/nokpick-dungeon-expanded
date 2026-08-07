@@ -400,7 +400,6 @@ type ItemSlotAddress =
   | { zone: "shopSellTarget" }
   | { zone: "shopWarehouseTarget" }
   | { zone: "shopStock"; listingId: string }
-  | { zone: "shopBuyback"; listingId: string }
   | { zone: "smithyTarget" }
   | { zone: "preparationInventory"; index: number }
   | {
@@ -5238,22 +5237,13 @@ function CommerceModal({
   const selectedEntry = selectedRef
     ? resolveWarehouseItemRef(warehouse, selectedRef)
     : null;
-  const listingSections = [
-    {
-      source: "stock" as const,
-      eyebrow: "TODAY'S STOCK",
-      title: "오늘의 상품",
-      listings: campaign.shop.stock,
-      empty: "오늘 준비된 상품이 없습니다.",
-    },
-    {
-      source: "buyback" as const,
-      eyebrow: "BUYBACK",
-      title: "되사기",
-      listings: campaign.shop.buyback,
-      empty: "이번 갱신 주기에 판매한 물품이 없습니다.",
-    },
-  ];
+  const listingSections = [{
+    source: "stock" as const,
+    eyebrow: "MARKET STOCK",
+    title: "판매 상품",
+    listings: campaign.shop.stock,
+    empty: "현재 판매 중인 상품이 없습니다.",
+  }];
   return (
     <div className="modal-backdrop warehouse-backdrop commerce-backdrop">
       <section className="warehouse-modal commerce-modal" role="dialog" aria-modal="true" aria-labelledby="commerce-title">
@@ -5320,9 +5310,10 @@ function CommerceModal({
                   </header>
                   <div className="shop-listing-grid">
                     {section.listings.map((listing) => {
-                      const address: ItemSlotAddress = section.source === "stock"
-                        ? { zone: "shopStock", listingId: listing.id }
-                        : { zone: "shopBuyback", listingId: listing.id };
+                      const address: ItemSlotAddress = {
+                        zone: "shopStock",
+                        listingId: listing.id,
+                      };
                       const affordable = campaign.gold >= listing.unitPrice;
                       return (
                         <article className="shop-listing-card" key={listing.id}>
@@ -5483,7 +5474,7 @@ function BlacksmithModal({
               <p>모든 보유 아이템을 표시합니다. 빛나는 장비만 강화 대상으로 선택할 수 있습니다.</p>
               <CampaignWarehouseInventory
                 warehouse={campaign.warehouse}
-                className="blacksmith-warehouse-grid"
+                className="preparation-storage-grid blacksmith-warehouse-grid"
                 selectedIndex={selectedWarehouseIndex}
                 contextLabel="대장간 창고"
                 isItemHighlighted={(entry) =>
@@ -5506,7 +5497,7 @@ function BlacksmithModal({
               <p>모든 동료와 현재 장착 중인 장비를 표시합니다.</p>
               <CampaignCompanionEquipmentRoster
                 companions={campaign.companions}
-                placement="smithy"
+                placement="reserve"
                 selectedItemKey={selectedTargetKey}
                 emptyMessage="등록된 동료가 없습니다."
                 itemSelectionKey={(_companion, _target, entry) => {
@@ -10519,19 +10510,16 @@ export default function DungeonGame() {
       }
       if (
         source.zone === "warehouse" &&
-        (target.zone === "shopSellTarget" ||
-          target.zone === "shopStock" ||
-          target.zone === "shopBuyback")
+        (target.zone === "shopSellTarget" || target.zone === "shopStock")
       ) {
         handleShopSell(source.index);
         return;
       }
       if (
-        (source.zone === "shopStock" || source.zone === "shopBuyback") &&
+        source.zone === "shopStock" &&
         (target.zone === "shopWarehouseTarget" || target.zone === "warehouse")
       ) {
-        const listingSource = source.zone === "shopStock" ? "stock" : "buyback";
-        handleShopBuy(listingSource, source.listingId);
+        handleShopBuy("stock", source.listingId);
         return;
       }
       if (
