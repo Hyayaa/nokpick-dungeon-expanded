@@ -5,14 +5,16 @@ const EMPTY_FRAME = -1;
 const TERRAIN_CODE: Record<Terrain, number> = {
   wall: 1,
   floor: 2,
-  grass: 3,
-  highGrass: 4,
-  water: 5,
-  entrance: 6,
-  exit: 7,
-  door: 8,
-  openDoor: 9,
-  lockedDoor: 10,
+  specialFloor: 3,
+  chasm: 4,
+  grass: 5,
+  highGrass: 6,
+  water: 7,
+  entrance: 8,
+  exit: 9,
+  door: 10,
+  openDoor: 11,
+  lockedDoor: 12,
 };
 
 export type DungeonRenderCache = {

@@ -29,6 +29,7 @@ const atlasFrame = (column: number, row: number) =>
   column - 1 + SEWER_ATLAS_COLUMNS * (row - 1);
 
 const GROUND = atlasFrame(1, 1);
+const CHASM = atlasFrame(9, 2);
 const WATER = atlasFrame(1, 3);
 const RAISED_WALLS = atlasFrame(1, 6);
 const RAISED_DOORS = atlasFrame(1, 8);
@@ -39,10 +40,17 @@ const DOOR_OVERHANG = atlasFrame(1, 15);
 
 export const SEWER_TILE_FRAMES = Object.freeze({
   floor: GROUND,
+  specialFloor: GROUND + 4,
   grass: GROUND + 2,
   floorAlt1: GROUND + 6,
   grassAlt: GROUND + 8,
+  specialFloorAlt: GROUND + 10,
   floorAlt2: GROUND + 12,
+  chasm: CHASM,
+  chasmFloor: CHASM + 1,
+  chasmSpecialFloor: CHASM + 2,
+  chasmWall: CHASM + 3,
+  chasmWater: CHASM + 4,
   entrance: GROUND + 16,
   exit: GROUND + 17,
   water: WATER,
@@ -76,6 +84,7 @@ const doorLike = (terrain: Terrain | null) =>
   terrain === "door" || terrain === "openDoor" || terrain === "lockedDoor";
 const stitchableWithWater = (terrain: Terrain | null) =>
   terrain === "floor" ||
+  terrain === "specialFloor" ||
   terrain === "grass" ||
   terrain === "highGrass" ||
   terrain === "entrance" ||
@@ -88,11 +97,39 @@ const floorVisual = (variant: number) => {
   return SEWER_TILE_FRAMES.floor;
 };
 
+const chasmVisualForAbove = (terrain: Terrain | null) => {
+  if (terrain === "specialFloor") return SEWER_TILE_FRAMES.chasmSpecialFloor;
+  if (terrain === "water") return SEWER_TILE_FRAMES.chasmWater;
+  if (terrain === "wall" || doorLike(terrain)) {
+    return SEWER_TILE_FRAMES.chasmWall;
+  }
+  if (
+    terrain === "floor" ||
+    terrain === "grass" ||
+    terrain === "highGrass" ||
+    terrain === "entrance" ||
+    terrain === "exit"
+  ) {
+    return SEWER_TILE_FRAMES.chasmFloor;
+  }
+  return SEWER_TILE_FRAMES.chasm;
+};
+
 export function terrainVisual(state: GameState, x: number, y: number) {
   const tile = state.tiles[y][x];
   const terrain = tile.terrain;
 
   if (terrain === "floor") return floorVisual(tile.variant);
+  if (terrain === "specialFloor") {
+    return tile.variant >= 50
+      ? SEWER_TILE_FRAMES.specialFloorAlt
+      : SEWER_TILE_FRAMES.specialFloor;
+  }
+  if (terrain === "chasm") {
+    // Shattered stitches a chasm cell from the terrain directly above it,
+    // preserving the raised perspective of floors, bridges, walls, and water.
+    return chasmVisualForAbove(tileAt(state, x, y - 1));
+  }
   if (terrain === "grass") {
     return tile.variant >= 50
       ? SEWER_TILE_FRAMES.grassAlt

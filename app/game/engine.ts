@@ -17,6 +17,7 @@ import {
 } from "./augments";
 import {
   findPath,
+  floorFeelingFor,
   generateFloor,
   hasLineOfSight,
   isWalkable,
@@ -1315,7 +1316,11 @@ const makeFloorState = (
   carriedCompanions?: Companion[],
   expeditionRules: ExpeditionRules = DEFAULT_EXPEDITION_RULES,
 ) => {
-  const generated = generateFloor(seed ^ Math.imul(floor, 0x9e3779b1));
+  const generated = generateFloor(
+    seed ^ Math.imul(floor, 0x9e3779b1),
+    0,
+    floorFeelingFor(seed, floor),
+  );
   const player = carriedPlayer
     ? {
         ...carriedPlayer,
@@ -2204,7 +2209,7 @@ export function playerStep(
   }
 
   const terrain = targetTerrain;
-  if (terrain === "wall") {
+  if (terrain === "wall" || terrain === "chasm") {
     return { state: next, motions, effects, consumedTurn: false };
   }
 
@@ -2614,7 +2619,7 @@ export function manualCompanionStep(
   }
 
   const terrain = state.tiles[target.y][target.x].terrain;
-  if (terrain === "wall") {
+  if (terrain === "wall" || terrain === "chasm") {
     return { state, motions: [], effects: [], consumedTurn: false };
   }
   if (terrain === "lockedDoor") {

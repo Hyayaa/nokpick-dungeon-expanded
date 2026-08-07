@@ -61,7 +61,21 @@ export type GeneratedFloor = {
   corridorWidths: Array<1 | 3>;
   corridorLengths: number[];
   roomCount: number;
+  feeling: FloorFeeling;
   rng: number;
+};
+
+export type FloorFeeling = "none" | "chasm";
+
+// Level.Feeling.CHASM is one outcome of Random.Int(14) after the first floor.
+// Keep the feeling roll separate from the builder RNG so ordinary floors retain
+// their existing room layout while the same campaign seed stays deterministic.
+export const floorFeelingFor = (seed: number, floor: number): FloorFeeling => {
+  if (floor <= 1) return "none";
+  const floorSeed = (seed ^ Math.imul(floor, 0x9e3779b1)) >>> 0;
+  const feelingRoll =
+    (Math.imul(floorSeed ^ 0x51ed270b, 1664525) + 1013904223) >>> 0;
+  return feelingRoll % 14 === 0 ? "chasm" : "none";
 };
 
 const pointKey = (point: Point) => `${point.x},${point.y}`;
@@ -95,7 +109,9 @@ export const blocksSight = (terrain: Terrain) =>
   terrain === "highGrass";
 
 export const isWalkable = (terrain: Terrain, canUnlock = false) =>
-  terrain !== "wall" && (terrain !== "lockedDoor" || canUnlock);
+  terrain !== "wall" &&
+  terrain !== "chasm" &&
+  (terrain !== "lockedDoor" || canUnlock);
 
 const roomInterior = (room: Room) => {
   const points: Point[] = [];
@@ -425,6 +441,7 @@ const connectRooms = (
   second: Room,
   usedDoorPoints: Set<string>,
   width: 1 | 3,
+  tunnelTerrain: Extract<Terrain, "floor" | "specialFloor">,
 ) => {
   let firstDoor: Point;
   let secondDoor: Point;
@@ -532,7 +549,7 @@ const connectRooms = (
         ) {
           continue;
         }
-        tiles[y][x].terrain = "floor";
+        tiles[y][x].terrain = tunnelTerrain;
       }
     }
   });
@@ -1260,8 +1277,13 @@ const normalizeLayout = (layout: FloorLayout) => {
   };
 };
 
-export function generateFloor(seed: number, attempt = 0): GeneratedFloor {
+export function generateFloor(
+  seed: number,
+  attempt = 0,
+  feeling: FloorFeeling = "none",
+): GeneratedFloor {
   const random = makeRandom(seed);
+  const tunnelTerrain = feeling === "chasm" ? "specialFloor" : "floor";
   const specs = roomSpecs(random);
   // RegularLevel chooses evenly between LoopBuilder and FigureEightBuilder.
   const layout =
@@ -1271,7 +1293,7 @@ export function generateFloor(seed: number, attempt = 0): GeneratedFloor {
   const { width, height } = normalizeLayout(layout);
   const tiles: Tile[][] = Array.from({ length: height }, () =>
     Array.from({ length: width }, () => ({
-      terrain: "wall" as Terrain,
+      terrain: (feeling === "chasm" ? "chasm" : "wall") as Terrain,
       discovered: false,
       visible: false,
       discoveredMask: 0,
@@ -1325,6 +1347,7 @@ export function generateFloor(seed: number, attempt = 0): GeneratedFloor {
       second,
       usedDoorPoints,
       wideEdgeIndexes.has(edgeIndex) ? 3 : 1,
+      tunnelTerrain,
     );
     if (!connection) {
       corridorPlanningFailed = true;
@@ -1383,20 +1406,26 @@ export function generateFloor(seed: number, attempt = 0): GeneratedFloor {
   doorAxes.forEach((axis, key) => {
     const [x, y] = key.split(",").map(Number);
     const terrain = tiles[y][x].terrain;
-    const setUnlessDoor = (px: number, py: number, next: Terrain) => {
+    const setUnlessDoor = (px: number, py: number) => {
       if (!inside(tiles, px, py) || isDoor(tiles[py][px].terrain)) return;
-      tiles[py][px].terrain = next;
+      tiles[py][px].terrain = roomPoints.has(`${px},${py}`)
+        ? "floor"
+        : tunnelTerrain;
+    };
+    const setWallUnlessDoor = (px: number, py: number) => {
+      if (!inside(tiles, px, py) || isDoor(tiles[py][px].terrain)) return;
+      tiles[py][px].terrain = "wall";
     };
     if (axis === "horizontal") {
-      setUnlessDoor(x - 1, y, "floor");
-      setUnlessDoor(x + 1, y, "floor");
-      setUnlessDoor(x, y - 1, "wall");
-      setUnlessDoor(x, y + 1, "wall");
+      setUnlessDoor(x - 1, y);
+      setUnlessDoor(x + 1, y);
+      setWallUnlessDoor(x, y - 1);
+      setWallUnlessDoor(x, y + 1);
     } else {
-      setUnlessDoor(x, y - 1, "floor");
-      setUnlessDoor(x, y + 1, "floor");
-      setUnlessDoor(x - 1, y, "wall");
-      setUnlessDoor(x + 1, y, "wall");
+      setUnlessDoor(x, y - 1);
+      setUnlessDoor(x, y + 1);
+      setWallUnlessDoor(x - 1, y);
+      setWallUnlessDoor(x + 1, y);
     }
     tiles[y][x].terrain = terrain;
   });
@@ -1538,6 +1567,7 @@ export function generateFloor(seed: number, attempt = 0): GeneratedFloor {
     return generateFloor(
       (seed + 0x9e3779b9 + attempt * 0x85ebca6b) >>> 0,
       attempt + 1,
+      feeling,
     );
   }
   if (!validLayout) {
@@ -1582,6 +1612,7 @@ export function generateFloor(seed: number, attempt = 0): GeneratedFloor {
     corridorWidths,
     corridorLengths,
     roomCount: layout.rooms.length,
+    feeling,
     rng: random.value(),
   };
 }
