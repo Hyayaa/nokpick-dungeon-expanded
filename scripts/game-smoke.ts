@@ -955,7 +955,7 @@ assert.match(
 assert.match(
   dungeonUiSource,
   /shop: createShopState\(nextOfferSeed, current\.expeditions\)/,
-  "every expedition return must replace stock and clear the old buyback cycle",
+  "every expedition return must replace the full shop stock cycle",
 );
 assert.match(
   dungeonUiSource,

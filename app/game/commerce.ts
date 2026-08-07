@@ -280,7 +280,7 @@ export function normalizeShopState(
     );
     return normalized ? [normalized] : [];
   });
-  const buyback = raw.buyback.flatMap((listing, index) => {
+  const legacyBuyback = raw.buyback.flatMap((listing, index) => {
     const normalized = normalizedListing(
       listing,
       `restored-buyback-${index + 1}`,
@@ -379,7 +379,7 @@ export function sellWarehouseItem(
   const payout = shopSalePrice(definition, soldInstance);
   const nextShop = cloneShopState(campaign.shop);
   const mergeTarget = !soldInstance
-    ? nextShop.buyback.find(
+    ? nextShop.stock.find(
         (listing) =>
           listing.itemId === itemId &&
           !listing.instance &&
@@ -389,8 +389,8 @@ export function sellWarehouseItem(
   if (mergeTarget) {
     mergeTarget.quantity += 1;
   } else {
-    nextShop.buyback.push({
-      id: `buyback-${nextShop.refreshSeed.toString(16)}-${nextShop.nextListingSerial}`,
+    nextShop.stock.push({
+      id: `resale-${nextShop.refreshSeed.toString(16)}-${nextShop.nextListingSerial}`,
       itemId,
       quantity: 1,
       unitPrice: payout,

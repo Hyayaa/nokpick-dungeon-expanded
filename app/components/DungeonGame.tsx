@@ -5308,9 +5308,9 @@ function CommerceModal({
           >
             <header className="commerce-column-header">
               <div><p className="eyebrow">MARKET</p><h3 id="commerce-shop-title">상점</h3></div>
-              <span>{campaign.shop.stock.length + campaign.shop.buyback.length}종</span>
+              <span>{campaign.shop.stock.length}종</span>
             </header>
-            <p className="shop-refresh-note">창고 아이템을 이 영역에 놓으면 판매됩니다. 상점과 되사기 목록은 던전 귀환 때 갱신되며, 되사기 가격은 판매 당시 받은 금액과 같습니다.</p>
+            <p className="shop-refresh-note">창고 아이템을 이 영역에 놓으면 판매됩니다. 판매한 물품은 이 목록에 추가되며, 판매 당시 받은 금액으로 다시 구매할 수 있습니다. 목록은 던전 귀환 때 갱신됩니다.</p>
             <div className="commerce-shop-scroll">
               {listingSections.map((section) => (
                 <section className="shop-listing-section" key={section.source}>
@@ -5356,7 +5356,7 @@ function CommerceModal({
                             <ItemSlotContents itemId={listing.itemId} size={40} instance={listing.instance} quantity={listing.quantity} showQuantity={listing.quantity > 1} />
                           </button>
                           <div>
-                            <small>{section.source === "buyback" ? "판매가 그대로" : ITEM_CATEGORY_NAMES[ITEM_DEFS[listing.itemId].category]}</small>
+                            <small>{ITEM_CATEGORY_NAMES[ITEM_DEFS[listing.itemId].category]}</small>
                             <strong>{ITEM_DEFS[listing.itemId]?.name}</strong>
                             <span>{listing.instance ? "고유 장비" : `재고 ${listing.quantity}개`}</span>
                           </div>

@@ -5390,7 +5390,7 @@ kbd {
 .commerce-column {
   display: flex;
   min-width: 0;
-  min-height: min(570px, calc(100vh - 190px));
+  min-height: 0;
   flex-direction: column;
   background: #0a0e0c;
 }
