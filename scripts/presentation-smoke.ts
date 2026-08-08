@@ -190,10 +190,23 @@ const dungeonGameSource = readFileSync(
   "app/components/DungeonGame.tsx",
   "utf8",
 );
+const dungeonCssSource = readFileSync("app/globals.css", "utf8");
 assert.equal(
   (dungeonGameSource.match(/new GameAudioRuntime\(\)/g) ?? []).length,
   1,
   "hub UI, dungeon effects, skills, and music must share one audio runtime",
+);
+assert.match(
+  dungeonGameSource,
+  /function CharacterResourceBars[\s\S]*is-health[\s\S]*is-\$\{resourceType\}/,
+  "party portraits must render HP plus exactly the profession's primary resource bar",
+);
+assert.match(dungeonCssSource, /\.character-resource-bar\.is-stamina > i[\s\S]*#d4b64f/);
+assert.match(dungeonCssSource, /\.character-resource-bar\.is-mana > i[\s\S]*#4f83d4/);
+assert.match(
+  dungeonGameSource,
+  /skill-resource-cost[\s\S]*skill\.resourceCost/,
+  "skill details must derive cost metadata from the skill definition",
 );
 
 const panel = { width: 240, height: 180 };

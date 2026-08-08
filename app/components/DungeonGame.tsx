@@ -83,6 +83,7 @@ import {
   zapWand,
 } from "../game/engine";
 import { questDefinition } from "../game/quests";
+import { cloneGameWithoutTiles } from "../game/state";
 import { P0_ROOM_PRESETS } from "../game/room-presets";
 import { isSpecialRoomPreset } from "../game/special-rooms";
 import {
@@ -188,6 +189,14 @@ import {
   COMPANION_PROFESSIONS,
   COMPANION_SKILLS,
 } from "../game/companion-skills";
+import {
+  canPaySkillResource,
+  currentSkillResource,
+  formatSkillResourceAmount,
+  maxSkillResource,
+  normalizeSkillResources,
+  primarySkillResource,
+} from "../game/skill-resources";
 import {
   ALCHEMY_ENCHANT_CATALYST_IDS,
   ALCHEMY_ENCHANT_RECIPES,
@@ -1622,6 +1631,47 @@ function CampaignCompanionEquipmentRoster({
   );
 }
 
+function CharacterResourceBars({
+  character,
+}: {
+  character: Player | Companion;
+}) {
+  const language = useUiLanguage();
+  const text = (korean: string, english: string) =>
+    uiText(language, korean, english);
+  const resources = normalizeSkillResources(character);
+  const resourceType = primarySkillResource(character.professionId);
+  const resourceCurrent = currentSkillResource(resources, resourceType);
+  const resourceMaximum = maxSkillResource(resources, resourceType);
+  const resourceLabel = resourceType === "stamina"
+    ? text("기력", "Stamina")
+    : text("마나", "Mana");
+  const percent = (current: number, maximum: number) =>
+    Math.max(0, Math.min(100, maximum > 0 ? current / maximum * 100 : 0));
+  const hpLabel = `${text("생명력", "Health")} ${character.hp} / ${character.maxHp}`;
+  const primaryLabel = `${resourceLabel} ${formatSkillResourceAmount(
+    resourceCurrent,
+  )} / ${formatSkillResourceAmount(resourceMaximum)}`;
+  return (
+    <div className="character-resource-bars">
+      <span
+        className="character-resource-bar is-health"
+        title={hpLabel}
+        aria-label={hpLabel}
+      >
+        <i style={{ width: `${percent(character.hp, character.maxHp)}%` }} />
+      </span>
+      <span
+        className={`character-resource-bar is-${resourceType}`}
+        title={primaryLabel}
+        aria-label={primaryLabel}
+      >
+        <i style={{ width: `${percent(resourceCurrent, resourceMaximum)}%` }} />
+      </span>
+    </div>
+  );
+}
+
 function CompanionPanel({
   game,
   selection,
@@ -1746,14 +1796,18 @@ function CompanionPanel({
     );
   const skillButtons = (
     casterId: string,
-    skillIds: readonly CompanionSkillId[],
-    cooldowns: Partial<Record<CompanionSkillId, number>>,
+    character: Player | Companion,
     defeated: boolean,
   ) => (
     <div className="companion-skill-list" aria-label={text("수동 스킬", "Manual Skills")}>
-      {skillIds.slice(0, 2).map((skillId) => {
+      {character.skills.slice(0, 2).map((skillId) => {
         const skill = COMPANION_SKILLS[skillId];
-        const cooldown = cooldowns[skillId] ?? 0;
+        const cooldown = character.skillCooldowns[skillId] ?? 0;
+        const hasResource = canPaySkillResource(
+          character,
+          skill.resourceType,
+          skill.resourceCost,
+        );
         const active =
           selectedSkill?.casterId === casterId &&
           selectedSkill.skillId === skillId;
@@ -1766,7 +1820,7 @@ function CompanionPanel({
             <button
               type="button"
               className="companion-skill-action__cast"
-              disabled={busy || defeated || cooldown > 0}
+              disabled={busy || defeated || cooldown > 0 || !hasResource}
               onClick={() => onSkill(casterId, skillId)}
               aria-pressed={active}
               aria-label={text(`${skill.nameKo} 사용`, `Use ${skill.nameEn}`)}
@@ -1777,6 +1831,10 @@ function CompanionPanel({
                 <small>
                   {cooldown > 0
                     ? text(`${cooldown}턴 후`, `${cooldown} turns`)
+                    : !hasResource
+                      ? skill.resourceType === "stamina"
+                        ? text("기력 부족", "Low stamina")
+                        : text("마나 부족", "Low mana")
                     : skill.range === 0
                       ? text("자기 칸", "Self tile")
                       : text(`사거리 ${skill.range}`, `Range ${skill.range}`)}
@@ -1846,16 +1904,15 @@ function CompanionPanel({
               }
               size={40}
             />
-            <div>
+            <CharacterResourceBars character={game.player} />
+            <div className="companion-card__identity-copy">
               <strong>{game.player.name}</strong>
               <small>{language === "ko" ? controlledProfession.nameKo : controlledProfession.nameEn} · Lv.{game.player.level}</small>
-              <small>HP {game.player.hp}/{game.player.maxHp}</small>
             </div>
           </button>
           {skillButtons(
             PLAYER_ID,
-            game.player.skills,
-            game.player.skillCooldowns,
+            game.player,
             game.player.hp <= 0,
           )}
           <div className="companion-loadout">
@@ -1998,16 +2055,15 @@ function CompanionPanel({
                   }
                   size={40}
                 />
-                <div>
+                <CharacterResourceBars character={companion} />
+                <div className="companion-card__identity-copy">
                   <strong>{displayName}</strong>
                   <small>{language === "ko" ? profession.nameKo : profession.nameEn} · Lv.{companion.level}</small>
-                  <small>HP {companion.hp}/{companion.maxHp}</small>
                 </div>
               </button>
               {skillButtons(
                 companion.id,
-                companion.skills,
-                companion.skillCooldowns,
+                companion,
                 companion.hp <= 0,
               )}
               <div className="companion-loadout">
@@ -2151,9 +2207,8 @@ function CompanionPanel({
       ) : null}
       {inspectedSkill && inspectedSkillOwner && (
         <SkillDescriptionWindow
-          casterName={inspectedSkillOwner.name}
+          caster={inspectedSkillOwner}
           skillId={inspectedSkill.skillId}
-          cooldown={inspectedSkillOwner.skillCooldowns[inspectedSkill.skillId] ?? 0}
           anchor={inspectedSkill.anchor}
           disabled={busy || inspectedSkillOwner.hp <= 0}
           onUse={() => {
@@ -2630,17 +2685,15 @@ function CompanionInspector({
 }
 
 function SkillDescriptionWindow({
-  casterName,
+  caster,
   skillId,
-  cooldown,
   anchor,
   disabled,
   onUse,
   onClose,
 }: {
-  casterName: string;
+  caster: Player | Companion;
   skillId: CompanionSkillId;
-  cooldown: number;
   anchor: DescriptionAnchor;
   disabled: boolean;
   onUse: () => void;
@@ -2650,6 +2703,15 @@ function SkillDescriptionWindow({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const skill = COMPANION_SKILLS[skillId];
+  const cooldown = caster.skillCooldowns[skillId] ?? 0;
+  const hasResource = canPaySkillResource(
+    caster,
+    skill.resourceType,
+    skill.resourceCost,
+  );
+  const resourceLabel = skill.resourceType === "stamina"
+    ? text("기력", "Stamina")
+    : text("마나", "Mana");
   return (
     <DescriptionWindow
       anchor={anchor}
@@ -2663,7 +2725,7 @@ function SkillDescriptionWindow({
           {language === "ko" ? skill.shortKo : skill.shortEn.slice(0, 2)}
         </i>
         <div>
-          <small>{casterName} · {text("수동 스킬", "Manual Skill")}</small>
+          <small>{caster.name} · {text("수동 스킬", "Manual Skill")}</small>
           <h3>{language === "ko" ? skill.nameKo : skill.nameEn}</h3>
         </div>
         <button type="button" onClick={onClose} aria-label={text("스킬 설명 닫기", "Close skill details")}>×</button>
@@ -2673,8 +2735,9 @@ function SkillDescriptionWindow({
         <dl>
           <div><dt>{text("대상", "Target")}</dt><dd>{skill.target === "ally" ? text("아군", "Ally") : skill.target === "enemy" ? text("적", "Enemy") : text("타일", "Tile")}</dd></div>
           <div><dt>{text("사거리", "Range")}</dt><dd>{skill.range === 0 ? text("자기 칸", "Self") : `${skill.range}`}</dd></div>
+          <div className={`skill-resource-cost is-${skill.resourceType}`}><dt>{text("소모", "Cost")}</dt><dd>{resourceLabel} {formatSkillResourceAmount(skill.resourceCost)}</dd></div>
           <div><dt>{text("재사용", "Cooldown")}</dt><dd>{skill.cooldown}{text("턴", " turns")}</dd></div>
-          <div><dt>{text("현재", "Current")}</dt><dd>{cooldown > 0 ? text(`${cooldown}턴 남음`, `${cooldown} turns`) : text("사용 가능", "Ready")}</dd></div>
+          <div><dt>{text("현재", "Current")}</dt><dd>{cooldown > 0 ? text(`${cooldown}턴 남음`, `${cooldown} turns`) : !hasResource ? text(`${resourceLabel} 부족`, `Low ${resourceLabel.toLowerCase()}`) : text("사용 가능", "Ready")}</dd></div>
         </dl>
       </div>
       <footer className="description-window-actions">
@@ -2682,7 +2745,7 @@ function SkillDescriptionWindow({
         <button
           type="button"
           className="is-primary"
-          disabled={disabled || cooldown > 0}
+          disabled={disabled || cooldown > 0 || !hasResource}
           onClick={onUse}
         >
           {text("스킬 사용", "Use Skill")}
@@ -6083,7 +6146,9 @@ function DungeonRun({
   onGameSave,
   onFinish,
 }: DungeonRunProps) {
-  const [game, setGame] = useState<GameState>(() => initialGame);
+  const [game, setGame] = useState<GameState>(() =>
+    cloneGameWithoutTiles(initialGame),
+  );
   const [busy, setBusy] = useState(false);
   const [autoExploring, setAutoExploring] = useState(false);
   const [stopAutoExploreOnFullBag] = useState(true);
@@ -6180,6 +6245,7 @@ function DungeonRun({
   const manualPartyModeRef = useRef(false);
   const controlledActorIdRef = useRef(PLAYER_ID);
   const manualActedIdsRef = useRef(new Set<string>());
+  const manualResourceRegenExcludedIdsRef = useRef(new Set<string>());
   const targetingOverlayRef = useRef<TargetingOverlay | null>(null);
   const inspectModeRef = useRef(false);
   const hoverRef = useRef<Point | null>(null);
@@ -7496,10 +7562,17 @@ function DungeonRun({
 
       const acted = new Set(manualActedIdsRef.current);
       acted.add(actorId);
+      const resourceRegenExcluded = new Set(
+        manualResourceRegenExcludedIdsRef.current,
+      );
+      (deferred.resourceRegenExcludedActorIds ?? []).forEach((id) =>
+        resourceRegenExcluded.add(id),
+      );
       const living = livingPartyIds(gameRef.current);
       const allReady = living.every((id) => acted.has(id));
       if (!allReady) {
         manualActedIdsRef.current = acted;
+        manualResourceRegenExcludedIdsRef.current = resourceRegenExcluded;
         setManualActedIds(new Set(acted));
         const nextActor = living.find((id) => !acted.has(id));
         if (nextActor) selectControlledActor(nextActor);
@@ -7507,9 +7580,13 @@ function DungeonRun({
       }
 
       manualActedIdsRef.current = new Set();
+      manualResourceRegenExcludedIdsRef.current = new Set();
       setManualActedIds(new Set());
       await resolveAction(
-        advanceManualPartyRound(gameRef.current),
+        advanceManualPartyRound(
+          gameRef.current,
+          [...resourceRegenExcluded],
+        ),
         token,
       );
       if (actionTokenRef.current !== token || gameRef.current.gameOver) return;
