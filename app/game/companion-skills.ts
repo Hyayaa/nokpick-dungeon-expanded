@@ -3,6 +3,7 @@ import {
   CompanionProfessionId,
   CompanionSkillCooldowns,
   CompanionSkillId,
+  CampaignMaterialCost,
   GameSoundId,
   SkillResourceType,
 } from "./types";
@@ -23,14 +24,15 @@ export type CompanionSkillDefinition = {
   resourceType: SkillResourceType;
   resourceCost: number;
   trainingCost: number;
+  trainingMaterials: CampaignMaterialCost;
   requiresLineOfFire: boolean;
   accent: string;
   soundId: GameSoundId;
 };
 
-export const COMPANION_SKILLS: Record<
+const COMPANION_SKILL_DEFINITIONS: Record<
   CompanionSkillId,
-  CompanionSkillDefinition
+  Omit<CompanionSkillDefinition, "trainingMaterials">
 > = {
   shockLeap: {
     id: "shockLeap",
@@ -433,6 +435,21 @@ export const COMPANION_SKILLS: Record<
     soundId: "skillShadow",
   },
 };
+
+const DEFAULT_SKILL_TRAINING_MATERIALS: CampaignMaterialCost = {
+  seed: 4,
+  potion: 1,
+};
+
+export const COMPANION_SKILLS = Object.fromEntries(
+  Object.entries(COMPANION_SKILL_DEFINITIONS).map(([skillId, definition]) => [
+    skillId,
+    {
+      ...definition,
+      trainingMaterials: { ...DEFAULT_SKILL_TRAINING_MATERIALS },
+    },
+  ]),
+) as Record<CompanionSkillId, CompanionSkillDefinition>;
 
 export const COMPANION_SKILL_IDS = Object.keys(
   COMPANION_SKILLS,

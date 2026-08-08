@@ -469,7 +469,7 @@ const createPreparationTransferFixture = () => {
   );
   return {
     campaign: {
-      version: 6 as const,
+      version: 7 as const,
       warehouse: {
         stacks: { potion_healing: 3 },
         instances: [sword, ring],
@@ -482,6 +482,7 @@ const createPreparationTransferFixture = () => {
         ],
       },
       companions,
+      materials: { potion: 10, seed: 10, runestone: 10 },
       expeditions: 0,
       completedExpeditions: 0,
       gold: 0,
@@ -964,7 +965,7 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
-  /version: 6[\s\S]*shop: normalizeShopState\(parsed\.shop, offerSeed, expeditions\)/,
+  /version: 7[\s\S]*materials: addMaterials[\s\S]*shop: normalizeShopState\(parsed\.shop, offerSeed, expeditions\)/,
   "campaign restore must migrate older saves into the persisted shop schema",
 );
 assert.match(

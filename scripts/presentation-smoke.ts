@@ -233,6 +233,26 @@ assert.match(
   /\.training-skill-card\.is-unlearned[\s\S]*opacity:\s*0\.58/,
   "unlearned skills must be dimmed without hiding their presentation",
 );
+assert.match(
+  dungeonGameSource,
+  /CampaignHeader[\s\S]*CAMPAIGN_MATERIAL_KINDS\.map[\s\S]*CAMPAIGN_MATERIAL_NAMES/,
+  "the Hub ledger must show Gold and all three campaign materials",
+);
+assert.match(
+  dungeonGameSource,
+  /selectedSkill\.trainingMaterials\[kind\][\s\S]*campaign\.materials\[kind\]/,
+  "Training Ground requirements must derive material costs from skill metadata",
+);
+assert.match(
+  dungeonGameSource,
+  /smithyUpgradeRequirements\(campaign, currentGrade\)[\s\S]*보유 룬석/,
+  "the Blacksmith must show its shared Gold and Runestone requirement state",
+);
+assert.match(
+  dungeonGameSource,
+  /results-materials[\s\S]*result\.materialsGained\[kind\]/,
+  "expedition results must show only materials converted on that return",
+);
 
 const panel = { width: 240, height: 180 };
 const viewport = { width: 1000, height: 700 };

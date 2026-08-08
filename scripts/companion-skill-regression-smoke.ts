@@ -315,8 +315,9 @@ const trainingCompanion = createCompanion("warrior", { x: 0, y: 0 }, 20);
 trainingCompanion.learnedSkills = ["shockLeap", "weaponThrow"];
 trainingCompanion.skills = ["shockLeap", "weaponThrow"];
 const trainingCampaign: CampaignSave = {
-  version: 6,
+  version: 7,
   warehouse: createInitialWarehouse(),
+  materials: { potion: 10, seed: 40, runestone: 0 },
   companions: [trainingCompanion],
   expeditions: 0,
   completedExpeditions: 0,

@@ -49,6 +49,13 @@ import {
 } from "./special-rooms";
 import { isQuestItemDefinitionId } from "./quests";
 import { normalizeSkillResources } from "./skill-resources";
+import {
+  addMaterials,
+  createCampaignMaterials,
+  extractWarehouseMaterials,
+  materialKindForItem,
+  type CampaignMaterials,
+} from "./campaign-materials";
 
 export type DungeonId = string;
 export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -1148,8 +1155,9 @@ export type ExpeditionStats = {
 };
 
 export type CampaignSave = {
-  version: 6;
+  version: 7;
   warehouse: WarehouseState;
+  materials: CampaignMaterials;
   companions: Companion[];
   expeditions: number;
   completedExpeditions: number;
@@ -1237,7 +1245,6 @@ export const createInitialWarehouse = (): WarehouseState => {
   );
   const warehouse: WarehouseState = {
     stacks: {
-      potion_healing: 3,
       ration: 4,
       scroll_mapping: 1,
     },
@@ -1571,6 +1578,7 @@ export const takeLoadoutFromWarehouse = (
     slotRefs: [],
   };
   for (const [itemId, requestedQuantity] of Object.entries(requested.stacks)) {
+    if (materialKindForItem(ITEM_DEFS[itemId])) continue;
     const available = Math.max(0, next.stacks[itemId] ?? 0);
     const quantity = Math.max(0, Math.min(available, requestedQuantity));
     if (quantity <= 0) continue;
@@ -1636,16 +1644,24 @@ export const applyLoadoutToPlayer = (
 export const depositPlayerInventory = (
   warehouse: WarehouseState,
   player: Player,
+  materials: CampaignMaterials = createCampaignMaterials(),
 ) => {
-  const next = cloneWarehouse(warehouse);
+  const extractedWarehouse = extractWarehouseMaterials(cloneWarehouse(warehouse));
+  const next = extractedWarehouse.warehouse;
   let recoveredItems = 0;
+  const materialsGained = createCampaignMaterials();
   for (const [itemId, quantity] of Object.entries(player.inventory)) {
     if (
       quantity <= 0 ||
       ITEM_DEFS[itemId]?.category === "key" ||
       isQuestItemDefinitionId(itemId)
     ) continue;
-    next.stacks[itemId] = (next.stacks[itemId] ?? 0) + quantity;
+    const materialKind = materialKindForItem(ITEM_DEFS[itemId]);
+    if (materialKind) {
+      materialsGained[materialKind] += quantity;
+    } else {
+      next.stacks[itemId] = (next.stacks[itemId] ?? 0) + quantity;
+    }
     recoveredItems += quantity;
   }
   const equippedAutoRefs = new Set(
@@ -1688,7 +1704,15 @@ export const depositPlayerInventory = (
     recoveredItems += 1;
   }
   next.slots = normalizeStorageSlots(next, WAREHOUSE_SLOT_COUNT);
-  return { warehouse: next, recoveredItems };
+  return {
+    warehouse: next,
+    materials: addMaterials(
+      addMaterials(materials, extractedWarehouse.materialsGained),
+      materialsGained,
+    ),
+    materialsGained,
+    recoveredItems,
+  };
 };
 
 export const mergeReturningCompanions = (

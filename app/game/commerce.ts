@@ -27,6 +27,11 @@ import type {
   ShopListing,
   ShopState,
 } from "./types";
+import {
+  materialKindForItem,
+  payMaterials,
+  type CampaignMaterialCost,
+} from "./campaign-materials";
 
 export const SHOP_STOCK_SIZE = 12;
 
@@ -165,7 +170,9 @@ export function shopSalePrice(
 const tradableDefinitions = () =>
   Object.values(ITEM_DEFS).filter(
     (definition) =>
-      definition.id !== "gold" && definition.category !== "key",
+      definition.id !== "gold" &&
+      definition.category !== "key" &&
+      !materialKindForItem(definition),
   );
 
 export function createShopState(seed: number, refreshNumber = 0): ShopState {
@@ -235,6 +242,7 @@ const normalizedListing = (
     !ITEM_DEFS[raw.itemId] ||
     raw.itemId === "gold" ||
     ITEM_DEFS[raw.itemId].category === "key" ||
+    materialKindForItem(ITEM_DEFS[raw.itemId]) ||
     typeof raw.quantity !== "number" ||
     !Number.isFinite(raw.quantity) ||
     typeof raw.unitPrice !== "number" ||
@@ -495,7 +503,7 @@ export const smithyUpgradeCost = (grade: ItemGrade): number | null =>
   grade === "S" ? null : BLACKSMITH_UPGRADE_COST[grade];
 
 export type SmithyRequirement = {
-  resourceKind: "currency" | "item";
+  resourceKind: "currency" | "material";
   resourceId: string;
   required: number;
   owned: number;
@@ -518,6 +526,13 @@ const smithyRequirementDefinitions = (
       resourceId: "gold",
       required: goldCost,
     },
+    ...(grade === "F"
+      ? [{
+          resourceKind: "material" as const,
+          resourceId: "runestone",
+          required: 3,
+        }]
+      : []),
   ];
 };
 
@@ -530,10 +545,9 @@ export function smithyUpgradeRequirements(
       ? requirement.resourceId === "gold"
         ? campaign.gold
         : 0
-      : (campaign.warehouse.stacks[requirement.resourceId] ?? 0) +
-        campaign.warehouse.instances.filter(
-          (instance) => instance.defId === requirement.resourceId,
-        ).length;
+      : campaign.materials[
+          requirement.resourceId as keyof CampaignSave["materials"]
+        ] ?? 0;
     return {
       ...requirement,
       owned,
@@ -611,7 +625,8 @@ type SmithyFailureReason =
   | "missing-item"
   | "invalid-item"
   | "maximum-grade"
-  | "not-enough-gold";
+  | "not-enough-gold"
+  | "not-enough-materials";
 
 type SmithyResult = {
   campaign: CampaignSave;
@@ -692,7 +707,11 @@ export function upgradeCampaignEquipmentGrade(
   const cost = smithyUpgradeCost(fromGrade)!;
   const requirements = smithyUpgradeRequirements(campaign, fromGrade);
   if (!requirements.every((requirement) => requirement.satisfied)) {
-    return smithyFailure(campaign, "not-enough-gold", {
+    const reason = requirements.some(
+      (requirement) =>
+        requirement.resourceKind === "material" && !requirement.satisfied,
+    ) ? "not-enough-materials" : "not-enough-gold";
+    return smithyFailure(campaign, reason, {
       itemId: candidate.itemId,
       fromGrade,
       toGrade,
@@ -701,6 +720,11 @@ export function upgradeCampaignEquipmentGrade(
   }
   let warehouse = campaign.warehouse;
   let companions = campaign.companions;
+  const materialCost = Object.fromEntries(
+    requirements
+      .filter((requirement) => requirement.resourceKind === "material")
+      .map((requirement) => [requirement.resourceId, requirement.required]),
+  ) as CampaignMaterialCost;
   if (target.kind === "warehouse") {
     warehouse = cloneWarehouse(campaign.warehouse);
     const instance = warehouse.instances.find(
@@ -741,6 +765,10 @@ export function upgradeCampaignEquipmentGrade(
       warehouse,
       companions,
       gold: campaign.gold - cost,
+      materials: payMaterials(
+        campaign.materials,
+        materialCost,
+      )!,
     },
     changed: true,
     reason: "ok",

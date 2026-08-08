@@ -633,6 +633,9 @@ export type CompanionSkillCooldowns = Partial<
 >;
 
 export type SkillResourceType = "stamina" | "mana";
+export type CampaignMaterialKind = "potion" | "seed" | "runestone";
+export type CampaignMaterials = Record<CampaignMaterialKind, number>;
+export type CampaignMaterialCost = Partial<CampaignMaterials>;
 
 export type SkillResourceState = {
   currentStamina: number;

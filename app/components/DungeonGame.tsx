@@ -158,6 +158,15 @@ import {
   warehouseItemCount,
 } from "../game/campaign";
 import {
+  CAMPAIGN_MATERIAL_KINDS,
+  CAMPAIGN_MATERIAL_NAMES,
+  addMaterials,
+  createCampaignMaterials,
+  extractWarehouseMaterials,
+  normalizeCampaignMaterials,
+  type CampaignMaterials,
+} from "../game/campaign-materials";
+import {
   buyShopListing,
   createShopState,
   listSmithyCandidates,
@@ -372,6 +381,7 @@ type ExpeditionResultView = {
   dungeon: DungeonDefinition;
   outcome: ExpeditionOutcome;
   stats: ExpeditionStats;
+  materialsGained: CampaignMaterials;
 };
 type ActiveExpedition = {
   dungeon: DungeonDefinition;
@@ -4978,8 +4988,9 @@ function EquipmentComparisonModal({
 
 const createDefaultCampaign = (): CampaignSave => {
   return {
-    version: 6,
+    version: 7,
     warehouse: createInitialWarehouse(),
+    materials: createCampaignMaterials({ potion: 3 }),
     shop: createShopState(INITIAL_DUNGEON_OFFER_SEED),
     companions: createStarterCompanionRoster(COMPANION_CLASS_IDS),
     expeditions: 0,
@@ -5002,16 +5013,17 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
       gold?: number;
       offerSeed?: number;
       shop?: CampaignSave["shop"];
+      materials?: unknown;
     };
     if (
-      ![1, 2, 3, 4, 5, 6].includes(parsed.version ?? 0) ||
+      ![1, 2, 3, 4, 5, 6, 7].includes(parsed.version ?? 0) ||
       !parsed.warehouse ||
       !Array.isArray(parsed.companions) ||
       (parsed.version === 1 && !parsed.hero)
     ) {
       return null;
     }
-    const restoredWarehouse = cloneWarehouse({
+    let restoredWarehouse = cloneWarehouse({
       stacks: { ...(parsed.warehouse.stacks ?? {}) },
       instances: (parsed.warehouse.instances ?? []).map((instance) => ({
         ...instance,
@@ -5048,6 +5060,8 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
         restoredWarehouse.instances.push(instance);
       });
     });
+    const migratedWarehouse = extractWarehouseMaterials(restoredWarehouse);
+    restoredWarehouse = migratedWarehouse.warehouse;
     restoredWarehouse.slots = normalizeStorageSlots(
       restoredWarehouse,
       WAREHOUSE_SLOT_COUNT,
@@ -5078,8 +5092,12 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
         ? parsed.offerSeed >>> 0
         : randomDungeonSeed();
     return {
-      version: 6,
+      version: 7,
       warehouse: restoredWarehouse,
+      materials: addMaterials(
+        normalizeCampaignMaterials(parsed.materials),
+        migratedWarehouse.materialsGained,
+      ),
       shop: normalizeShopState(parsed.shop, offerSeed, expeditions),
       companions,
       expeditions,
@@ -5112,6 +5130,7 @@ function CampaignHeader({
   warehouseCount,
   expeditions,
   gold,
+  materials,
   onOpenWarehouse,
   onOpenShop,
   onOpenBlacksmith,
@@ -5123,6 +5142,7 @@ function CampaignHeader({
   warehouseCount: number;
   expeditions: number;
   gold: number;
+  materials: CampaignMaterials;
   onOpenWarehouse: () => void;
   onOpenShop: () => void;
   onOpenBlacksmith: () => void;
@@ -5148,6 +5168,12 @@ function CampaignHeader({
         <span><small>보관 중인 물품</small><strong>{warehouseCount}</strong></span>
         <i />
         <span><small>보유 골드</small><strong>{formatGold(gold)}</strong></span>
+        {CAMPAIGN_MATERIAL_KINDS.map((kind) => (
+          <span className={`campaign-material is-${kind}`} key={kind}>
+            <small>{CAMPAIGN_MATERIAL_NAMES[kind]}</small>
+            <strong>{materials[kind]}</strong>
+          </span>
+        ))}
       </div>
       <nav className="campaign-header-actions" aria-label="거점 메뉴">
         <button type="button" onClick={onOpenCompendium}>도감</button>
@@ -5341,6 +5367,7 @@ function HubScreen({
         warehouseCount={storedCount}
         expeditions={campaign.completedExpeditions}
         gold={campaign.gold}
+        materials={campaign.materials}
         onOpenWarehouse={onOpenWarehouse}
         onOpenShop={onOpenShop}
         onOpenBlacksmith={onOpenBlacksmith}
@@ -5752,10 +5779,10 @@ function BlacksmithModal({
   const unmetRequirement = requirements.find(
     (requirement) => !requirement.satisfied,
   ) ?? null;
-  const requirementLabel = (resourceId: string, resourceKind: "currency" | "item") =>
+  const requirementLabel = (resourceId: string, resourceKind: "currency" | "material") =>
     resourceKind === "currency" && resourceId === "gold"
       ? "골드"
-      : ITEM_DEFS[resourceId]?.name ?? resourceId;
+      : CAMPAIGN_MATERIAL_NAMES[resourceId as keyof CampaignMaterials] ?? resourceId;
   const candidateForInstance = (instance: InventoryInstance | null) =>
     instance
       ? candidates.find((candidate) => candidate.instance.id === instance.id) ?? null
@@ -5785,7 +5812,10 @@ function BlacksmithModal({
       <section className="blacksmith-modal" role="dialog" aria-modal="true" aria-labelledby="blacksmith-title">
         <header>
           <div><p className="eyebrow">BLACKSMITH</p><h2 id="blacksmith-title">불꽃 대장간</h2></div>
-          <div className="commerce-wallet"><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></div>
+          <div className="commerce-wallet material-wallet">
+            <span><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></span>
+            <span><small>보유 룬석</small><b>{campaign.materials.runestone}개</b></span>
+          </div>
           <button type="button" onClick={onClose} aria-label="대장간 닫기">×</button>
         </header>
         <p className="blacksmith-lead">골드를 지불해 장비의 기본 등급을 한 단계 올립니다. 강화 수치와 추가 인챈트는 유지되며, 첫 고유 인챈트는 장비 등급과 함께 상승합니다.</p>
@@ -5981,7 +6011,9 @@ function TrainingGroundModal({
     setNotice(
       result.reason === "not-enough-gold"
         ? `골드 부족 · ${formatGold(campaign.gold)} / ${formatGold(result.cost)}`
-        : "스킬을 배울 수 없습니다.",
+        : result.reason === "not-enough-materials"
+          ? "훈련 재료가 부족합니다."
+          : "스킬을 배울 수 없습니다.",
     );
   };
   const equipSkill = (skillId: CompanionSkillId, index?: 0 | 1) => {
@@ -6026,7 +6058,11 @@ function TrainingGroundModal({
       >
         <header>
           <div><p className="eyebrow">TRAINING GROUND</p><h2 id="training-ground-title">훈련장</h2></div>
-          <div className="commerce-wallet"><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></div>
+          <div className="commerce-wallet material-wallet">
+            <span><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></span>
+            <span><small>씨앗</small><b>{campaign.materials.seed}개</b></span>
+            <span><small>포션</small><b>{campaign.materials.potion}개</b></span>
+          </div>
           <button type="button" onClick={onClose} aria-label="훈련장 닫기">×</button>
         </header>
         <p className="blacksmith-lead">동료는 스킬을 제한 없이 배울 수 있지만, 원정에는 두 개만 장착할 수 있습니다.</p>
@@ -6161,12 +6197,25 @@ function TrainingGroundModal({
                         <div><dt>재사용 대기</dt><dd>{selectedSkill.cooldown}턴</dd></div>
                         <div><dt>사거리</dt><dd>{selectedSkill.range}칸</dd></div>
                         <div><dt>훈련 비용</dt><dd>{selectedLearned ? "습득 완료" : `${formatGold(selectedSkill.trainingCost)} G`}</dd></div>
+                        {!selectedLearned && CAMPAIGN_MATERIAL_KINDS.flatMap((kind) => {
+                          const required = selectedSkill.trainingMaterials[kind] ?? 0;
+                          if (required <= 0) return [];
+                          const owned = campaign.materials[kind];
+                          return [(
+                            <div className={owned >= required ? "is-satisfied" : "is-missing"} key={`training-${kind}`}>
+                              <dt>{CAMPAIGN_MATERIAL_NAMES[kind]}</dt>
+                              <dd>{owned} / {required}</dd>
+                            </div>
+                          )];
+                        })}
                       </dl>
                       {!selectedLearned && (
                         <button type="button" disabled={!learnValidation?.changed} onClick={learnSelected}>
                           {learnValidation?.reason === "not-enough-gold"
                             ? `골드 부족 · ${formatGold(campaign.gold)} / ${formatGold(selectedSkill.trainingCost)}`
-                            : `${formatGold(selectedSkill.trainingCost)} G로 배우기`}
+                            : learnValidation?.reason === "not-enough-materials"
+                              ? "훈련 재료 부족"
+                              : "배우기"}
                         </button>
                       )}
                     </>
@@ -6440,6 +6489,16 @@ function ResultsScreen({
           <article><small>회수 물품</small><b>{result.stats.recoveredItems}</b><span>개</span></article>
           <article className="gold-metric"><small>획득 골드</small><b>{formatGold(result.stats.goldFound + result.stats.completionGold)}</b><span>파밍 {formatGold(result.stats.goldFound)} + 수고비 {formatGold(result.stats.completionGold)}</span></article>
         </div>
+        {CAMPAIGN_MATERIAL_KINDS.some((kind) => result.materialsGained[kind] > 0) && (
+          <section className="results-materials" aria-label="이번 원정에서 획득한 재화">
+            <strong>획득 재화</strong>
+            {CAMPAIGN_MATERIAL_KINDS.flatMap((kind) =>
+              result.materialsGained[kind] > 0
+                ? [<span key={kind}>{CAMPAIGN_MATERIAL_NAMES[kind]} +{result.materialsGained[kind]}</span>]
+                : [],
+            )}
+          </section>
+        )}
         <section className="results-loot-grid" aria-label="이번 원정에서 새로 얻은 아이템">
           <header>
             <div><small>NEW LOOT</small><strong>새로 얻은 아이템</strong></div>
@@ -6463,7 +6522,7 @@ function ResultsScreen({
             })}
           </div>
         </section>
-        <div className="results-loot-note"><span aria-hidden="true">▣</span><p><strong>전리품 정리 완료</strong>가방에 남아 있던 아이템은 모두 메인 화면의 창고로 이동했습니다.</p></div>
+        <div className="results-loot-note"><span aria-hidden="true">▣</span><p><strong>전리품 정리 완료</strong>포션·씨앗·룬석은 재화로 환전하고, 나머지 아이템은 창고로 이동했습니다.</p></div>
         <button type="button" onClick={onReturn}>거점으로 돌아가기</button>
       </section>
     </main>
@@ -11212,6 +11271,8 @@ export default function DungeonGame() {
     }
     const message = result.reason === "not-enough-gold"
       ? `등급 강화에 필요한 골드가 ${formatGold(result.cost - campaign.gold)} G 부족합니다.`
+      : result.reason === "not-enough-materials"
+        ? "등급 강화에 필요한 룬석이 부족합니다."
       : result.reason === "maximum-grade"
         ? "이미 최고 등급인 S급 장비입니다."
         : "강화할 장비를 찾지 못했습니다.";
@@ -11497,7 +11558,11 @@ export default function DungeonGame() {
             INITIAL_DUNGEON_OFFER_SEED
           : rolledOfferSeed;
       setCampaign((current) => {
-        const deposited = depositPlayerInventory(current.warehouse, finalGame.player);
+        const deposited = depositPlayerInventory(
+          current.warehouse,
+          finalGame.player,
+          current.materials,
+        );
         const goldFound = Math.max(0, Math.floor(finalGame.goldCollected));
         const completionGold = outcome === "completed"
           ? finishedDungeon.completionGold
@@ -11505,6 +11570,7 @@ export default function DungeonGame() {
         const next: CampaignSave = {
           ...current,
           warehouse: deposited.warehouse,
+          materials: deposited.materials,
           companions: mergeReturningCompanions(
             current.companions,
             [playerToCompanion(finalGame.player), ...finalGame.companions],
@@ -11518,6 +11584,7 @@ export default function DungeonGame() {
         setExpeditionResult({
           dungeon: finishedDungeon,
           outcome,
+          materialsGained: deposited.materialsGained,
           stats: {
             ...stats,
             recoveredItems: deposited.recoveredItems,

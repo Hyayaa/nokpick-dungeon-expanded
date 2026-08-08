@@ -6,6 +6,11 @@ import {
   normalizeLearnedSkills,
 } from "./companion-skills";
 import type { Companion, CompanionSkillId } from "./types";
+import {
+  canPayMaterials,
+  payMaterials,
+  type CampaignMaterialCost,
+} from "./campaign-materials";
 
 export type SkillTrainingFailure =
   | "companion-not-found"
@@ -14,6 +19,7 @@ export type SkillTrainingFailure =
   | "already-learned"
   | "not-learned"
   | "not-enough-gold"
+  | "not-enough-materials"
   | "already-equipped"
   | "slot-required";
 
@@ -22,6 +28,7 @@ type SkillTrainingResult = {
   changed: boolean;
   reason: "ok" | SkillTrainingFailure;
   cost: number;
+  materialCost: CampaignMaterialCost;
 };
 
 const replaceCompanion = (
@@ -38,7 +45,14 @@ const failure = (
   campaign: CampaignSave,
   reason: SkillTrainingFailure,
   cost = 0,
-): SkillTrainingResult => ({ campaign, changed: false, reason, cost });
+  materialCost: CampaignMaterialCost = {},
+): SkillTrainingResult => ({
+  campaign,
+  changed: false,
+  reason,
+  cost,
+  materialCost,
+});
 
 export const canLearnCompanionSkill = (
   campaign: CampaignSave,
@@ -50,16 +64,17 @@ export const canLearnCompanionSkill = (
   );
   const definition = COMPANION_SKILLS[skillId];
   if (!companion) {
-    return { changed: false, reason: "companion-not-found", cost: 0 };
+    return { changed: false, reason: "companion-not-found", cost: 0, materialCost: {} };
   }
   if (!definition) {
-    return { changed: false, reason: "invalid-skill", cost: 0 };
+    return { changed: false, reason: "invalid-skill", cost: 0, materialCost: {} };
   }
   if (!COMPANION_PROFESSIONS[companion.professionId].skillPool.includes(skillId)) {
     return {
       changed: false,
       reason: "wrong-profession",
       cost: definition.trainingCost,
+      materialCost: definition.trainingMaterials,
     };
   }
   const learnedSkills = normalizeLearnedSkills(
@@ -72,6 +87,7 @@ export const canLearnCompanionSkill = (
       changed: false,
       reason: "already-learned",
       cost: definition.trainingCost,
+      materialCost: definition.trainingMaterials,
     };
   }
   if (campaign.gold < definition.trainingCost) {
@@ -79,9 +95,23 @@ export const canLearnCompanionSkill = (
       changed: false,
       reason: "not-enough-gold",
       cost: definition.trainingCost,
+      materialCost: definition.trainingMaterials,
     };
   }
-  return { changed: true, reason: "ok", cost: definition.trainingCost };
+  if (!canPayMaterials(campaign.materials, definition.trainingMaterials)) {
+    return {
+      changed: false,
+      reason: "not-enough-materials",
+      cost: definition.trainingCost,
+      materialCost: definition.trainingMaterials,
+    };
+  }
+  return {
+    changed: true,
+    reason: "ok",
+    cost: definition.trainingCost,
+    materialCost: definition.trainingMaterials,
+  };
 };
 
 export const learnCompanionSkill = (
@@ -95,6 +125,7 @@ export const learnCompanionSkill = (
       campaign,
       validation.reason as SkillTrainingFailure,
       validation.cost,
+      validation.materialCost,
     );
   }
   const companion = campaign.companions.find(
@@ -114,11 +145,17 @@ export const learnCompanionSkill = (
       companion.skills,
     ),
   });
+  const materials = payMaterials(campaign.materials, validation.materialCost)!;
   return {
-    campaign: { ...nextCampaign, gold: campaign.gold - validation.cost },
+    campaign: {
+      ...nextCampaign,
+      gold: campaign.gold - validation.cost,
+      materials,
+    },
     changed: true,
     reason: "ok",
     cost: validation.cost,
+    materialCost: validation.materialCost,
   };
 };
 
@@ -161,6 +198,7 @@ export const equipCompanionSkill = (
     changed: true,
     reason: "ok",
     cost: 0,
+    materialCost: {},
   };
 };
 
@@ -202,6 +240,7 @@ export const swapCompanionSkills = (
     changed: true,
     reason: "ok",
     cost: 0,
+    materialCost: {},
   };
 };
 
@@ -231,5 +270,6 @@ export const unequipCompanionSkill = (
     changed: true,
     reason: "ok",
     cost: 0,
+    materialCost: {},
   };
 };

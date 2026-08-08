@@ -4824,6 +4824,22 @@ kbd {
   font-size: 15px;
 }
 
+.campaign-ledger .campaign-material {
+  gap: 5px;
+}
+
+.campaign-ledger .campaign-material.is-potion strong {
+  color: #e76d72;
+}
+
+.campaign-ledger .campaign-material.is-seed strong {
+  color: #8fbd69;
+}
+
+.campaign-ledger .campaign-material.is-runestone strong {
+  color: #87a7d9;
+}
+
 .campaign-ledger i {
   width: 1px;
   height: 20px;
@@ -5545,6 +5561,16 @@ kbd {
   color: var(--gold-bright);
   font-family: var(--pixel);
   font-size: 12px;
+}
+
+.commerce-wallet.material-wallet {
+  grid-auto-flow: column;
+  gap: 12px;
+}
+
+.commerce-wallet.material-wallet > span {
+  display: grid;
+  gap: 2px;
 }
 
 .commerce-tabs {
@@ -6461,6 +6487,18 @@ kbd {
   color: #4f83d4;
 }
 
+.training-skill-detail dl > div.is-missing {
+  border-color: #6b3f44;
+}
+
+.training-skill-detail dl > div.is-missing dd {
+  color: #e58c91;
+}
+
+.training-skill-detail dl > div.is-satisfied dd {
+  color: #8ed19e;
+}
+
 .training-skill-detail > button {
   min-height: 34px;
   border: 1px solid #526da9;
@@ -6901,6 +6939,28 @@ kbd {
 
 .results-metrics .gold-metric b {
   color: var(--gold-bright);
+}
+
+.results-materials {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid #38433a;
+  background: #0b110d;
+  color: #aeb9ae;
+  font-size: 9px;
+}
+
+.results-materials > strong {
+  margin-right: auto;
+  color: var(--gold-bright);
+}
+
+.results-materials > span {
+  font-family: var(--pixel);
 }
 
 .results-loot-note {
