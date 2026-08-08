@@ -208,6 +208,31 @@ assert.match(
   /skill-resource-cost[\s\S]*skill\.resourceCost/,
   "skill details must derive cost metadata from the skill definition",
 );
+assert.match(
+  dungeonGameSource,
+  /function TrainingGroundModal[\s\S]*CampaignWarehouseInventory[\s\S]*CampaignCompanionEquipmentRoster/,
+  "the Training Ground must reuse the shared warehouse and companion facility panels",
+);
+assert.match(
+  dungeonGameSource,
+  /training-equipped-slots[\s\S]*\(\[0, 1\] as const\)\.map/,
+  "the Training Ground must render exactly two equipped skill slots",
+);
+assert.match(
+  dungeonGameSource,
+  /function TrainingGroundModal[\s\S]*is-unlearned[\s\S]*trainingCost/,
+  "unlearned skills must remain inspectable and derive their price from skill metadata",
+);
+assert.match(
+  dungeonGameSource,
+  /application\/x-nokpick-companion[\s\S]*onDoubleClick[\s\S]*onTrainingSelect/,
+  "companions must support drag and double-click Training Ground selection",
+);
+assert.match(
+  dungeonCssSource,
+  /\.training-skill-card\.is-unlearned[\s\S]*opacity:\s*0\.58/,
+  "unlearned skills must be dimmed without hiding their presentation",
+);
 
 const panel = { width: 240, height: 180 };
 const viewport = { width: 1000, height: 700 };

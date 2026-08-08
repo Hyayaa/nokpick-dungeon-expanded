@@ -2,6 +2,7 @@
 
 import {
   CSSProperties,
+  DragEvent as ReactDragEvent,
   MutableRefObject,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
@@ -107,6 +108,14 @@ import {
   applyPreparationSlotTransfer,
   isPreparationSlotAddress,
 } from "../game/preparation-transactions";
+import type { ActiveSlotEntry } from "../game/active-slots";
+import {
+  canLearnCompanionSkill,
+  equipCompanionSkill,
+  learnCompanionSkill,
+  swapCompanionSkills,
+  unequipCompanionSkill,
+} from "../game/skill-training";
 import {
   PLAYER_ACTOR_ID as PLAYER_ID,
   livingPartyIds,
@@ -868,6 +877,40 @@ function ItemSlotContents({
   );
 }
 
+function ActiveSlotContents({
+  entry,
+  size,
+  instance,
+  quantity = 1,
+}: {
+  entry: ActiveSlotEntry;
+  size: number;
+  instance?: InventoryInstance | null;
+  quantity?: number;
+}) {
+  if (entry.kind === "item") {
+    return (
+      <ItemSlotContents
+        itemId={entry.itemId}
+        size={size}
+        instance={instance}
+        quantity={quantity}
+        showQuantity={quantity > 1}
+      />
+    );
+  }
+  const skill = COMPANION_SKILLS[entry.skillId];
+  return (
+    <span
+      className="active-skill-entry"
+      style={{ "--skill-accent": skill.accent } as CSSProperties}
+      aria-hidden="true"
+    >
+      <i>{skill.shortKo}</i>
+    </span>
+  );
+}
+
 const itemSlotAddressKey = (address: ItemSlotAddress) =>
   JSON.stringify(address);
 
@@ -897,8 +940,12 @@ function HeldItemCursor({ held }: { held: HeldSlotItem | null }) {
       style={{ left: held.clientX, top: held.clientY }}
       aria-hidden="true"
     >
-      <ItemSlotContents
-        itemId={held.item.itemId}
+      <ActiveSlotContents
+        entry={{
+          kind: "item",
+          itemRef: held.item.itemRef,
+          itemId: held.item.itemId,
+        }}
         size={40}
         instance={{
           id: held.item.itemRef,
@@ -909,7 +956,6 @@ function HeldItemCursor({ held }: { held: HeldSlotItem | null }) {
           maxCharges: held.item.maxCharges,
         }}
         quantity={held.item.quantity}
-        showQuantity={held.item.quantity > 1}
       />
     </div>
   );
@@ -1374,9 +1420,10 @@ function CampaignCompanionEquipmentRoster({
   itemSelectionKey,
   isItemHighlighted,
   onItemSelect,
+  onTrainingSelect,
 }: {
   companions: Companion[];
-  placement: "party" | "reserve" | "smithy";
+  placement: "party" | "reserve" | "smithy" | "training";
   selectedCompanionIds?: readonly string[];
   controlledCompanionId?: string | null;
   sharedInventory?: Pick<Player, "inventory" | "throwableProfiles">;
@@ -1399,6 +1446,7 @@ function CampaignCompanionEquipmentRoster({
     target: LoadoutTarget,
     entry: ResolvedCompanionEquipment,
   ) => void;
+  onTrainingSelect?: (companionId: string) => void;
 }) {
   const slotDrag = useActiveItemSlotDrag();
   const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
@@ -1430,7 +1478,9 @@ function CampaignCompanionEquipmentRoster({
             ? "is-active-party"
             : placement === "reserve"
               ? "is-reserve-roster"
-              : "is-smithy-roster"
+              : placement === "training"
+                ? "is-training-roster"
+                : "is-smithy-roster"
         }`}
       >
         {companions.map((companion) => {
@@ -1451,8 +1501,21 @@ function CampaignCompanionEquipmentRoster({
                 selected ? "is-selected" : "",
                 placement === "reserve" ? "is-reserve" : "",
                 placement === "smithy" ? "is-smithy" : "",
+                placement === "training" ? "is-training" : "",
               ].filter(Boolean).join(" ")}
               key={`${placement}-${companion.id}`}
+              draggable={placement === "training"}
+              onDragStart={(event) => {
+                if (placement !== "training") return;
+                event.dataTransfer.setData(
+                  "application/x-nokpick-companion",
+                  companion.id,
+                );
+                event.dataTransfer.effectAllowed = "copy";
+              }}
+              onDoubleClick={() => {
+                if (placement === "training") onTrainingSelect?.(companion.id);
+              }}
             >
               <header>
                 <button
@@ -1490,7 +1553,10 @@ function CampaignCompanionEquipmentRoster({
                   </button>
                 )}
               </header>
-              <div className="preparation-owner-slots">
+              {placement === "training" && (
+                <CharacterResourceBars character={companion} />
+              )}
+              {placement !== "training" && <div className="preparation-owner-slots">
                 {PARTY_LOADOUT_TARGETS.map((target) => {
                   const entry = resolveCompanionLoadoutItem(
                     companion,
@@ -1592,7 +1658,7 @@ function CampaignCompanionEquipmentRoster({
                     </label>
                   );
                 })}
-              </div>
+              </div>}
             </article>
           );
         })}
@@ -5049,6 +5115,7 @@ function CampaignHeader({
   onOpenWarehouse,
   onOpenShop,
   onOpenBlacksmith,
+  onOpenTraining,
   onOpenCompendium,
   onOpenSettings,
   onOpenHelp,
@@ -5059,6 +5126,7 @@ function CampaignHeader({
   onOpenWarehouse: () => void;
   onOpenShop: () => void;
   onOpenBlacksmith: () => void;
+  onOpenTraining: () => void;
   onOpenCompendium: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
@@ -5092,6 +5160,10 @@ function CampaignHeader({
         <button type="button" className="facility-button" onClick={onOpenBlacksmith}>
           <span aria-hidden="true">♨</span>
           대장간
+        </button>
+        <button type="button" className="facility-button" onClick={onOpenTraining}>
+          <span aria-hidden="true">✦</span>
+          훈련장
         </button>
         <button
           type="button"
@@ -5237,6 +5309,7 @@ function HubScreen({
   onOpenWarehouse,
   onOpenShop,
   onOpenBlacksmith,
+  onOpenTraining,
   onOpenCompendium,
   onOpenSettings,
   onOpenHelp,
@@ -5248,6 +5321,7 @@ function HubScreen({
   onOpenWarehouse: () => void;
   onOpenShop: () => void;
   onOpenBlacksmith: () => void;
+  onOpenTraining: () => void;
   onOpenCompendium: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
@@ -5270,6 +5344,7 @@ function HubScreen({
         onOpenWarehouse={onOpenWarehouse}
         onOpenShop={onOpenShop}
         onOpenBlacksmith={onOpenBlacksmith}
+        onOpenTraining={onOpenTraining}
         onOpenCompendium={onOpenCompendium}
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
@@ -5433,6 +5508,16 @@ function HubScreen({
             <small>강화·추가 인챈트 유지 · 첫 인챈트는 등급과 함께 상승 · F→E 1,600 G부터</small>
           </div>
           <button type="button" onClick={onOpenBlacksmith}>대장간 열기</button>
+        </article>
+        <article className="hub-facility-card is-training">
+          <span className="hub-facility-symbol" aria-hidden="true">✦</span>
+          <div>
+            <p className="eyebrow">TRAINING GROUND</p>
+            <h2>훈련장</h2>
+            <p>골드로 새 스킬을 배우고 원정에 사용할 두 스킬을 장착합니다.</p>
+            <small>스킬 습득만 유료 · 장착·해제·교체는 무료</small>
+          </div>
+          <button type="button" onClick={onOpenTraining}>훈련장 열기</button>
         </article>
       </section>
       {itemPreview && (
@@ -5810,6 +5895,284 @@ function BlacksmithModal({
                 <span className="blacksmith-item-icon is-large"><i aria-hidden="true">+</i></span>
                 <p>왼쪽의 빛나는 장비를 선택하거나 이 칸에 놓으세요.</p>
               </div>
+            )}
+          </aside>
+        </div>
+        <footer><button type="button" onClick={onClose}>닫기</button></footer>
+      </section>
+    </div>
+  );
+}
+
+type TrainingSkillDragData =
+  | {
+      source: "pool";
+      companionId: string;
+      skillId: CompanionSkillId;
+    }
+  | {
+      source: "slot";
+      companionId: string;
+      skillId: CompanionSkillId;
+      index: 0 | 1;
+    };
+
+const setTrainingSkillDragData = (
+  event: ReactDragEvent<HTMLElement>,
+  data: TrainingSkillDragData,
+) => {
+  event.dataTransfer.setData(
+    "application/x-nokpick-skill",
+    JSON.stringify(data),
+  );
+  event.dataTransfer.effectAllowed = data.source === "slot" ? "move" : "copy";
+};
+
+const readTrainingSkillDragData = (
+  event: ReactDragEvent<HTMLElement>,
+): TrainingSkillDragData | null => {
+  try {
+    return JSON.parse(
+      event.dataTransfer.getData("application/x-nokpick-skill"),
+    ) as TrainingSkillDragData;
+  } catch {
+    return null;
+  }
+};
+
+function TrainingGroundModal({
+  campaign,
+  onCampaignChange,
+  onClose,
+}: {
+  campaign: CampaignSave;
+  onCampaignChange: (campaign: CampaignSave) => void;
+  onClose: () => void;
+}) {
+  const [selectedCompanionId, setSelectedCompanionId] = useState<string | null>(null);
+  const [selectedSkillId, setSelectedSkillId] = useState<CompanionSkillId | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const companion = campaign.companions.find(
+    (candidate) => candidate.id === selectedCompanionId,
+  ) ?? null;
+  const profession = companion
+    ? COMPANION_PROFESSIONS[companion.professionId]
+    : null;
+  const learnedSkills = new Set(companion?.learnedSkills ?? companion?.skills ?? []);
+  const selectedSkill = selectedSkillId ? COMPANION_SKILLS[selectedSkillId] : null;
+  const selectedLearned = selectedSkillId ? learnedSkills.has(selectedSkillId) : false;
+  const learnValidation = companion && selectedSkillId
+    ? canLearnCompanionSkill(campaign, companion.id, selectedSkillId)
+    : null;
+
+  const selectCompanion = (companionId: string) => {
+    setSelectedCompanionId(companionId);
+    setSelectedSkillId(null);
+    setNotice(null);
+  };
+  const learnSelected = () => {
+    if (!companion || !selectedSkillId) return;
+    const result = learnCompanionSkill(campaign, companion.id, selectedSkillId);
+    if (result.changed) {
+      onCampaignChange(result.campaign);
+      setNotice(`${COMPANION_SKILLS[selectedSkillId].nameKo} 습득 · ${formatGold(result.cost)} G 사용`);
+      return;
+    }
+    setNotice(
+      result.reason === "not-enough-gold"
+        ? `골드 부족 · ${formatGold(campaign.gold)} / ${formatGold(result.cost)}`
+        : "스킬을 배울 수 없습니다.",
+    );
+  };
+  const equipSkill = (skillId: CompanionSkillId, index?: 0 | 1) => {
+    if (!companion) return;
+    const result = equipCompanionSkill(campaign, companion.id, skillId, index);
+    if (result.changed) {
+      onCampaignChange(result.campaign);
+      setNotice(`${COMPANION_SKILLS[skillId].nameKo} 장착 완료`);
+      return;
+    }
+    setNotice(
+      result.reason === "slot-required"
+        ? "교체할 스킬 슬롯으로 드래그하세요."
+        : result.reason === "already-equipped"
+          ? "이미 장착 중인 스킬입니다."
+          : "배운 스킬만 장착할 수 있습니다.",
+    );
+  };
+  const dropOnSkillSlot = (
+    event: ReactDragEvent<HTMLElement>,
+    index: 0 | 1,
+  ) => {
+    event.preventDefault();
+    if (!companion) return;
+    const data = readTrainingSkillDragData(event);
+    if (!data || data.companionId !== companion.id) return;
+    const result = data.source === "slot"
+      ? swapCompanionSkills(campaign, companion.id, data.index, index)
+      : equipCompanionSkill(campaign, companion.id, data.skillId, index);
+    if (!result.changed) return;
+    onCampaignChange(result.campaign);
+    setNotice("장착 스킬을 변경했습니다. 골드는 소모되지 않습니다.");
+  };
+
+  return (
+    <div className="modal-backdrop blacksmith-backdrop">
+      <section
+        className="blacksmith-modal training-ground-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="training-ground-title"
+      >
+        <header>
+          <div><p className="eyebrow">TRAINING GROUND</p><h2 id="training-ground-title">훈련장</h2></div>
+          <div className="commerce-wallet"><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></div>
+          <button type="button" onClick={onClose} aria-label="훈련장 닫기">×</button>
+        </header>
+        <p className="blacksmith-lead">동료는 스킬을 제한 없이 배울 수 있지만, 원정에는 두 개만 장착할 수 있습니다.</p>
+        {notice && <p className="commerce-notice" role="status">{notice}</p>}
+        <div className="blacksmith-layout training-ground-layout">
+          <div className="blacksmith-source-panels">
+            <section className="blacksmith-source-panel" aria-labelledby="training-warehouse-title">
+              <header className="commerce-column-header">
+                <div><p className="eyebrow">WAREHOUSE</p><h3 id="training-warehouse-title">창고</h3></div>
+                <span>{warehouseItemCount(campaign.warehouse)}개</span>
+              </header>
+              <p>보유 자산 확인용입니다. 아이템은 스킬 슬롯에 놓을 수 없습니다.</p>
+              <CampaignWarehouseInventory
+                warehouse={campaign.warehouse}
+                className="preparation-storage-grid blacksmith-warehouse-grid"
+                contextLabel="훈련장 창고"
+              />
+            </section>
+            <section className="blacksmith-source-panel blacksmith-companion-panel" aria-labelledby="training-companion-title">
+              <header className="commerce-column-header">
+                <div><p className="eyebrow">COMPANIONS</p><h3 id="training-companion-title">동료 목록</h3></div>
+                <span>{campaign.companions.length}명</span>
+              </header>
+              <p>동료를 더블클릭하거나 오른쪽 훈련 대상으로 드래그하세요.</p>
+              <CampaignCompanionEquipmentRoster
+                companions={campaign.companions}
+                placement="training"
+                selectedCompanionIds={selectedCompanionId ? [selectedCompanionId] : []}
+                emptyMessage="등록된 동료가 없습니다."
+                onTrainingSelect={selectCompanion}
+              />
+            </section>
+          </div>
+          <aside className="blacksmith-workbench training-workbench">
+            <section
+              className={`training-target ${companion ? "is-selected" : "is-empty"}`}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                const companionId = event.dataTransfer.getData("application/x-nokpick-companion");
+                if (campaign.companions.some((candidate) => candidate.id === companionId)) {
+                  selectCompanion(companionId);
+                }
+              }}
+            >
+              {companion ? (
+                <>
+                  <div className="training-target-profile">
+                    <PixelSpriteFrame
+                      file={COMPANION_PRESENTATIONS[companion.classId].sprite}
+                      sheetWidth={COMPANION_PRESENTATIONS[companion.classId].sheetWidth}
+                      frameWidth={COMPANION_PRESENTATIONS[companion.classId].frameWidth}
+                      frameHeight={COMPANION_PRESENTATIONS[companion.classId].frameHeight}
+                      frame={COMPANION_PRESENTATIONS[companion.classId].animationSet === "companion"
+                        ? companionFrameIndex(companionArmorTier(companion), COMPANION_IDLE_FRAMES[0])
+                        : PLAYER_IDLE_FRAMES[0]}
+                      size={56}
+                    />
+                    <div><small>훈련 대상 · {profession?.nameKo}</small><h3>{companion.name}</h3><span>LV.{companion.level}</span></div>
+                  </div>
+                  <CharacterResourceBars character={companion} />
+                </>
+              ) : <p>훈련할 동료를 선택하세요.</p>}
+            </section>
+            {companion && profession && (
+              <>
+                <section className="training-equipped-section">
+                  <h3>장착 스킬</h3>
+                  <div className="training-equipped-slots">
+                    {([0, 1] as const).map((index) => {
+                      const skillId = companion.skills[index] ?? null;
+                      return (
+                        <button
+                          type="button"
+                          className={`fixed-item-slot training-skill-slot ${skillId ? "is-filled" : "is-empty"}`}
+                          key={`equipped-skill-${index}`}
+                          title={skillId ? `${COMPANION_SKILLS[skillId].nameKo} · 더블클릭해 해제` : `스킬 슬롯 ${index + 1}`}
+                          draggable={Boolean(skillId)}
+                          onDragStart={(event) => {
+                            if (skillId) setTrainingSkillDragData(event, { source: "slot", companionId: companion.id, skillId, index });
+                          }}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => dropOnSkillSlot(event, index)}
+                          onClick={() => skillId && setSelectedSkillId(skillId)}
+                          onDoubleClick={() => {
+                            if (!skillId) return;
+                            const result = unequipCompanionSkill(campaign, companion.id, index);
+                            if (result.changed) onCampaignChange(result.campaign);
+                          }}
+                        >
+                          {skillId
+                            ? <ActiveSlotContents entry={{ kind: "skill", skillId }} size={42} />
+                            : <span className="empty-slot-glyph">+</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+                <section className="training-skill-pool">
+                  <h3>{profession.nameKo} 스킬</h3>
+                  <div className="training-skill-grid">
+                    {profession.skillPool.map((skillId) => {
+                      const skill = COMPANION_SKILLS[skillId];
+                      const learned = learnedSkills.has(skillId);
+                      const equipped = companion.skills.includes(skillId);
+                      return (
+                        <button
+                          type="button"
+                          className={`fixed-item-slot training-skill-card ${learned ? "is-learned" : "is-unlearned"} ${equipped ? "is-equipped" : ""} ${selectedSkillId === skillId ? "is-selected" : ""}`}
+                          key={skillId}
+                          title={`${skill.nameKo}${learned ? " · 습득" : ` · ${skill.trainingCost} G`}`}
+                          draggable={learned}
+                          onDragStart={(event) => setTrainingSkillDragData(event, { source: "pool", companionId: companion.id, skillId })}
+                          onClick={() => setSelectedSkillId(skillId)}
+                          onDoubleClick={() => learned && equipSkill(skillId)}
+                        >
+                          <ActiveSlotContents entry={{ kind: "skill", skillId }} size={42} />
+                          <small>{skill.nameKo}</small>
+                          <b>{learned ? (equipped ? "장착" : "습득") : `${skill.trainingCost} G`}</b>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+                <section className="training-skill-detail">
+                  {selectedSkill ? (
+                    <>
+                      <header><span style={{ background: selectedSkill.accent }} /><div><small>{selectedLearned ? "습득 완료" : "미습득 스킬"}</small><h3>{selectedSkill.nameKo}</h3></div></header>
+                      <p>{selectedSkill.descriptionKo}</p>
+                      <dl>
+                        <div><dt>소모</dt><dd className={`is-${selectedSkill.resourceType}`}>{selectedSkill.resourceType === "stamina" ? "기력" : "마나"} {formatSkillResourceAmount(selectedSkill.resourceCost)}</dd></div>
+                        <div><dt>재사용 대기</dt><dd>{selectedSkill.cooldown}턴</dd></div>
+                        <div><dt>사거리</dt><dd>{selectedSkill.range}칸</dd></div>
+                        <div><dt>훈련 비용</dt><dd>{selectedLearned ? "습득 완료" : `${formatGold(selectedSkill.trainingCost)} G`}</dd></div>
+                      </dl>
+                      {!selectedLearned && (
+                        <button type="button" disabled={!learnValidation?.changed} onClick={learnSelected}>
+                          {learnValidation?.reason === "not-enough-gold"
+                            ? `골드 부족 · ${formatGold(campaign.gold)} / ${formatGold(selectedSkill.trainingCost)}`
+                            : `${formatGold(selectedSkill.trainingCost)} G로 배우기`}
+                        </button>
+                      )}
+                    </>
+                  ) : <p>스킬을 선택하면 상세 정보와 훈련 비용을 확인할 수 있습니다.</p>}
+                </section>
+              </>
             )}
           </aside>
         </div>
@@ -10633,6 +10996,7 @@ export default function DungeonGame() {
   const [screen, setScreen] = useState<CampaignScreen>("hub");
   const [commerceOpen, setCommerceOpen] = useState(false);
   const [blacksmithOpen, setBlacksmithOpen] = useState(false);
+  const [trainingGroundOpen, setTrainingGroundOpen] = useState(false);
   const [blacksmithTarget, setBlacksmithTarget] = useState<SmithyTarget | null>(null);
   const [facilityNotice, setFacilityNotice] = useState<string | null>(null);
   const [hubHelpOpen, setHubHelpOpen] = useState(false);
@@ -10784,6 +11148,7 @@ export default function DungeonGame() {
       setSelectedDungeon(dungeon);
       setCommerceOpen(false);
       setBlacksmithOpen(false);
+      setTrainingGroundOpen(false);
       setFacilityNotice(null);
       setHubHelpOpen(false);
       setHubSettingsOpen(false);
@@ -10990,6 +11355,16 @@ export default function DungeonGame() {
               onClose={() => {
                 setBlacksmithOpen(false);
                 setBlacksmithTarget(null);
+                setFacilityNotice(null);
+              }}
+            />
+          )}
+          {trainingGroundOpen && (
+            <TrainingGroundModal
+              campaign={campaign}
+              onCampaignChange={setCampaign}
+              onClose={() => {
+                setTrainingGroundOpen(false);
                 setFacilityNotice(null);
               }}
             />
@@ -11227,16 +11602,25 @@ export default function DungeonGame() {
       onOpenWarehouse={() => {
         setCommerceOpen(true);
         setBlacksmithOpen(false);
+        setTrainingGroundOpen(false);
         setFacilityNotice(null);
       }}
       onOpenShop={() => {
         setCommerceOpen(true);
         setBlacksmithOpen(false);
+        setTrainingGroundOpen(false);
         setFacilityNotice(null);
       }}
       onOpenBlacksmith={() => {
         setBlacksmithOpen(true);
+        setTrainingGroundOpen(false);
         setBlacksmithTarget(null);
+        setCommerceOpen(false);
+        setFacilityNotice(null);
+      }}
+      onOpenTraining={() => {
+        setTrainingGroundOpen(true);
+        setBlacksmithOpen(false);
         setCommerceOpen(false);
         setFacilityNotice(null);
       }}
