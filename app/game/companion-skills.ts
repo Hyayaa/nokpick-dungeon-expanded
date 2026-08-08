@@ -22,6 +22,7 @@ export type CompanionSkillDefinition = {
   cooldown: number;
   resourceType: SkillResourceType;
   resourceCost: number;
+  trainingCost: number;
   requiresLineOfFire: boolean;
   accent: string;
   soundId: GameSoundId;
@@ -46,6 +47,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 5,
     resourceType: "stamina",
     resourceCost: 65,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#d7a85f",
     soundId: "skillLightning",
@@ -65,6 +67,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 6,
     resourceType: "stamina",
     resourceCost: 70,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#cf795f",
     soundId: "skillImpact",
@@ -84,6 +87,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 7,
     resourceType: "mana",
     resourceCost: 20,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#e36d45",
     soundId: "skillBlast",
@@ -103,6 +107,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 8,
     resourceType: "stamina",
     resourceCost: 50,
+    trainingCost: 300,
     requiresLineOfFire: true,
     accent: "#c8a66b",
     soundId: "skillArrow",
@@ -122,6 +127,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 4,
     resourceType: "mana",
     resourceCost: 10,
+    trainingCost: 300,
     requiresLineOfFire: true,
     accent: "#a986d8",
     soundId: "skillMagic",
@@ -141,6 +147,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 4,
     resourceType: "stamina",
     resourceCost: 45,
+    trainingCost: 400,
     requiresLineOfFire: false,
     accent: "#d6c477",
     soundId: "hitSlash",
@@ -160,6 +167,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 6,
     resourceType: "stamina",
     resourceCost: 45,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#87b68a",
     soundId: "skillArrow",
@@ -179,6 +187,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 7,
     resourceType: "mana",
     resourceCost: 24,
+    trainingCost: 500,
     requiresLineOfFire: true,
     accent: "#d9d86d",
     soundId: "skillLightning",
@@ -198,6 +207,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 7,
     resourceType: "mana",
     resourceCost: 18,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#75c9d8",
     soundId: "shatter",
@@ -217,6 +227,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 7,
     resourceType: "stamina",
     resourceCost: 45,
+    trainingCost: 300,
     requiresLineOfFire: true,
     accent: "#79ae58",
     soundId: "skillGas",
@@ -236,6 +247,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 8,
     resourceType: "stamina",
     resourceCost: 50,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#a5bd50",
     soundId: "skillGas",
@@ -255,6 +267,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 8,
     resourceType: "stamina",
     resourceCost: 50,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#6d9f62",
     soundId: "skillNature",
@@ -274,6 +287,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 6,
     resourceType: "stamina",
     resourceCost: 55,
+    trainingCost: 400,
     requiresLineOfFire: false,
     accent: "#776c9b",
     soundId: "skillShadow",
@@ -293,6 +307,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 6,
     resourceType: "stamina",
     resourceCost: 50,
+    trainingCost: 500,
     requiresLineOfFire: false,
     accent: "#b95f5b",
     soundId: "skillImpact",
@@ -312,6 +327,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 7,
     resourceType: "stamina",
     resourceCost: 75,
+    trainingCost: 500,
     requiresLineOfFire: true,
     accent: "#8196a4",
     soundId: "skillImpact",
@@ -331,6 +347,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 9,
     resourceType: "mana",
     resourceCost: 18,
+    trainingCost: 300,
     requiresLineOfFire: true,
     accent: "#69b77d",
     soundId: "skillHeal",
@@ -350,6 +367,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 9,
     resourceType: "mana",
     resourceCost: 24,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#a98bd0",
     soundId: "skillMagic",
@@ -369,6 +387,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 5,
     resourceType: "stamina",
     resourceCost: 45,
+    trainingCost: 400,
     requiresLineOfFire: false,
     accent: "#d3a45f",
     soundId: "hitSlash",
@@ -388,6 +407,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 8,
     resourceType: "stamina",
     resourceCost: 70,
+    trainingCost: 500,
     requiresLineOfFire: false,
     accent: "#aa875d",
     soundId: "skillBlast",
@@ -407,6 +427,7 @@ export const COMPANION_SKILLS: Record<
     cooldown: 7,
     resourceType: "mana",
     resourceCost: 22,
+    trainingCost: 400,
     requiresLineOfFire: true,
     accent: "#a66a9f",
     soundId: "skillShadow",
@@ -544,25 +565,44 @@ export const createCompanionSkills = (
   return shuffled.slice(0, 2);
 };
 
-export const normalizeCompanionSkills = (
+export const normalizeLearnedSkills = (
   professionId: CompanionProfessionId,
-  seedKey: string,
-  skillIds: readonly CompanionSkillId[] | undefined,
+  learnedSkillIds: readonly CompanionSkillId[] | undefined,
+  legacyEquippedSkillIds: readonly CompanionSkillId[] | undefined = [],
 ) => {
   const skillPool = COMPANION_PROFESSIONS[professionId].skillPool;
-  const valid = [...new Set(skillIds ?? [])].filter(
+  const source = learnedSkillIds ?? legacyEquippedSkillIds;
+  return [...new Set(source ?? [])].filter(
     (id): id is CompanionSkillId =>
       id in COMPANION_SKILLS && skillPool.includes(id),
   );
-  for (const generated of createCompanionSkills(professionId, seedKey)) {
-    if (valid.length >= 2) break;
-    if (!valid.includes(generated)) valid.push(generated);
-  }
-  for (const fallback of skillPool) {
-    if (valid.length >= 2) break;
-    if (!valid.includes(fallback)) valid.push(fallback);
-  }
-  return valid.slice(0, 2);
+};
+
+export const normalizeEquippedSkills = (
+  professionId: CompanionProfessionId,
+  learnedSkillIds: readonly CompanionSkillId[],
+  equippedSkillIds: readonly CompanionSkillId[] | undefined,
+) => {
+  const skillPool = COMPANION_PROFESSIONS[professionId].skillPool;
+  const learned = new Set(learnedSkillIds);
+  return [...new Set(equippedSkillIds ?? [])].filter(
+    (id): id is CompanionSkillId =>
+      id in COMPANION_SKILLS && skillPool.includes(id) && learned.has(id),
+  ).slice(0, 2);
+};
+
+export const normalizeCompanionSkills = (
+  professionId: CompanionProfessionId,
+  _seedKey: string,
+  skillIds: readonly CompanionSkillId[] | undefined,
+  learnedSkillIds: readonly CompanionSkillId[] | undefined = skillIds,
+) => {
+  const learned = normalizeLearnedSkills(
+    professionId,
+    learnedSkillIds,
+    skillIds,
+  );
+  return normalizeEquippedSkills(professionId, learned, skillIds);
 };
 
 export const normalizeSkillCooldowns = (

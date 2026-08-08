@@ -7587,12 +7587,16 @@ assert.deepEqual(
 );
 assert.ok(
   createStarterCompanionRoster(COMPANION_CLASS_IDS).every(
-    (companion) => companion.skills.length === 2,
+    (companion) =>
+      companion.skills.length === 2 &&
+      companion.learnedSkills.length === 2 &&
+      companion.skills.every((skillId) => companion.learnedSkills.includes(skillId)),
   ),
-  "every roster companion must start with two manually usable skills",
+  "every roster companion must start with the same two learned and equipped skills",
 );
 const legacyProfessionCompanion = createStarterCompanionRoster(["warrior"])[0];
 Reflect.deleteProperty(legacyProfessionCompanion, "professionId");
+Reflect.deleteProperty(legacyProfessionCompanion, "learnedSkills");
 legacyProfessionCompanion.skills = ["fireball", "lifeDrain"];
 const migratedProfessionCompanion = normalizeCompanionForHubWithReleasedItems(
   legacyProfessionCompanion,
@@ -7603,10 +7607,9 @@ assert.equal(
   "older saves without a profession must receive the class-compatible profession",
 );
 assert.ok(
-  migratedProfessionCompanion.skills.every((skillId) =>
-    COMPANION_PROFESSIONS.warrior.skillPool.includes(skillId),
-  ),
-  "older global skill assignments must migrate into the profession pool",
+  migratedProfessionCompanion.skills.length === 0 &&
+    migratedProfessionCompanion.learnedSkills.length === 0,
+  "normalization must remove invalid legacy skills without granting free profession skills",
 );
 
 const createSkillArena = (skillId: (typeof COMPANION_SKILL_IDS)[number]) => {
@@ -7636,6 +7639,7 @@ const createSkillArena = (skillId: (typeof COMPANION_SKILL_IDS)[number]) => {
       (candidate) => candidate !== skillId,
     )!,
   ];
+  state.player.learnedSkills = [...state.player.skills];
   state.player.skillCooldowns = {};
   state.player.actionProgress = 0;
   state.companions = [];
@@ -7664,6 +7668,7 @@ aimingCompanion.x = companionAimArena.center.x + 7;
 aimingCompanion.y = companionAimArena.center.y;
 aimingCompanion.professionId = "warrior";
 aimingCompanion.skills = ["tripleStrike", "whirlwind"];
+aimingCompanion.learnedSkills = [...aimingCompanion.skills];
 companionAimArena.state.companions = [aimingCompanion];
 const playerNearEnemy = {
   ...companionAimArena.state.enemies[0],
@@ -7761,6 +7766,7 @@ incapacitatedCompanion.x = incapacitatedSkillArena.center.x;
 incapacitatedCompanion.y = incapacitatedSkillArena.center.y;
 incapacitatedCompanion.professionId = "warrior";
 incapacitatedCompanion.skills = ["shockLeap", "shieldCharge"];
+incapacitatedCompanion.learnedSkills = [...incapacitatedCompanion.skills];
 incapacitatedCompanion.statuses = [{
   id: "paralyzed",
   turns: 2,

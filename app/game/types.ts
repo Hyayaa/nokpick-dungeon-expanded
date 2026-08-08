@@ -693,6 +693,7 @@ export type Companion = Point & SkillResourceState & {
   xp: number;
   nextXp: number;
   traits: CompanionTraitId[];
+  learnedSkills: CompanionSkillId[];
   skills: CompanionSkillId[];
   skillCooldowns: CompanionSkillCooldowns;
   statuses: StatusEffect[];
@@ -744,6 +745,7 @@ export type Player = Point & SkillResourceState & {
   classId: CompanionClassId;
   professionId: CompanionProfessionId;
   traits: CompanionTraitId[];
+  learnedSkills: CompanionSkillId[];
   skills: CompanionSkillId[];
   skillCooldowns: CompanionSkillCooldowns;
   hp: number;

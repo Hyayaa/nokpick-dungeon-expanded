@@ -4,6 +4,7 @@ import { normalizeEquipmentInstance } from "./equipment";
 import {
   normalizeCompanionProfession,
   normalizeCompanionSkills,
+  normalizeLearnedSkills,
   normalizeSkillCooldowns,
 } from "./companion-skills";
 import { normalizePlayerInventorySlots } from "./inventory-slots";
@@ -49,6 +50,14 @@ export const cloneGame = (
       state.player.professionId,
     ),
     traits: [...(state.player.traits ?? [])],
+    learnedSkills: normalizeLearnedSkills(
+      normalizeCompanionProfession(
+        state.player.classId,
+        state.player.professionId,
+      ),
+      state.player.learnedSkills,
+      state.player.skills,
+    ),
     skills: normalizeCompanionSkills(
       normalizeCompanionProfession(
         state.player.classId,
@@ -56,6 +65,14 @@ export const cloneGame = (
       ),
       state.player.companionId,
       state.player.skills,
+      normalizeLearnedSkills(
+        normalizeCompanionProfession(
+          state.player.classId,
+          state.player.professionId,
+        ),
+        state.player.learnedSkills,
+        state.player.skills,
+      ),
     ),
     skillCooldowns: normalizeSkillCooldowns(state.player.skillCooldowns),
     inventory: { ...state.player.inventory },
@@ -109,6 +126,14 @@ export const cloneGame = (
       companion.professionId,
     ),
     traits: [...(companion.traits ?? [])],
+    learnedSkills: normalizeLearnedSkills(
+      normalizeCompanionProfession(
+        companion.classId,
+        companion.professionId,
+      ),
+      companion.learnedSkills,
+      companion.skills,
+    ),
     skills: normalizeCompanionSkills(
       normalizeCompanionProfession(
         companion.classId,
@@ -116,6 +141,14 @@ export const cloneGame = (
       ),
       companion.id,
       companion.skills,
+      normalizeLearnedSkills(
+        normalizeCompanionProfession(
+          companion.classId,
+          companion.professionId,
+        ),
+        companion.learnedSkills,
+        companion.skills,
+      ),
     ),
     skillCooldowns: normalizeSkillCooldowns(companion.skillCooldowns),
     statuses: (companion.statuses ?? []).map((status) => ({ ...status })),

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { createCompanion } from "../app/game/companions";
+import {
+  createCompanion,
+  normalizeCompanionProgression,
+} from "../app/game/companions";
 import { createDeveloperTestMap } from "../app/game/developer-test-map";
 import {
   activateCompanionSkill,
@@ -13,6 +16,16 @@ import {
 } from "../app/game/engine";
 import { ENEMY_STATS } from "../app/game/data";
 import { COMPANION_SKILLS } from "../app/game/companion-skills";
+import {
+  createInitialWarehouse,
+  type CampaignSave,
+} from "../app/game/campaign";
+import { createShopState } from "../app/game/commerce";
+import {
+  equipCompanionSkill,
+  learnCompanionSkill,
+  swapCompanionSkills,
+} from "../app/game/skill-training";
 import { companionSkillBlueprint } from "../app/game/companion-skill-blueprints";
 import { isWalkable, mapPointKey } from "../app/game/map";
 import {
@@ -63,6 +76,10 @@ for (const skillId of Object.keys(COMPANION_SKILLS) as CompanionSkillId[]) {
     expectedCosts[skillId],
     `${skillId} must declare its production resource cost`,
   );
+  assert.ok(
+    [300, 400, 500].includes(blueprint.trainingCost),
+    `${skillId} must declare a production training cost`,
+  );
 }
 
 assert.equal(primarySkillResource("warrior"), "stamina");
@@ -93,6 +110,7 @@ const skillTarget = (
 
 const shockState = createNewGame(0xc04ba7);
 shockState.player.skills = ["shockLeap"];
+shockState.player.learnedSkills = ["shockLeap"];
 shockState.player.skillCooldowns = {};
 shockState.player.currentStamina = 100;
 shockState.enemies = [];
@@ -112,6 +130,7 @@ assert.ok((shockResult.state.player.skillCooldowns.shockLeap ?? 0) > 0);
 
 const insufficientState = createNewGame(0xc04ba7);
 insufficientState.player.skills = ["shockLeap"];
+insufficientState.player.learnedSkills = ["shockLeap"];
 insufficientState.player.skillCooldowns = {};
 insufficientState.player.currentStamina = 40;
 insufficientState.enemies = [];
@@ -135,6 +154,7 @@ assert.match(
 const manaState = createNewGame(0x51a7e);
 manaState.player.professionId = "mage";
 manaState.player.skills = ["fireball"];
+manaState.player.learnedSkills = ["fireball"];
 manaState.player.skillCooldowns = {};
 manaState.player.currentMana = 100;
 manaState.enemies = [];
@@ -195,6 +215,7 @@ manualSkillState.companions = [
   createCompanion("cleric", { x: 0, y: 0 }, 6),
 ];
 manualSkillState.player.skills = ["shockLeap"];
+manualSkillState.player.learnedSkills = ["shockLeap"];
 manualSkillState.player.skillCooldowns = {};
 manualSkillState.player.currentStamina = 100;
 manualSkillState.enemies = [];
@@ -274,6 +295,7 @@ assert.equal(normalizedLegacy.player.currentMana, 100);
 
 const cooldownState = createNewGame(0xc04ba7);
 cooldownState.player.skills = ["shockLeap"];
+cooldownState.player.learnedSkills = ["shockLeap"];
 cooldownState.player.skillCooldowns = { shockLeap: 2 };
 cooldownState.player.currentStamina = 100;
 cooldownState.enemies = [];
@@ -288,6 +310,94 @@ const cooldownResult = activateCompanionSkill(
 assert.equal(cooldownResult.consumedTurn, false);
 assert.equal(cooldownResult.state.player.currentStamina, 100);
 assert.equal(cooldownResult.state.player.skillCooldowns.shockLeap, 2);
+
+const trainingCompanion = createCompanion("warrior", { x: 0, y: 0 }, 20);
+trainingCompanion.learnedSkills = ["shockLeap", "weaponThrow"];
+trainingCompanion.skills = ["shockLeap", "weaponThrow"];
+const trainingCampaign: CampaignSave = {
+  version: 6,
+  warehouse: createInitialWarehouse(),
+  companions: [trainingCompanion],
+  expeditions: 0,
+  completedExpeditions: 0,
+  gold: 1_000,
+  offerSeed: 123,
+  shop: createShopState(123),
+};
+const learned = learnCompanionSkill(
+  trainingCampaign,
+  trainingCompanion.id,
+  "shieldCharge",
+);
+assert.equal(learned.changed, true);
+assert.equal(learned.campaign.gold, 500);
+assert.deepEqual(learned.campaign.companions[0].skills, ["shockLeap", "weaponThrow"]);
+assert.ok(learned.campaign.companions[0].learnedSkills.includes("shieldCharge"));
+const duplicateLearn = learnCompanionSkill(
+  learned.campaign,
+  trainingCompanion.id,
+  "shieldCharge",
+);
+assert.equal(duplicateLearn.changed, false);
+assert.equal(duplicateLearn.campaign.gold, 500);
+const poorCampaign = { ...trainingCampaign, gold: 100 };
+const poorLearn = learnCompanionSkill(
+  poorCampaign,
+  trainingCompanion.id,
+  "shieldCharge",
+);
+assert.equal(poorLearn.changed, false);
+assert.equal(poorLearn.campaign.gold, 100);
+assert.deepEqual(poorLearn.campaign.companions[0].learnedSkills, ["shockLeap", "weaponThrow"]);
+const fullEquip = equipCompanionSkill(
+  learned.campaign,
+  trainingCompanion.id,
+  "shieldCharge",
+);
+assert.equal(fullEquip.reason, "slot-required");
+const replaced = equipCompanionSkill(
+  learned.campaign,
+  trainingCompanion.id,
+  "shieldCharge",
+  1,
+);
+assert.equal(replaced.changed, true);
+assert.equal(replaced.campaign.gold, 500);
+assert.deepEqual(replaced.campaign.companions[0].skills, ["shockLeap", "shieldCharge"]);
+assert.ok(replaced.campaign.companions[0].learnedSkills.includes("weaponThrow"));
+const swapped = swapCompanionSkills(
+  replaced.campaign,
+  trainingCompanion.id,
+  0,
+  1,
+);
+assert.deepEqual(swapped.campaign.companions[0].skills, ["shieldCharge", "shockLeap"]);
+
+const legacyCompanion = JSON.parse(JSON.stringify(trainingCompanion)) as typeof trainingCompanion & Record<string, unknown>;
+delete legacyCompanion.learnedSkills;
+const normalizedLegacySkills = normalizeCompanionProgression(legacyCompanion);
+assert.deepEqual(normalizedLegacySkills.learnedSkills, trainingCompanion.skills);
+assert.deepEqual(normalizedLegacySkills.skills, trainingCompanion.skills);
+const savedTraining = JSON.parse(JSON.stringify(swapped.campaign)) as CampaignSave;
+const reloadedTraining = normalizeCompanionProgression(savedTraining.companions[0]);
+assert.deepEqual(reloadedTraining.learnedSkills, swapped.campaign.companions[0].learnedSkills);
+assert.deepEqual(reloadedTraining.skills, ["shieldCharge", "shockLeap"]);
+
+const equippedOnlyState = createNewGame(0xc04ba7);
+equippedOnlyState.player.professionId = "warrior";
+equippedOnlyState.player.learnedSkills = ["shockLeap", "weaponThrow", "drivingLeap"];
+equippedOnlyState.player.skills = ["weaponThrow", "drivingLeap"];
+equippedOnlyState.enemies = [];
+const equippedOnlyTarget = skillTarget(equippedOnlyState, 6);
+assert.ok(equippedOnlyTarget);
+const unequippedCast = activateCompanionSkill(
+  equippedOnlyState,
+  equippedOnlyState.player.companionId,
+  "shockLeap",
+  { x: equippedOnlyTarget.x, y: equippedOnlyTarget.y },
+);
+assert.equal(unequippedCast.consumedTurn, false);
+assert.match(unequippedCast.state.logs.at(-1) ?? "", /보유하지 않은 스킬/);
 
 const makeEnemy = (kind: Enemy["kind"], id: string, point: Point): Enemy => {
   const stats = ENEMY_STATS[kind];
@@ -328,4 +438,4 @@ assert.equal(enemyState.enemies[0].pendingSkill, null);
 assert.equal("currentStamina" in enemyState.enemies[0], false);
 assert.equal("currentMana" in enemyState.enemies[0], false);
 
-console.log("companion skill resource regression passed (cost, regen, manual round, save, enemy exemption)");
+console.log("companion skill regression passed (resources, training, loadout, save, enemy exemption)");

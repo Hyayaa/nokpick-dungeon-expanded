@@ -48,6 +48,7 @@ import {
   COMPANION_SKILLS,
   normalizeCompanionProfession,
   normalizeCompanionSkills,
+  normalizeLearnedSkills,
   normalizeSkillCooldowns,
 } from "./companion-skills";
 import {
@@ -1385,6 +1386,7 @@ const makePlayer = (point: Point): Player => {
     classId: adventurer.classId,
     professionId: adventurer.professionId,
     traits: [...adventurer.traits],
+    learnedSkills: [...adventurer.learnedSkills],
     skills: [...adventurer.skills],
     skillCooldowns: {},
     hp: adventurer.hp,
@@ -1483,6 +1485,14 @@ const cloneCompanionForFloor = (
     companion.professionId,
   ),
   traits: [...(companion.traits ?? [])],
+  learnedSkills: normalizeLearnedSkills(
+    normalizeCompanionProfession(
+      companion.classId,
+      companion.professionId,
+    ),
+    companion.learnedSkills,
+    companion.skills,
+  ),
   skills: normalizeCompanionSkills(
     normalizeCompanionProfession(
       companion.classId,
@@ -1490,6 +1500,14 @@ const cloneCompanionForFloor = (
     ),
     companion.id,
     companion.skills,
+    normalizeLearnedSkills(
+      normalizeCompanionProfession(
+        companion.classId,
+        companion.professionId,
+      ),
+      companion.learnedSkills,
+      companion.skills,
+    ),
   ),
   skillCooldowns: normalizeSkillCooldowns(companion.skillCooldowns),
   statuses: (companion.statuses ?? []).map((status) => ({ ...status })),
@@ -1574,6 +1592,14 @@ const makeFloorState = (
           carriedPlayer.professionId,
         ),
         traits: [...(carriedPlayer.traits ?? [])],
+        learnedSkills: normalizeLearnedSkills(
+          normalizeCompanionProfession(
+            carriedPlayer.classId,
+            carriedPlayer.professionId,
+          ),
+          carriedPlayer.learnedSkills,
+          carriedPlayer.skills,
+        ),
         skills: normalizeCompanionSkills(
           normalizeCompanionProfession(
             carriedPlayer.classId,
@@ -1581,6 +1607,14 @@ const makeFloorState = (
           ),
           carriedPlayer.companionId,
           carriedPlayer.skills,
+          normalizeLearnedSkills(
+            normalizeCompanionProfession(
+              carriedPlayer.classId,
+              carriedPlayer.professionId,
+            ),
+            carriedPlayer.learnedSkills,
+            carriedPlayer.skills,
+          ),
         ),
         skillCooldowns: normalizeSkillCooldowns(
           carriedPlayer.skillCooldowns,
@@ -4206,6 +4240,14 @@ export function activateCompanionSkill(
       ? state.player.companionId
       : (currentActor.character as Companion).id,
     currentActor.character.skills,
+    normalizeLearnedSkills(
+      normalizeCompanionProfession(
+        currentActor.character.classId,
+        currentActor.character.professionId,
+      ),
+      currentActor.character.learnedSkills,
+      currentActor.character.skills,
+    ),
   );
   if (!assignedSkills.includes(skillId)) {
     return skillFailure(state, "이 원정대원이 보유하지 않은 스킬입니다.");

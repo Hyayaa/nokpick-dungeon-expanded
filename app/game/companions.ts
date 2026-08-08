@@ -9,6 +9,7 @@ import {
   createCompanionSkills,
   normalizeCompanionProfession,
   normalizeCompanionSkills,
+  normalizeLearnedSkills,
   normalizeSkillCooldowns,
 } from "./companion-skills";
 import {
@@ -328,6 +329,7 @@ export const createCompanion = (
     xp: 0,
     nextXp: experienceForNextLevel(1),
     traits,
+    learnedSkills: [...skills],
     skills,
     skillCooldowns: {},
     statuses: [],
@@ -482,6 +484,11 @@ export const normalizeCompanionProgression = (
         COMPANION_CLASSES[companion.classId].maxHp *
           characterMaxHpMultiplier({ traits: normalizedTraits }),
       );
+  const learnedSkills = normalizeLearnedSkills(
+    professionId,
+    companion.learnedSkills,
+    companion.skills,
+  );
   return {
     ...companion,
     ...normalizeSkillResources(companion),
@@ -495,10 +502,12 @@ export const normalizeCompanionProgression = (
         : Math.max(1, companion.nextXp ?? experienceForNextLevel(level)),
     professionId,
     traits: normalizedTraits,
+    learnedSkills,
     skills: normalizeCompanionSkills(
       professionId,
       companion.id,
       companion.skills,
+      learnedSkills,
     ),
     skillCooldowns: normalizeSkillCooldowns(companion.skillCooldowns),
     statuses: (companion.statuses ?? []).map((status) => ({ ...status })),
