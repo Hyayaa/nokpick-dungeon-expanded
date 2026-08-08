@@ -632,6 +632,17 @@ export type CompanionSkillCooldowns = Partial<
   Record<CompanionSkillId, number>
 >;
 
+export type SkillResourceType = "stamina" | "mana";
+
+export type SkillResourceState = {
+  currentStamina: number;
+  maxStamina: number;
+  staminaRegen: number;
+  currentMana: number;
+  maxMana: number;
+  manaRegen: number;
+};
+
 export type CompanionCommand = "follow" | "explore" | "accompany" | "hold";
 
 export type CompanionEquipment = {
@@ -670,7 +681,7 @@ export type PlayerAutoSlots = [
   string | null,
 ];
 
-export type Companion = Point & {
+export type Companion = Point & SkillResourceState & {
   id: string;
   name: string;
   classId: CompanionClassId;
@@ -727,7 +738,7 @@ export type AugmentId =
   | "runicTemper"
   | "royalArmory";
 
-export type Player = Point & {
+export type Player = Point & SkillResourceState & {
   companionId: string;
   name: string;
   classId: CompanionClassId;
@@ -886,6 +897,7 @@ export type ActionResult = {
   defeatedIds?: string[];
   consumedTurn: boolean;
   elapsedTurns?: number;
+  resourceRegenExcludedActorIds?: string[];
   pickups?: ItemPickup[];
   throws?: ItemThrow[];
   magicVisuals?: MagicVisual[];

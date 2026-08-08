@@ -48,6 +48,7 @@ import {
   specialRoomMetadata,
 } from "./special-rooms";
 import { isQuestItemDefinitionId } from "./quests";
+import { normalizeSkillResources } from "./skill-resources";
 
 export type DungeonId = string;
 export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -1282,6 +1283,7 @@ export const createStarterCompanionRoster = (
 
 export const normalizeHeroForHub = (player: Player): Player => ({
   ...player,
+  ...normalizeSkillResources(player),
   traits: [...(player.traits ?? [])],
   skills: [...(player.skills ?? [])],
   skillCooldowns: {},
@@ -1437,6 +1439,7 @@ export const companionToPlayer = (companion: Companion): Player => {
     item?.instance ? [cloneInstance(item.instance)] : [],
   );
   return {
+    ...normalizeSkillResources(normalized),
     companionId: normalized.id,
     name: normalized.name,
     classId: normalized.classId,
@@ -1507,6 +1510,7 @@ export const playerToCompanion = (player: Player): Companion => {
     };
   }) as Companion["autoSlots"];
   return normalizeCompanionForHub({
+    ...normalizeSkillResources(player),
     id: player.companionId,
     name: player.name || definition.defaultNameKo,
     classId: player.classId,

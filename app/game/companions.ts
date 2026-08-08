@@ -2,6 +2,10 @@ import { ITEM_DEFS } from "./data";
 import { equipmentStatProfile, normalizeEquipmentInstance } from "./equipment";
 import { experienceForNextLevel } from "./progression";
 import {
+  createSkillResources,
+  normalizeSkillResources,
+} from "./skill-resources";
+import {
   createCompanionSkills,
   normalizeCompanionProfession,
   normalizeCompanionSkills,
@@ -311,6 +315,7 @@ export const createCompanion = (
     definition.maxHp * characterMaxHpMultiplier({ traits }),
   );
   return {
+    ...createSkillResources(),
     id,
     name: definition.defaultNameKo,
     classId,
@@ -479,6 +484,7 @@ export const normalizeCompanionProgression = (
       );
   return {
     ...companion,
+    ...normalizeSkillResources(companion),
     hp: Math.min(maxHp, companion.hp),
     maxHp,
     level,

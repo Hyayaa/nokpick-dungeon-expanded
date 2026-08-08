@@ -128,6 +128,15 @@ import {
 } from "./loadout";
 import { random, randomInt } from "./random";
 import {
+  canPaySkillResource,
+  currentSkillResource,
+  fillSkillResources,
+  formatSkillResourceAmount,
+  normalizeSkillResources,
+  paySkillResource,
+  recoverPartySkillResources,
+} from "./skill-resources";
+import {
   gridDistance as distance,
   pointEquals,
   pointInBounds as inBounds,
@@ -610,8 +619,18 @@ const pruneEquipmentOffers = (state: GameState) => {
   );
 };
 
-const spendPlayerTime = (state: GameState, cost: number) => {
-  const total = (state.player.actionProgress ?? 0) + Math.max(0, cost);
+const spendPlayerTime = (
+  state: GameState,
+  cost: number,
+  resourceRegenExcludedActorIds: ReadonlySet<string> = new Set(),
+) => {
+  const elapsedTime = Math.max(0, cost);
+  recoverPartySkillResources(
+    state,
+    elapsedTime,
+    resourceRegenExcludedActorIds,
+  );
+  const total = (state.player.actionProgress ?? 0) + elapsedTime;
   const elapsedTurns = Math.floor(total + 0.000001);
   state.player.actionProgress = Math.max(
     0,
@@ -1359,67 +1378,68 @@ const populateFloor = (
 const makePlayer = (point: Point): Player => {
   const adventurer = createCompanion("adventurer", point, 0);
   return {
-  ...point,
-  companionId: adventurer.id,
-  name: adventurer.name,
-  classId: adventurer.classId,
-  professionId: adventurer.professionId,
-  traits: [...adventurer.traits],
-  skills: [...adventurer.skills],
-  skillCooldowns: {},
-  hp: adventurer.hp,
-  maxHp: adventurer.maxHp,
-  level: adventurer.level,
-  xp: adventurer.xp,
-  nextXp: adventurer.nextXp,
-  baseAttack: adventurer.baseAttack,
-  baseDefense: adventurer.baseDefense,
-  accuracy: adventurer.accuracy,
-  evasion: adventurer.evasion,
-  viewDistance: adventurer.viewDistance,
-  inventory: {
-    potion_healing: 1,
-  },
-  inventoryInstances: [],
-  inventorySlots: [
-    "potion_healing",
-    ...Array.from({ length: MAX_INVENTORY_SLOTS - 1 }, () => null),
-  ],
-  throwableProfiles: {},
-  equipment: {
-    weapon: "rusty_sword",
-    armor: "cloth_armor",
-    ring: null,
-    ring2: null,
-    ring3: null,
-    ring4: null,
-  },
-  equipmentInstances: {
-    weapon: createPlainEquipmentInstance(
-      ITEM_DEFS.rusty_sword,
-      "equipped-starter-rusty-sword",
-    ),
-    armor: createPlainEquipmentInstance(
-      ITEM_DEFS.cloth_armor,
-      "equipped-starter-cloth-armor",
-    ),
-    ring: null,
-    ring2: null,
-    ring3: null,
-    ring4: null,
-  },
-  invisibleTurns: 0,
-  statuses: [],
-  shield: 0,
-  autoSlots: [null, null, null, null],
-  wandCharges: {},
-  augments: {},
-  natureAidCooldown: 0,
-  facing: "down",
-  actionProgress: 0,
-  hunger: 100,
-  hungerTurns: 0,
-  recoveryProgress: 0,
+    ...normalizeSkillResources(adventurer),
+    ...point,
+    companionId: adventurer.id,
+    name: adventurer.name,
+    classId: adventurer.classId,
+    professionId: adventurer.professionId,
+    traits: [...adventurer.traits],
+    skills: [...adventurer.skills],
+    skillCooldowns: {},
+    hp: adventurer.hp,
+    maxHp: adventurer.maxHp,
+    level: adventurer.level,
+    xp: adventurer.xp,
+    nextXp: adventurer.nextXp,
+    baseAttack: adventurer.baseAttack,
+    baseDefense: adventurer.baseDefense,
+    accuracy: adventurer.accuracy,
+    evasion: adventurer.evasion,
+    viewDistance: adventurer.viewDistance,
+    inventory: {
+      potion_healing: 1,
+    },
+    inventoryInstances: [],
+    inventorySlots: [
+      "potion_healing",
+      ...Array.from({ length: MAX_INVENTORY_SLOTS - 1 }, () => null),
+    ],
+    throwableProfiles: {},
+    equipment: {
+      weapon: "rusty_sword",
+      armor: "cloth_armor",
+      ring: null,
+      ring2: null,
+      ring3: null,
+      ring4: null,
+    },
+    equipmentInstances: {
+      weapon: createPlainEquipmentInstance(
+        ITEM_DEFS.rusty_sword,
+        "equipped-starter-rusty-sword",
+      ),
+      armor: createPlainEquipmentInstance(
+        ITEM_DEFS.cloth_armor,
+        "equipped-starter-cloth-armor",
+      ),
+      ring: null,
+      ring2: null,
+      ring3: null,
+      ring4: null,
+    },
+    invisibleTurns: 0,
+    statuses: [],
+    shield: 0,
+    autoSlots: [null, null, null, null],
+    wandCharges: {},
+    augments: {},
+    natureAidCooldown: 0,
+    facing: "down",
+    actionProgress: 0,
+    hunger: 100,
+    hungerTurns: 0,
+    recoveryProgress: 0,
   };
 };
 
@@ -1456,6 +1476,7 @@ const cloneCompanionForFloor = (
   point: Point,
 ): Companion => ({
   ...companion,
+  ...normalizeSkillResources(companion),
   ...point,
   professionId: normalizeCompanionProfession(
     companion.classId,
@@ -1546,6 +1567,7 @@ const makeFloorState = (
   const player = carriedPlayer
     ? {
         ...carriedPlayer,
+        ...normalizeSkillResources(carriedPlayer),
         ...generated.start,
         professionId: normalizeCompanionProfession(
           carriedPlayer.classId,
@@ -1752,12 +1774,20 @@ export function createExpeditionGame(
   forcedRoomPresets: readonly P0RoomPreset[] = [],
   forcedSpecialPreset?: SpecialRoomPreset,
 ): GameState {
+  const expeditionPlayer = {
+    ...player,
+    ...fillSkillResources(player),
+  };
+  const expeditionCompanions = companions.map((companion) => ({
+    ...companion,
+    ...fillSkillResources(companion),
+  }));
   const state = makeFloorState(
     seed,
     1,
     1,
-    player,
-    companions,
+    expeditionPlayer,
+    expeditionCompanions,
     rules,
     forcedRoomPresets,
     forcedSpecialPreset,
@@ -2799,13 +2829,40 @@ export function deferActionForManualRound(
   result: ActionResult,
 ): ActionResult {
   if (!result.consumedTurn) return result;
+  const deferredResources = (
+    before: Player | Companion,
+    after: Player | Companion,
+  ) => {
+    const previousResources = normalizeSkillResources(before);
+    const currentResources = normalizeSkillResources(after);
+    return {
+      ...currentResources,
+      currentStamina: Math.min(
+        previousResources.currentStamina,
+        currentResources.currentStamina,
+      ),
+      currentMana: Math.min(
+        previousResources.currentMana,
+        currentResources.currentMana,
+      ),
+    };
+  };
   const state = {
     ...result.state,
     turn: previous.turn,
     player: {
       ...result.state.player,
+      ...deferredResources(previous.player, result.state.player),
       actionProgress: previous.player.actionProgress ?? 0,
     },
+    companions: result.state.companions.map((companion) => {
+      const before = previous.companions.find(
+        (candidate) => candidate.id === companion.id,
+      );
+      return before
+        ? { ...companion, ...deferredResources(before, companion) }
+        : companion;
+    }),
   };
   return {
     ...result,
@@ -2815,8 +2872,16 @@ export function deferActionForManualRound(
 }
 
 /** Advance exactly one shared round after all manually controlled actors act. */
-export function advanceManualPartyRound(state: GameState): ActionResult {
+export function advanceManualPartyRound(
+  state: GameState,
+  resourceRegenExcludedActorIds: readonly string[] = [],
+): ActionResult {
   const next = cloneGameWithoutTiles(state);
+  recoverPartySkillResources(
+    next,
+    1,
+    new Set(resourceRegenExcludedActorIds),
+  );
   next.turn += 1;
   next.player.actionProgress = 0;
   pruneEquipmentOffers(next);
@@ -4274,6 +4339,21 @@ export function activateCompanionSkill(
   ) {
     return skillFailure(state, "충전이 남은 지팡이를 공용 칸에 등록해야 합니다.");
   }
+  if (
+    !canPaySkillResource(
+      currentActor.character,
+      definition.resourceType,
+      definition.resourceCost,
+    )
+  ) {
+    const resourceLabel = definition.resourceType === "stamina" ? "기력" : "마나";
+    return skillFailure(
+      state,
+      `${resourceLabel} 부족 · ${formatSkillResourceAmount(
+        currentSkillResource(currentActor.character, definition.resourceType),
+      )} / ${formatSkillResourceAmount(definition.resourceCost)}`,
+    );
+  }
   if (currentActor.kind === "player") {
     const incapacitated = consumeIncapacitatedPlayerTurn(state);
     if (incapacitated) return incapacitated;
@@ -4287,6 +4367,14 @@ export function activateCompanionSkill(
 
   const next = cloneGame(state);
   const actor = resolveSkillActor(next, casterId)!;
+  const resourceActorId = actor.kind === "player"
+    ? actor.character.companionId
+    : (actor.character as Companion).id;
+  paySkillResource(
+    actor.character,
+    definition.resourceType,
+    definition.resourceCost,
+  );
   const castFrom = {
     x: actor.character.x,
     y: actor.character.y,
@@ -4932,7 +5020,12 @@ export function activateCompanionSkill(
       (actor.character as Companion).actionCooldown ?? 0,
     );
   }
-  const elapsedTurns = spendPlayerTime(next, 1);
+  const resourceRegenExcludedActorIds = [resourceActorId];
+  const elapsedTurns = spendPlayerTime(
+    next,
+    1,
+    new Set(resourceRegenExcludedActorIds),
+  );
   const defeatedIds = removeDefeatedEnemies(next, effects, true, actor.motionId);
   updatePlayerFieldOfView(next);
   pushLog(next, `${actor.character.name}이(가) ${definition.nameKo}을(를) 사용했습니다.`);
@@ -4945,6 +5038,7 @@ export function activateCompanionSkill(
     defeatedIds,
     consumedTurn: true,
     elapsedTurns,
+    resourceRegenExcludedActorIds,
     throws,
     magicVisuals: [],
     skillVisuals: [{
