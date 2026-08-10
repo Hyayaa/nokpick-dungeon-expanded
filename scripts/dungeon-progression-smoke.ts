@@ -1,0 +1,166 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import DungeonGame from "../app/components/DungeonGame";
+import {
+  BOSS_DUNGEON_STAGES,
+  DUNGEON_DEFINITIONS,
+  bossDifficultyForClears,
+  bossDungeonClearsAfterOutcome,
+  createBossDungeonOffer,
+  generateDungeonOffers,
+  maximumRecommendedDifficulty,
+  normalizeBossDungeonClears,
+} from "../app/game/campaign";
+import {
+  createExpeditionGame,
+  createNewGame,
+  descendFloor,
+} from "../app/game/engine";
+
+const seed = 0xd09e7001;
+const initial = generateDungeonOffers(seed, 0);
+const initialRecommended = initial.filter(
+  (dungeon) => dungeon.offerKind === "recommended",
+);
+const initialBoss = initial[6];
+
+assert.equal(initial.length, 7);
+assert.equal(initialRecommended.length, 6);
+assert.equal(initialBoss.offerKind, "boss");
+assert.equal(initialBoss.difficulty, 2);
+assert.equal(initialBoss.difficultyGrade, "E");
+assert.equal(initialBoss.themeId, "flooded_sewers");
+assert.equal(initialBoss.bossId, "goo");
+assert.equal(initialBoss.floorCount, 2);
+assert.ok(initialBoss.mainDropIds.length > 0, "boss loot generation must stay intact");
+assert.ok(initialBoss.lootPlan.length > 0, "boss floor loot planning must stay intact");
+assert.ok(
+  initialRecommended.every(
+    (dungeon) => dungeon.difficulty === 1 || dungeon.difficulty === 2,
+  ),
+);
+assert.ok(initialRecommended.some((dungeon) => dungeon.difficulty === 1));
+assert.ok(initialRecommended.some((dungeon) => dungeon.difficulty === 2));
+assert.ok(
+  initialRecommended.every(
+    (dungeon) => dungeon.themeId !== initialBoss.themeId,
+  ),
+  "the active boss theme must be excluded from recommendations",
+);
+assert.ok(initialRecommended.every((dungeon) => dungeon.bossId === undefined));
+assert.deepEqual(initial, generateDungeonOffers(seed, 0));
+
+const firstFloorBase = createNewGame(seed + 1);
+const firstFloor = createExpeditionGame(
+  seed + 1,
+  {
+    dungeonId: initialBoss.id,
+    dungeonName: initialBoss.nameKo,
+    maxFloor: initialBoss.floorCount,
+    difficultyScale: initialBoss.difficultyScale,
+    difficulty: initialBoss.difficulty,
+    bossId: initialBoss.bossId,
+    mainDropIds: initialBoss.mainDropIds,
+    specialRoomPlan: initialBoss.specialRoomPlan,
+    lootPlan: initialBoss.lootPlan,
+    goldPlan: initialBoss.goldPlan,
+    quests: [],
+  },
+  firstFloorBase.player,
+  [],
+);
+assert.equal(firstFloor.floor, 1);
+assert.equal(firstFloor.bossEncounter, undefined);
+assert.ok(firstFloor.enemies.length > 0, "boss dungeon floor 1 must stay ordinary");
+const bossFloor = descendFloor(firstFloor);
+assert.equal(bossFloor.floor, 2);
+assert.equal(bossFloor.bossEncounter?.bossId, "goo");
+
+assert.deepEqual(BOSS_DUNGEON_STAGES[2], {
+  difficulty: 2,
+  bossId: "goo",
+  themeId: "flooded_sewers",
+  floorCount: 2,
+});
+assert.equal(Object.values(BOSS_DUNGEON_STAGES).filter(Boolean).length, 1);
+
+const afterGoo = bossDungeonClearsAfterOutcome(0, initialBoss, "completed");
+assert.equal(afterGoo, 1);
+const unlockedD = generateDungeonOffers(seed + 2, afterGoo);
+const recommendedD = unlockedD.slice(0, 6);
+const pendingD = unlockedD[6];
+assert.ok(recommendedD.every((dungeon) => dungeon.difficulty <= 3));
+assert.ok(recommendedD.some((dungeon) => dungeon.difficulty === 1));
+assert.ok(recommendedD.some((dungeon) => dungeon.difficulty === 3));
+assert.equal(pendingD.offerKind, "boss");
+assert.equal(pendingD.difficulty, 3);
+assert.equal(pendingD.difficultyGrade, "D");
+assert.equal(pendingD.bossId, undefined);
+assert.equal(pendingD.nameKo, "다음 보스 준비 중");
+
+for (const [clears, expected] of [
+  [0, 2],
+  [1, 3],
+  [2, 4],
+  [3, 5],
+  [4, 6],
+  [5, 7],
+  [100, 7],
+] as const) {
+  assert.equal(maximumRecommendedDifficulty(clears), expected);
+  assert.equal(bossDifficultyForClears(clears), expected);
+  const offers = generateDungeonOffers(seed + clears, clears);
+  const recommended = offers.slice(0, 6);
+  assert.ok(recommended.every((dungeon) => dungeon.difficulty <= expected));
+  assert.ok(recommended.some((dungeon) => dungeon.difficulty === 1));
+  assert.ok(recommended.some((dungeon) => dungeon.difficulty === expected));
+  assert.equal(offers[6].difficulty, expected);
+}
+
+assert.equal(normalizeBossDungeonClears(undefined), 0);
+assert.equal(normalizeBossDungeonClears(Number.NaN), 0);
+assert.equal(normalizeBossDungeonClears(-4), 0);
+assert.equal(normalizeBossDungeonClears(3.9), 3);
+assert.equal(bossDungeonClearsAfterOutcome(4, initial[0], "completed"), 4);
+assert.equal(bossDungeonClearsAfterOutcome(4, initialBoss, "retreated"), 4);
+assert.equal(bossDungeonClearsAfterOutcome(4, initialBoss, "defeated"), 4);
+assert.equal(
+  bossDungeonClearsAfterOutcome(
+    4,
+    { offerKind: undefined },
+    "completed",
+  ),
+  4,
+  "developer boss floors must not advance campaign boss progression",
+);
+assert.equal(createBossDungeonOffer(seed, 100).difficulty, 7);
+assert.equal(createBossDungeonOffer(seed, 100).bossId, undefined);
+
+assert.equal(DUNGEON_DEFINITIONS.length, 7);
+const initialHubHtml = renderToStaticMarkup(createElement(DungeonGame));
+assert.equal(
+  (initialHubHtml.match(/class="dungeon-contract"/g) ?? []).length,
+  7,
+);
+assert.equal(
+  (initialHubHtml.match(/class="main-drops"/g) ?? []).length,
+  6,
+);
+assert.match(initialHubHtml, /보스 던전/);
+assert.match(initialHubHtml, /<dt>보스<\/dt><dd>구<\/dd>/);
+const uiSource = readFileSync("app/components/DungeonGame.tsx", "utf8");
+assert.match(
+  uiSource,
+  /generateDungeonOffers\([\s\S]*campaign\.offerSeed,[\s\S]*campaign\.bossDungeonClears/,
+);
+assert.match(uiSource, /const isBossOffer = dungeon\.offerKind === "boss"/);
+assert.match(uiSource, /\{!isBossOffer && \([\s\S]*className="main-drops"/);
+assert.match(uiSource, /disabled=\{isPendingBoss\}/);
+assert.match(
+  uiSource,
+  /bossDungeonClears: bossDungeonClearsAfterOutcome\([\s\S]*finishedDungeon,[\s\S]*outcome/,
+);
+
+console.log("Dungeon offer and boss-gate progression smoke checks passed.");

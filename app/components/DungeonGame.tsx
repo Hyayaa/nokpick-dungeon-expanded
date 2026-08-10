@@ -141,6 +141,7 @@ import {
   ExpeditionStats,
   WarehouseState,
   applyLoadoutToPlayer,
+  bossDungeonClearsAfterOutcome,
   cloneWarehouse,
   companionToPlayer,
   createInitialWarehouse,
@@ -151,6 +152,7 @@ import {
   generateDungeonOffers,
   INITIAL_DUNGEON_OFFER_SEED,
   mergeReturningCompanions,
+  normalizeBossDungeonClears,
   normalizeCompanionForHub,
   normalizeCompanionForHubWithReleasedItems,
   normalizeHeroForHub,
@@ -5081,13 +5083,14 @@ function EquipmentComparisonModal({
 
 const createDefaultCampaign = (): CampaignSave => {
   return {
-    version: 7,
+    version: 8,
     warehouse: createInitialWarehouse(),
     materials: createCampaignMaterials({ potion: 3 }),
     shop: createShopState(INITIAL_DUNGEON_OFFER_SEED),
     companions: createStarterCompanionRoster(COMPANION_CLASS_IDS),
     expeditions: 0,
     completedExpeditions: 0,
+    bossDungeonClears: 0,
     gold: 0,
     offerSeed: INITIAL_DUNGEON_OFFER_SEED,
   };
@@ -5103,13 +5106,14 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
       companions?: Companion[];
       expeditions?: number;
       completedExpeditions?: number;
+      bossDungeonClears?: number;
       gold?: number;
       offerSeed?: number;
       shop?: CampaignSave["shop"];
       materials?: unknown;
     };
     if (
-      ![1, 2, 3, 4, 5, 6, 7].includes(parsed.version ?? 0) ||
+      ![1, 2, 3, 4, 5, 6, 7, 8].includes(parsed.version ?? 0) ||
       !parsed.warehouse ||
       !Array.isArray(parsed.companions) ||
       (parsed.version === 1 && !parsed.hero)
@@ -5185,7 +5189,7 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
         ? parsed.offerSeed >>> 0
         : randomDungeonSeed();
     return {
-      version: 7,
+      version: 8,
       warehouse: restoredWarehouse,
       materials: addMaterials(
         normalizeCampaignMaterials(parsed.materials),
@@ -5195,6 +5199,9 @@ const restoreCampaign = (raw: string | null): CampaignSave | null => {
       companions,
       expeditions,
       completedExpeditions: Math.max(0, parsed.completedExpeditions ?? 0),
+      bossDungeonClears: normalizeBossDungeonClears(
+        parsed.bossDungeonClears,
+      ),
       gold:
         typeof parsed.gold === "number" && Number.isFinite(parsed.gold)
           ? Math.max(0, Math.floor(parsed.gold))
@@ -5474,7 +5481,7 @@ function HubScreen({
           <p className="eyebrow">다음 원정</p>
           <h2>어디로 향하시겠습니까?</h2>
           <p>
-            이번 원정에 제안된 6개 던전입니다. 원정을 마치면 깊이·난이도·주요 전리품이 다른 새 목록으로 교체됩니다.
+            파밍용 추천 던전 6개와 보스 진행 던전 1개입니다. 원정을 마치면 새로운 목록으로 교체됩니다.
           </p>
         </div>
         <div className="hub-party-summary">
@@ -5504,6 +5511,11 @@ function HubScreen({
       </section>
       <section className="dungeon-board" aria-label="탐험할 던전 선택">
         {dungeons.map((dungeon, index) => {
+          const isBossOffer = dungeon.offerKind === "boss";
+          const isPendingBoss = isBossOffer && !dungeon.bossId;
+          const bossName = dungeon.bossId
+            ? bossDefinition(dungeon.bossId).nameKo
+            : null;
           const mainLootEntries = selectMainLootEntries(dungeon.lootPlan);
           return (
             <article
@@ -5514,7 +5526,7 @@ function HubScreen({
               <header>
                 <span className="contract-index">0{index + 1}</span>
                 <div>
-                  <small>{dungeon.subtitleKo}</small>
+                  <small>{isBossOffer ? "보스 던전" : dungeon.subtitleKo}</small>
                   <h3>{dungeon.nameKo}</h3>
                 </div>
               </header>
@@ -5534,54 +5546,67 @@ function HubScreen({
                 </div>
                 <div>
                   <dt>던전 깊이</dt>
-                  <dd>총 {dungeon.floorCount}층</dd>
+                  <dd>{isPendingBoss ? "준비 중" : `총 ${dungeon.floorCount}층`}</dd>
                 </div>
+                {isBossOffer && (
+                  <div>
+                    <dt>보스</dt>
+                    <dd>{bossName ?? "다음 보스 준비 중"}</dd>
+                  </div>
+                )}
               </dl>
-              <div className="main-drops">
-                <header>
-                  <small>주요 전리품</small>
-                  <em>아이템칸을 눌러 설명 보기</em>
-                </header>
-                <div className="fixed-item-grid dungeon-drop-grid">
-                  {mainLootEntries.map((entry) => (
-                    <button
-                      type="button"
-                      className="fixed-item-slot is-filled"
-                      key={entry.id}
-                      title={ITEM_DEFS[entry.defId]?.name}
-                      aria-label={`${ITEM_DEFS[entry.defId]?.name ?? entry.defId} 설명 보기`}
-                      onClick={(event) =>
-                        setItemPreview({
-                          itemId: entry.defId,
-                          itemRef:
-                            entry.instance?.id ??
-                            `recommended-${dungeon.id}-${entry.id}`,
-                          instance: entry.instance ?? null,
-                          quantity: entry.quantity,
-                          contextLabel: `${dungeon.nameKo} 주요 전리품`,
-                          anchor: descriptionAnchorFromElement(event.currentTarget),
-                        })
-                      }
-                    >
-                      <ItemSlotContents
-                        itemId={entry.defId}
-                        size={34}
-                        instance={entry.instance}
-                        quantity={entry.quantity}
-                        showQuantity={entry.quantity > 1}
-                      />
-                    </button>
-                  ))}
+              {!isBossOffer && (
+                <div className="main-drops">
+                  <header>
+                    <small>주요 전리품</small>
+                    <em>아이템칸을 눌러 설명 보기</em>
+                  </header>
+                  <div className="fixed-item-grid dungeon-drop-grid">
+                    {mainLootEntries.map((entry) => (
+                      <button
+                        type="button"
+                        className="fixed-item-slot is-filled"
+                        key={entry.id}
+                        title={ITEM_DEFS[entry.defId]?.name}
+                        aria-label={`${ITEM_DEFS[entry.defId]?.name ?? entry.defId} 설명 보기`}
+                        onClick={(event) =>
+                          setItemPreview({
+                            itemId: entry.defId,
+                            itemRef:
+                              entry.instance?.id ??
+                              `recommended-${dungeon.id}-${entry.id}`,
+                            instance: entry.instance ?? null,
+                            quantity: entry.quantity,
+                            contextLabel: `${dungeon.nameKo} 주요 전리품`,
+                            anchor: descriptionAnchorFromElement(event.currentTarget),
+                          })
+                        }
+                      >
+                        <ItemSlotContents
+                          itemId={entry.defId}
+                          size={34}
+                          instance={entry.instance}
+                          quantity={entry.quantity}
+                          showQuantity={entry.quantity > 1}
+                        />
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
               {developerMode && (
                 <DeveloperDungeonLoot
                   dungeon={dungeon}
                   onInspect={setItemPreview}
                 />
               )}
-              <button type="button" onClick={() => onSelectDungeon(dungeon)}>
-                이 던전 준비하기 <span aria-hidden="true">→</span>
+              <button
+                type="button"
+                disabled={isPendingBoss}
+                onClick={() => onSelectDungeon(dungeon)}
+              >
+                {isPendingBoss ? "다음 보스 준비 중" : "이 던전 준비하기"}{" "}
+                {!isPendingBoss && <span aria-hidden="true">→</span>}
               </button>
             </article>
           );
@@ -11281,8 +11306,11 @@ export default function DungeonGame() {
     useState<ExpeditionResultView | null>(null);
   const uiAudioRuntimeRef = useRef<GameAudioRuntime | null>(null);
   const dungeonOffers = useMemo(
-    () => generateDungeonOffers(campaign.offerSeed),
-    [campaign.offerSeed],
+    () => generateDungeonOffers(
+      campaign.offerSeed,
+      campaign.bossDungeonClears,
+    ),
+    [campaign.bossDungeonClears, campaign.offerSeed],
   );
 
   useEffect(() => {
@@ -11818,6 +11846,11 @@ export default function DungeonGame() {
           ),
           completedExpeditions:
             current.completedExpeditions + (outcome === "completed" ? 1 : 0),
+          bossDungeonClears: bossDungeonClearsAfterOutcome(
+            current.bossDungeonClears,
+            finishedDungeon,
+            outcome,
+          ),
           gold: current.gold + goldFound + completionGold,
           offerSeed: nextOfferSeed,
           shop: createShopState(nextOfferSeed, current.expeditions),

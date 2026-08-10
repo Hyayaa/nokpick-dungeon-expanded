@@ -26,12 +26,13 @@ import { learnCompanionSkill } from "../app/game/skill-training";
 import type { Player } from "../app/game/types";
 
 const createCampaign = (): CampaignSave => ({
-  version: 7,
+  version: 8,
   warehouse: createInitialWarehouse(),
   materials: createCampaignMaterials(),
   companions: createStarterCompanionRoster(COMPANION_CLASS_IDS.slice(0, 2)),
   expeditions: 0,
   completedExpeditions: 0,
+  bossDungeonClears: 0,
   gold: 2_000,
   offerSeed: 1,
   shop: createShopState(1),

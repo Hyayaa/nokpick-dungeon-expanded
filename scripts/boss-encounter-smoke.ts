@@ -116,16 +116,16 @@ assert.equal(gooSlam.cooldown, 5);
 assert.equal(gooEnemyDefinition.skillRules[0].windupTurns, 2);
 
 const offers = generateDungeonOffers(seed);
-const flooded = offers.find((dungeon) => dungeon.themeId === "flooded_sewers")!;
+const flooded = offers.find((dungeon) => dungeon.offerKind === "boss")!;
+assert.equal(flooded.themeId, "flooded_sewers");
 assert.equal(flooded.bossId, "goo");
 assert.ok(
-  offers.filter((dungeon) => dungeon.themeId !== "flooded_sewers")
+  offers.filter((dungeon) => dungeon.offerKind === "recommended")
     .every((dungeon) => dungeon.bossId === undefined),
 );
 assert.ok(
-  DUNGEON_DEFINITIONS.every(
-    (dungeon) => dungeon.themeId !== "flooded_sewers" || dungeon.bossId === "goo",
-  ),
+  DUNGEON_DEFINITIONS.filter((dungeon) => dungeon.offerKind === "recommended")
+    .every((dungeon) => dungeon.bossId === undefined),
 );
 
 const productionBase = createNewGame(seed + 1);

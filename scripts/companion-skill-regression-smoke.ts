@@ -369,12 +369,13 @@ trainingCompanion.learnedSkills = ["shockLeap", "weaponThrow"];
 trainingCompanion.skills = ["shockLeap", "weaponThrow"];
 trainingCompanion.skillLevels = { shockLeap: 1, weaponThrow: 1 };
 const trainingCampaign: CampaignSave = {
-  version: 7,
+  version: 8,
   warehouse: createInitialWarehouse(),
   materials: { potion: 10, seed: 40, runestone: 0 },
   companions: [trainingCompanion],
   expeditions: 0,
   completedExpeditions: 0,
+  bossDungeonClears: 0,
   gold: 1_000,
   offerSeed: 123,
   shop: createShopState(123),

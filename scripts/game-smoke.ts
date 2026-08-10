@@ -469,7 +469,7 @@ const createPreparationTransferFixture = () => {
   );
   return {
     campaign: {
-      version: 7 as const,
+      version: 8 as const,
       warehouse: {
         stacks: { potion_healing: 3 },
         instances: [sword, ring],
@@ -485,6 +485,7 @@ const createPreparationTransferFixture = () => {
       materials: { potion: 10, seed: 10, runestone: 10 },
       expeditions: 0,
       completedExpeditions: 0,
+      bossDungeonClears: 0,
       gold: 0,
       offerSeed: 1,
       shop: createShopState(1),
@@ -965,7 +966,7 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
-  /version: 7[\s\S]*materials: addMaterials[\s\S]*shop: normalizeShopState\(parsed\.shop, offerSeed, expeditions\)/,
+  /version: 8[\s\S]*materials: addMaterials[\s\S]*shop: normalizeShopState\(parsed\.shop, offerSeed, expeditions\)/,
   "campaign restore must migrate older saves into the persisted shop schema",
 );
 assert.match(
@@ -975,31 +976,43 @@ assert.match(
 );
 assert.equal(
   DUNGEON_DEFINITIONS.length,
-  6,
-  "the hub must offer six recommended dungeons per expedition cycle",
+  7,
+  "the hub must offer six recommendations and one boss dungeon",
 );
 assert.equal(
   (campaignHtml.match(/class="dungeon-contract"/g) ?? []).length,
-  6,
-  "the initial hub render must show all six recommendations",
+  7,
+  "the initial hub render must show all seven dungeon slots",
 );
-const offeredDifficulties = DUNGEON_DEFINITIONS
+const recommendedDefinitions = DUNGEON_DEFINITIONS.filter(
+  (dungeon) => dungeon.offerKind === "recommended",
+);
+const offeredDifficulties = recommendedDefinitions
   .map((dungeon) => dungeon.difficulty)
   .sort((a, b) => a - b);
 assert.equal(
-  new Set(offeredDifficulties).size,
+  recommendedDefinitions.length,
   6,
-  "the six recommendations must use six distinct grades from the seven-step scale",
+  "the hub must retain exactly six recommended offers",
 );
 assert.ok(
-  offeredDifficulties.includes(1) && offeredDifficulties.includes(7),
-  "every recommendation set must include both F and S so the full danger range remains available",
+  offeredDifficulties.every((difficulty) => difficulty === 1 || difficulty === 2),
+  "a new campaign must recommend only F and E dungeons",
 );
 assert.ok(
-  DUNGEON_DEFINITIONS.some(
+  offeredDifficulties.includes(1) && offeredDifficulties.includes(2),
+  "initial recommendations must include both F and E",
+);
+assert.ok(
+  recommendedDefinitions.some(
     (dungeon) => dungeon.difficulty === 1 && dungeon.floorCount === 3,
   ),
   "each recommendation set must retain at least one three-floor easy expedition",
+);
+assert.equal(
+  (campaignHtml.match(/class="main-drops"/g) ?? []).length,
+  6,
+  "the boss card must hide only its recommended-loot preview",
 );
 for (const dungeon of DUNGEON_DEFINITIONS) {
   assert.match(
@@ -1991,7 +2004,7 @@ assert.equal(
 assert.match(
   dungeonUiSource,
   /offerSeed:\s*nextOfferSeed/,
-  "finishing any expedition must replace the six recommended dungeon offers",
+  "finishing any expedition must replace the dungeon offer cycle",
 );
 assert.match(
   globalStyleSource,

@@ -65,6 +65,7 @@ import type { BossId } from "./boss-definitions";
 export type DungeonId = string;
 export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export type DungeonDifficultyGrade = ItemGrade;
+export type DungeonOfferKind = "recommended" | "boss";
 
 export type DungeonDefinition = {
   id: DungeonId;
@@ -81,6 +82,7 @@ export type DungeonDefinition = {
   difficultyLabelEn: string;
   floorCount: number;
   difficultyScale: number;
+  offerKind?: DungeonOfferKind;
   bossId?: BossId;
   mainDropIds: string[];
   specialRoomPlan: DungeonSpecialRoomPlanEntry[];
@@ -101,6 +103,8 @@ type DungeonTheme = Omit<
   | "difficultyLabelEn"
   | "floorCount"
   | "difficultyScale"
+  | "offerKind"
+  | "bossId"
   | "mainDropIds"
   | "specialRoomPlan"
   | "lootPlan"
@@ -123,7 +127,6 @@ const DUNGEON_THEMES: DungeonTheme[] = [
       "침수된 수로 곳곳에 식량과 회복 물자, 낡은 장비가 떠밀려 와 있습니다.",
     descriptionEn:
       "Food, healing supplies, and worn equipment have washed into the flooded channels.",
-    bossId: "goo",
     lootCategories: ["potion", "food", "armor"],
     accent: "#789c86",
   },
@@ -992,15 +995,204 @@ export const newExpeditionPickups = (pickups: readonly ItemPickup[]) =>
 
 export const INITIAL_DUNGEON_OFFER_SEED = 0x4d2b91a7;
 
-export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
-  const random = seededRandom(seed || INITIAL_DUNGEON_OFFER_SEED);
-  const themes = shuffleWith(DUNGEON_THEMES, random).slice(0, 6);
-  const middleDifficulties = shuffleWith<DungeonDifficulty>(
-    [2, 3, 4, 5, 6],
+export type BossDungeonStage = {
+  difficulty: DungeonDifficulty;
+  bossId: BossId;
+  themeId: string;
+  floorCount: number;
+};
+
+export const BOSS_DUNGEON_STAGES: Readonly<
+  Partial<Record<DungeonDifficulty, BossDungeonStage>>
+> = {
+  2: {
+    difficulty: 2,
+    bossId: "goo",
+    themeId: "flooded_sewers",
+    floorCount: 2,
+  },
+};
+
+export const normalizeBossDungeonClears = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
+
+export const bossDifficultyForClears = (
+  bossDungeonClears: unknown,
+): DungeonDifficulty =>
+  Math.min(
+    2 + normalizeBossDungeonClears(bossDungeonClears),
+    7,
+  ) as DungeonDifficulty;
+
+export const maximumRecommendedDifficulty = (
+  bossDungeonClears: unknown,
+): DungeonDifficulty => bossDifficultyForClears(bossDungeonClears);
+
+const selectOfferMainDrops = ({
+  theme,
+  rules,
+  random,
+  usedPrimaryDrops,
+}: {
+  theme: DungeonTheme;
+  rules: typeof DUNGEON_DIFFICULTY_RULES[DungeonDifficulty];
+  random: () => number;
+  usedPrimaryDrops: Set<string>;
+}) => {
+  const selectedDrops: string[] = [];
+  const categoryOrder = shuffleWith(theme.lootCategories, random);
+
+  categoryOrder.forEach((category) => {
+    if (selectedDrops.length >= 2) return;
+    const candidates = shuffleWith(
+      dropCandidates(category, rules.itemTier),
+      random,
+    );
+    const candidate = candidates.find(
+      (itemId) =>
+        !selectedDrops.includes(itemId) &&
+        (selectedDrops.length > 0 || !usedPrimaryDrops.has(itemId)),
+    );
+    if (candidate) selectedDrops.push(candidate);
+  });
+
+  if (selectedDrops.length < 2) {
+    const fallbackCandidates = shuffleWith(
+      dropCandidates(null, rules.itemTier),
+      random,
+    );
+    fallbackCandidates.forEach((itemId) => {
+      if (
+        selectedDrops.length < 2 &&
+        !selectedDrops.includes(itemId) &&
+        (selectedDrops.length > 0 || !usedPrimaryDrops.has(itemId))
+      ) {
+        selectedDrops.push(itemId);
+      }
+    });
+  }
+  if (
+    !selectedDrops.some(
+      (itemId) => ITEM_DEFS[itemId]?.category === "scroll",
+    )
+  ) {
+    const featuredScroll = shuffleWith(
+      dropCandidates("scroll", rules.itemTier),
+      random,
+    ).find((itemId) => !selectedDrops.includes(itemId));
+    if (featuredScroll) {
+      if (selectedDrops.length >= 2) {
+        selectedDrops[selectedDrops.length - 1] = featuredScroll;
+      } else {
+        selectedDrops.push(featuredScroll);
+      }
+    }
+  }
+  if (selectedDrops[0]) usedPrimaryDrops.add(selectedDrops[0]);
+  return selectedDrops;
+};
+
+const createDungeonOffer = ({
+  seed,
+  index,
+  theme,
+  difficulty,
+  floorCount,
+  offerKind,
+  bossId,
+  random,
+  usedPrimaryDrops,
+}: {
+  seed: number;
+  index: number;
+  theme: DungeonTheme;
+  difficulty: DungeonDifficulty;
+  floorCount: number;
+  offerKind: DungeonOfferKind;
+  bossId?: BossId;
+  random: () => number;
+  usedPrimaryDrops: Set<string>;
+}): DungeonDefinition => {
+  const rules = DUNGEON_DIFFICULTY_RULES[difficulty];
+  const selectedDrops = selectOfferMainDrops({
+    theme,
+    rules,
     random,
-  ).slice(0, 4);
+    usedPrimaryDrops,
+  });
+  const id = `${offerKind}-${theme.themeId}-${(seed >>> 0).toString(16)}-${index + 1}`;
+  const dungeonPlanSeed =
+    (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
+  const specialRoomPlan = createDungeonSpecialRoomPlan({
+    planId: id,
+    seed: dungeonPlanSeed,
+    floorCount,
+  });
+  const lootPlan = createDungeonLootPlan({
+    planId: id,
+    seed: dungeonPlanSeed,
+    difficulty,
+    floorCount,
+    mainDropIds: selectedDrops,
+    specialRoomPlan,
+  });
+  const { goldPlan, completionGold, goldTarget } = createDungeonGoldPlan({
+    planId: id,
+    seed: (seed ^ Math.imul(index + 1, 0x85ebca6b)) >>> 0,
+    difficulty,
+    floorCount,
+  });
+  return {
+    id,
+    themeId: theme.themeId,
+    nameKo: theme.nameKo,
+    nameEn: theme.nameEn,
+    subtitleKo: theme.subtitleKo,
+    subtitleEn: theme.subtitleEn,
+    descriptionKo: theme.descriptionKo,
+    descriptionEn: theme.descriptionEn,
+    difficulty,
+    difficultyGrade: rules.grade,
+    difficultyLabelKo: rules.labelKo,
+    difficultyLabelEn: rules.labelEn,
+    floorCount,
+    difficultyScale: rules.enemyStatMultiplier,
+    offerKind,
+    bossId,
+    mainDropIds: selectMainLootIds(lootPlan),
+    specialRoomPlan,
+    lootPlan,
+    goldPlan,
+    completionGold,
+    goldTarget,
+    accent: theme.accent,
+  };
+};
+
+export const generateRecommendedDungeonOffers = (
+  seed: number,
+  bossDungeonClears = 0,
+): DungeonDefinition[] => {
+  const random = seededRandom(seed || INITIAL_DUNGEON_OFFER_SEED);
+  const bossDifficulty = bossDifficultyForClears(bossDungeonClears);
+  const activeBossThemeId = BOSS_DUNGEON_STAGES[bossDifficulty]?.themeId;
+  const themes = shuffleWith(
+    DUNGEON_THEMES.filter((theme) => theme.themeId !== activeBossThemeId),
+    random,
+  ).slice(0, 6);
+  const maxDifficulty = maximumRecommendedDifficulty(bossDungeonClears);
+  const unlockedDifficulties = Array.from(
+    { length: maxDifficulty },
+    (_, index) => (index + 1) as DungeonDifficulty,
+  );
+  const randomDifficulties = Array.from(
+    { length: 4 },
+    () => unlockedDifficulties[Math.floor(random() * unlockedDifficulties.length)],
+  );
   const difficulties = shuffleWith<DungeonDifficulty>(
-    [1, ...middleDifficulties, 7],
+    [1, maxDifficulty, ...randomDifficulties],
     random,
   );
   const usedPrimaryDrops = new Set<string>();
@@ -1018,107 +1210,79 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
       floorCount = 3;
       firstEasyOfferAssigned = true;
     }
-    const selectedDrops: string[] = [];
-    const categoryOrder = shuffleWith(theme.lootCategories, random);
-
-    categoryOrder.forEach((category) => {
-      if (selectedDrops.length >= 2) return;
-      const candidates = shuffleWith(
-        dropCandidates(category, rules.itemTier),
-        random,
-      );
-      const candidate = candidates.find(
-        (itemId) =>
-          !selectedDrops.includes(itemId) &&
-          (selectedDrops.length > 0 || !usedPrimaryDrops.has(itemId)),
-      );
-      if (candidate) selectedDrops.push(candidate);
-    });
-
-    if (selectedDrops.length < 2) {
-      const fallbackCandidates = shuffleWith(
-        dropCandidates(null, rules.itemTier),
-        random,
-      );
-      fallbackCandidates.forEach((itemId) => {
-        if (
-          selectedDrops.length < 2 &&
-          !selectedDrops.includes(itemId) &&
-          (selectedDrops.length > 0 || !usedPrimaryDrops.has(itemId))
-        ) {
-          selectedDrops.push(itemId);
-        }
-      });
-    }
-    if (
-      !selectedDrops.some(
-        (itemId) => ITEM_DEFS[itemId]?.category === "scroll",
-      )
-    ) {
-      const featuredScroll = shuffleWith(
-        dropCandidates("scroll", rules.itemTier),
-        random,
-      ).find((itemId) => !selectedDrops.includes(itemId));
-      if (featuredScroll) {
-        if (selectedDrops.length >= 2) {
-          selectedDrops[selectedDrops.length - 1] = featuredScroll;
-        } else {
-          selectedDrops.push(featuredScroll);
-        }
-      }
-    }
-    if (selectedDrops[0]) usedPrimaryDrops.add(selectedDrops[0]);
-
-    const id = `${theme.themeId}-${(seed >>> 0).toString(16)}-${index + 1}`;
-    const difficultyScale = rules.enemyStatMultiplier;
-    const dungeonPlanSeed =
-      (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
-    const specialRoomPlan = createDungeonSpecialRoomPlan({
-      planId: id,
-      seed: dungeonPlanSeed,
-      floorCount,
-    });
-    const lootPlan = createDungeonLootPlan({
-      planId: id,
-      seed: dungeonPlanSeed,
+    return createDungeonOffer({
+      seed,
+      index,
+      theme,
       difficulty,
       floorCount,
-      mainDropIds: selectedDrops,
-      specialRoomPlan,
+      offerKind: "recommended",
+      random,
+      usedPrimaryDrops,
     });
-    const { goldPlan, completionGold, goldTarget } = createDungeonGoldPlan({
-      planId: id,
-      seed: (seed ^ Math.imul(index + 1, 0x85ebca6b)) >>> 0,
-      difficulty,
-      floorCount,
-    });
-    const mainDropIds = selectMainLootIds(lootPlan);
+  });
+};
+
+export const createBossDungeonOffer = (
+  seed: number,
+  bossDungeonClears = 0,
+): DungeonDefinition => {
+  const difficulty = bossDifficultyForClears(bossDungeonClears);
+  const rules = DUNGEON_DIFFICULTY_RULES[difficulty];
+  const stage = BOSS_DUNGEON_STAGES[difficulty];
+  if (!stage) {
     return {
-      id,
-      themeId: theme.themeId,
-      nameKo: theme.nameKo,
-      nameEn: theme.nameEn,
-      subtitleKo: theme.subtitleKo,
-      subtitleEn: theme.subtitleEn,
-      descriptionKo: theme.descriptionKo,
-      descriptionEn: theme.descriptionEn,
+      id: `boss-pending-${difficulty}-${(seed >>> 0).toString(16)}`,
+      themeId: "boss_progression_pending",
+      nameKo: "다음 보스 준비 중",
+      nameEn: "Next Boss Coming Soon",
+      subtitleKo: "보스 던전",
+      subtitleEn: "Boss Dungeon",
+      descriptionKo: "다음 단계의 보스 던전이 아직 준비되지 않았습니다.",
+      descriptionEn: "The next boss dungeon is not yet available.",
       difficulty,
       difficultyGrade: rules.grade,
       difficultyLabelKo: rules.labelKo,
       difficultyLabelEn: rules.labelEn,
-      floorCount,
-      difficultyScale,
-      bossId: theme.bossId,
-      mainDropIds,
-      specialRoomPlan,
-      lootPlan,
-      goldPlan,
-      completionGold,
-      goldTarget,
-      accent: theme.accent,
+      floorCount: 0,
+      difficultyScale: rules.enemyStatMultiplier,
+      offerKind: "boss",
+      mainDropIds: [],
+      specialRoomPlan: [],
+      lootPlan: [],
+      goldPlan: [],
+      completionGold: 0,
+      goldTarget: 0,
+      accent: "#786f86",
     };
+  }
+
+  const theme = DUNGEON_THEMES.find(
+    (candidate) => candidate.themeId === stage.themeId,
+  );
+  if (!theme) {
+    throw new Error(`Unknown boss dungeon theme: ${stage.themeId}`);
+  }
+  return createDungeonOffer({
+    seed: (seed ^ 0xb055da7a) >>> 0,
+    index: 6,
+    theme,
+    difficulty,
+    floorCount: stage.floorCount,
+    offerKind: "boss",
+    bossId: stage.bossId,
+    random: seededRandom((seed ^ 0x600db055) >>> 0),
+    usedPrimaryDrops: new Set<string>(),
   });
 };
+
+export const generateDungeonOffers = (
+  seed: number,
+  bossDungeonClears = 0,
+): DungeonDefinition[] => [
+  ...generateRecommendedDungeonOffers(seed, bossDungeonClears),
+  createBossDungeonOffer(seed, bossDungeonClears),
+];
 
 export const DUNGEON_DEFINITIONS = generateDungeonOffers(
   INITIAL_DUNGEON_OFFER_SEED,
@@ -1149,6 +1313,14 @@ export type ExpeditionLootEntry = {
 
 export type ExpeditionOutcome = "completed" | "retreated" | "defeated";
 
+export const bossDungeonClearsAfterOutcome = (
+  currentClears: unknown,
+  dungeon: Pick<DungeonDefinition, "offerKind">,
+  outcome: ExpeditionOutcome,
+) =>
+  normalizeBossDungeonClears(currentClears) +
+  (dungeon.offerKind === "boss" && outcome === "completed" ? 1 : 0);
+
 export type ExpeditionStats = {
   enemiesDefeated: number;
   experienceEarned: number;
@@ -1163,12 +1335,13 @@ export type ExpeditionStats = {
 };
 
 export type CampaignSave = {
-  version: 7;
+  version: 8;
   warehouse: WarehouseState;
   materials: CampaignMaterials;
   companions: Companion[];
   expeditions: number;
   completedExpeditions: number;
+  bossDungeonClears: number;
   gold: number;
   offerSeed: number;
   shop: ShopState;
