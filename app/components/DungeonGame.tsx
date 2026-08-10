@@ -111,8 +111,11 @@ import {
 import type { ActiveSlotEntry } from "../game/active-slots";
 import {
   canLearnCompanionSkill,
+  canLevelCompanionSkill,
   equipCompanionSkill,
   learnCompanionSkill,
+  levelCompanionSkill,
+  skillLevelRequirements,
   swapCompanionSkills,
   unequipCompanionSkill,
 } from "../game/skill-training";
@@ -206,7 +209,13 @@ import {
 import {
   COMPANION_PROFESSIONS,
   COMPANION_SKILLS,
+  MAX_COMPANION_SKILL_LEVEL,
+  normalizeCompanionSkillLevel,
 } from "../game/companion-skills";
+import {
+  companionSkillLevelModifier,
+  deriveCompanionSkill,
+} from "../game/companion-skill-blueprints";
 import {
   canPaySkillResource,
   currentSkillResource,
@@ -2760,6 +2769,45 @@ function CompanionInspector({
   );
 }
 
+const formatSkillEffectPercent = (ratio: number) => {
+  const percent = Math.round(ratio * 1000) / 10;
+  return Number.isInteger(percent) ? `${percent.toFixed(0)}%` : `${percent.toFixed(1)}%`;
+};
+
+const companionSkillEffectSummary = (
+  skillId: CompanionSkillId,
+  level: number,
+  language: UiLanguage = "ko",
+) => {
+  const skill = deriveCompanionSkill(skillId, [
+    companionSkillLevelModifier(skillId, level),
+  ]);
+  const labels: string[] = [];
+  if (skill.scalars.power !== undefined) {
+    labels.push(
+      `${language === "ko" ? "공격력" : "Power"} ${formatSkillEffectPercent(skill.scalars.power)}`,
+    );
+  }
+  if (skill.scalars.secondaryPower !== undefined) {
+    labels.push(
+      `${language === "ko" ? "추가 위력" : "Secondary"} ${formatSkillEffectPercent(skill.scalars.secondaryPower)}`,
+    );
+  }
+  if (skill.scalars.healRatio !== undefined) {
+    labels.push(
+      `${language === "ko" ? "회복" : "Healing"} ${formatSkillEffectPercent(skill.scalars.healRatio)}`,
+    );
+  }
+  if (labels.length === 0 && skill.scalars.durationTurns !== undefined) {
+    labels.push(
+      language === "ko"
+        ? `지속 ${skill.scalars.durationTurns}턴`
+        : `Duration ${skill.scalars.durationTurns} turns`,
+    );
+  }
+  return labels.join(" · ") || (language === "ko" ? "고정 효과" : "Fixed effect");
+};
+
 function SkillDescriptionWindow({
   caster,
   skillId,
@@ -2779,6 +2827,7 @@ function SkillDescriptionWindow({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const skill = COMPANION_SKILLS[skillId];
+  const skillLevel = normalizeCompanionSkillLevel(caster.skillLevels?.[skillId]);
   const cooldown = caster.skillCooldowns[skillId] ?? 0;
   const hasResource = canPaySkillResource(
     caster,
@@ -2802,7 +2851,7 @@ function SkillDescriptionWindow({
         </i>
         <div>
           <small>{caster.name} · {text("수동 스킬", "Manual Skill")}</small>
-          <h3>{language === "ko" ? skill.nameKo : skill.nameEn}</h3>
+          <h3>{language === "ko" ? skill.nameKo : skill.nameEn} · Lv.{skillLevel}</h3>
         </div>
         <button type="button" onClick={onClose} aria-label={text("스킬 설명 닫기", "Close skill details")}>×</button>
       </header>
@@ -2813,6 +2862,7 @@ function SkillDescriptionWindow({
           <div><dt>{text("사거리", "Range")}</dt><dd>{skill.range === 0 ? text("자기 칸", "Self") : `${skill.range}`}</dd></div>
           <div className={`skill-resource-cost is-${skill.resourceType}`}><dt>{text("소모", "Cost")}</dt><dd>{resourceLabel} {formatSkillResourceAmount(skill.resourceCost)}</dd></div>
           <div><dt>{text("재사용", "Cooldown")}</dt><dd>{skill.cooldown}{text("턴", " turns")}</dd></div>
+          <div><dt>{text("현재 효과", "Current effect")}</dt><dd>{companionSkillEffectSummary(skillId, skillLevel, language)}</dd></div>
           <div><dt>{text("현재", "Current")}</dt><dd>{cooldown > 0 ? text(`${cooldown}턴 남음`, `${cooldown} turns`) : !hasResource ? text(`${resourceLabel} 부족`, `Low ${resourceLabel.toLowerCase()}`) : text("사용 가능", "Ready")}</dd></div>
         </dl>
       </div>
@@ -5752,19 +5802,12 @@ function BlacksmithModal({
 }) {
   const slotDrag = useActiveItemSlotDrag();
   const candidates = listSmithyCandidates(campaign);
-  const upgradeableCandidates = candidates.filter((candidate) => {
-    const grade = resolveItemGrade(
-      ITEM_DEFS[candidate.itemId],
-      candidate.instance,
-    );
-    return smithyNextGrade(grade) !== null;
-  });
   const selectedKey = selectedTarget
     ? smithyTargetKey(selectedTarget)
     : null;
   const selected = candidates.find(
     (candidate) => smithyTargetKey(candidate.target) === selectedKey,
-  ) ?? upgradeableCandidates[0] ?? null;
+  ) ?? null;
   const currentGrade = selected
     ? resolveItemGrade(ITEM_DEFS[selected.itemId], selected.instance)
     : null;
@@ -5914,7 +5957,7 @@ function BlacksmithModal({
                     </button>
                   </>
                 ) : (
-                  <p className="blacksmith-max-grade">S급은 더 이상 올릴 수 없습니다.</p>
+                  <p className="blacksmith-max-grade">최대 등급입니다.</p>
                 )}
               </>
             ) : (
@@ -5923,7 +5966,7 @@ function BlacksmithModal({
                 {...(slotDrag?.addressAttributes({ zone: "smithyTarget" }, null) ?? {})}
               >
                 <span className="blacksmith-item-icon is-large"><i aria-hidden="true">+</i></span>
-                <p>왼쪽의 빛나는 장비를 선택하거나 이 칸에 놓으세요.</p>
+                <p>강화할 아이템을 선택하세요.</p>
               </div>
             )}
           </aside>
@@ -5994,6 +6037,15 @@ function TrainingGroundModal({
   const learnValidation = companion && selectedSkillId
     ? canLearnCompanionSkill(campaign, companion.id, selectedSkillId)
     : null;
+  const selectedSkillLevel = selectedLearned && selectedSkillId
+    ? normalizeCompanionSkillLevel(companion?.skillLevels?.[selectedSkillId])
+    : 0;
+  const levelRequirement = selectedLearned && selectedSkillId
+    ? skillLevelRequirements(selectedSkillId, selectedSkillLevel)
+    : null;
+  const levelValidation = companion && selectedLearned && selectedSkillId
+    ? canLevelCompanionSkill(campaign, companion.id, selectedSkillId)
+    : null;
 
   const selectCompanion = (companionId: string) => {
     setSelectedCompanionId(companionId);
@@ -6030,6 +6082,26 @@ function TrainingGroundModal({
         : result.reason === "already-equipped"
           ? "이미 장착 중인 스킬입니다."
           : "배운 스킬만 장착할 수 있습니다.",
+    );
+  };
+  const levelSelected = () => {
+    if (!companion || !selectedSkillId) return;
+    const result = levelCompanionSkill(campaign, companion.id, selectedSkillId);
+    if (result.changed && result.requirement) {
+      onCampaignChange(result.campaign);
+      setNotice(
+        `${COMPANION_SKILLS[selectedSkillId].nameKo} Lv.${result.requirement.nextLevel} 달성 · ${formatGold(result.requirement.gold)} G 사용`,
+      );
+      return;
+    }
+    setNotice(
+      result.reason === "maximum-level"
+        ? "이미 최대 레벨입니다."
+        : result.reason === "not-enough-gold"
+          ? "레벨 업에 필요한 골드가 부족합니다."
+          : result.reason === "not-enough-materials"
+            ? "레벨 업에 필요한 재료가 부족합니다."
+            : "이 스킬의 레벨을 올릴 수 없습니다.",
     );
   };
   const dropOnSkillSlot = (
@@ -6154,7 +6226,10 @@ function TrainingGroundModal({
                           }}
                         >
                           {skillId
-                            ? <ActiveSlotContents entry={{ kind: "skill", skillId }} size={42} />
+                            ? <>
+                                <ActiveSlotContents entry={{ kind: "skill", skillId }} size={42} />
+                                <span className="skill-level-badge">Lv.{normalizeCompanionSkillLevel(companion.skillLevels?.[skillId])}</span>
+                              </>
                             : <span className="empty-slot-glyph">+</span>}
                         </button>
                       );
@@ -6180,6 +6255,9 @@ function TrainingGroundModal({
                           onDoubleClick={() => learned && equipSkill(skillId)}
                         >
                           <ActiveSlotContents entry={{ kind: "skill", skillId }} size={42} />
+                          {learned && (
+                            <span className="skill-level-badge">Lv.{normalizeCompanionSkillLevel(companion.skillLevels?.[skillId])}</span>
+                          )}
                           <small>{skill.nameKo}</small>
                           <b>{learned ? (equipped ? "장착" : "습득") : `${skill.trainingCost} G`}</b>
                         </button>
@@ -6190,13 +6268,37 @@ function TrainingGroundModal({
                 <section className="training-skill-detail">
                   {selectedSkill ? (
                     <>
-                      <header><span style={{ background: selectedSkill.accent }} /><div><small>{selectedLearned ? "습득 완료" : "미습득 스킬"}</small><h3>{selectedSkill.nameKo}</h3></div></header>
+                      <header><span style={{ background: selectedSkill.accent }} /><div><small>{selectedLearned ? `Lv.${selectedSkillLevel} / ${MAX_COMPANION_SKILL_LEVEL}` : "미습득 스킬"}</small><h3>{selectedSkill.nameKo}</h3></div></header>
                       <p>{selectedSkill.descriptionKo}</p>
                       <dl>
                         <div><dt>소모</dt><dd className={`is-${selectedSkill.resourceType}`}>{selectedSkill.resourceType === "stamina" ? "기력" : "마나"} {formatSkillResourceAmount(selectedSkill.resourceCost)}</dd></div>
                         <div><dt>재사용 대기</dt><dd>{selectedSkill.cooldown}턴</dd></div>
                         <div><dt>사거리</dt><dd>{selectedSkill.range}칸</dd></div>
-                        <div><dt>훈련 비용</dt><dd>{selectedLearned ? "습득 완료" : `${formatGold(selectedSkill.trainingCost)} G`}</dd></div>
+                        {selectedLearned ? (
+                          <>
+                            <div><dt>현재 효과</dt><dd>{companionSkillEffectSummary(selectedSkill.id, selectedSkillLevel)}</dd></div>
+                            {levelRequirement ? (
+                              <>
+                                <div><dt>다음 레벨</dt><dd>{companionSkillEffectSummary(selectedSkill.id, levelRequirement.nextLevel)}</dd></div>
+                                <div className={campaign.gold >= levelRequirement.gold ? "is-satisfied" : "is-missing"}><dt>Gold</dt><dd>{formatGold(campaign.gold)} / {formatGold(levelRequirement.gold)}</dd></div>
+                                {(["seed", "potion"] as const).map((kind) => {
+                                  const required = levelRequirement.materials[kind] ?? 0;
+                                  const owned = campaign.materials[kind];
+                                  return (
+                                    <div className={owned >= required ? "is-satisfied" : "is-missing"} key={`level-${kind}`}>
+                                      <dt>{CAMPAIGN_MATERIAL_NAMES[kind]}</dt>
+                                      <dd>{owned} / {required}</dd>
+                                    </div>
+                                  );
+                                })}
+                              </>
+                            ) : (
+                              <div><dt>성장</dt><dd>최대 레벨</dd></div>
+                            )}
+                          </>
+                        ) : (
+                          <div><dt>훈련 비용</dt><dd>{formatGold(selectedSkill.trainingCost)} G</dd></div>
+                        )}
                         {!selectedLearned && CAMPAIGN_MATERIAL_KINDS.flatMap((kind) => {
                           const required = selectedSkill.trainingMaterials[kind] ?? 0;
                           if (required <= 0) return [];
@@ -6217,6 +6319,14 @@ function TrainingGroundModal({
                               ? "훈련 재료 부족"
                               : "배우기"}
                         </button>
+                      )}
+                      {selectedLearned && levelRequirement && (
+                        <button type="button" disabled={!levelValidation?.changed} onClick={levelSelected}>
+                          레벨 업
+                        </button>
+                      )}
+                      {selectedLearned && !levelRequirement && (
+                        <p className="training-max-level">최대 레벨</p>
                       )}
                     </>
                   ) : <p>스킬을 선택하면 상세 정보와 훈련 비용을 확인할 수 있습니다.</p>}

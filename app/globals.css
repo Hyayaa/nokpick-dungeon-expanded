@@ -6360,6 +6360,7 @@ kbd {
 }
 
 .training-skill-slot {
+  position: relative;
   width: 72px;
   height: 58px;
 }
@@ -6373,12 +6374,34 @@ kbd {
 }
 
 .training-skill-card {
+  position: relative;
   display: grid;
   min-height: 82px;
   align-content: center;
   justify-items: center;
   gap: 3px;
   padding: 5px;
+}
+
+.skill-level-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 2;
+  padding: 2px 3px;
+  border: 1px solid #697aa5;
+  background: #0d1421;
+  color: #c3d0ef;
+  font-family: var(--pixel);
+  font-size: 6px;
+  line-height: 1;
+}
+
+.training-max-level {
+  padding: 7px;
+  border: 1px solid #394862;
+  color: #aebddd !important;
+  text-align: center;
 }
 
 .training-skill-card.is-unlearned {

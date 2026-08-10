@@ -248,6 +248,32 @@ assert.match(
   /smithyUpgradeRequirements\(campaign, currentGrade\)[\s\S]*보유 룬석/,
   "the Blacksmith must show its shared Gold and Runestone requirement state",
 );
+assert.doesNotMatch(
+  dungeonGameSource,
+  /selected\s*=\s*candidates\.find\([\s\S]{0,240}\?\?\s*upgradeableCandidates\[0\]/,
+  "the Blacksmith must never auto-select its first upgrade candidate",
+);
+assert.match(
+  dungeonGameSource,
+  /selected\s*=\s*candidates\.find\([\s\S]{0,180}\?\?\s*null[\s\S]*강화할 아이템을 선택하세요\./,
+  "the Blacksmith must enter an explicit empty target state",
+);
+assert.match(
+  dungeonGameSource,
+  /skill-level-badge[\s\S]*normalizeCompanionSkillLevel\(companion\.skillLevels\?\.\[skillId\]\)/,
+  "learned and equipped Training Ground skills must show their saved level",
+);
+assert.match(
+  dungeonGameSource,
+  /현재 효과[\s\S]*companionSkillEffectSummary[\s\S]*다음 레벨[\s\S]*levelRequirement\.nextLevel/,
+  "Training Ground details must derive current and next level effects",
+);
+assert.match(
+  dungeonGameSource,
+  /levelCompanionSkill\(campaign, companion\.id, selectedSkillId\)[\s\S]*onClick=\{levelSelected\}/,
+  "skill level-up must require its explicit detail button transaction",
+);
+assert.match(dungeonCssSource, /\.skill-level-badge\s*\{/);
 assert.match(
   dungeonGameSource,
   /results-materials[\s\S]*result\.materialsGained\[kind\]/,
