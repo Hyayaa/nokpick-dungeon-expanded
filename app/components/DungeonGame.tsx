@@ -278,11 +278,15 @@ import {
 import { PLAYER_IDLE_FRAMES } from "../presentation/player-animation";
 import {
   createTurnMotionTimeline,
+  DEATH_EVENT_DELAY,
   durationForInteraction,
   durationForMotion,
   impactDelayForMotion,
+  impactTimeForSource,
   MIN_ACTION_DURATION,
   PLAYER_INTERACTION_DURATION,
+  presentationOffsetForCombatEffect,
+  worldRevealOffsetForDefeat,
 } from "../presentation/timing";
 import {
   canvasPointFromClient,
@@ -318,9 +322,11 @@ import {
   TERRAIN_DETAILS,
 } from "../presentation/inspection-catalog";
 import {
+  groundItemComesFromDefeatedEnemy,
   isDamageEffect,
   isDefeatEffect,
   isImpactEffect,
+  timingSourceIdForEffect,
 } from "../presentation/combat-feedback";
 import {
   ActionResult,
@@ -6806,6 +6812,7 @@ function DungeonRun({
   const entityFlashRef = useRef<EntityFlashVisual[]>([]);
   const defeatedEnemyVisualRef = useRef<DefeatedEnemyVisual[]>([]);
   const defeatedCompanionVisualRef = useRef<DefeatedCompanionVisual[]>([]);
+  const hiddenGroundItemUntilRef = useRef(new Map<string, number>());
   const playerActionRef = useRef<PlayerActionAnimation | null>(null);
   const cameraRef = useRef({ x: 0, y: 0 });
   const cameraFollowRef = useRef(true);
@@ -7536,8 +7543,8 @@ function DungeonRun({
         throws.forEach((itemThrow) => {
           const hitEffect = result.effects.find(
             (effect) =>
-              (effect.sourceId === itemThrow.sourceId ||
-                effect.sourceId === itemThrow.id) &&
+              [itemThrow.id, itemThrow.sourceId, `throw-${itemThrow.defId}`]
+                .includes(timingSourceIdForEffect(effect)) &&
               effect.x === itemThrow.to.x &&
               effect.y === itemThrow.to.y &&
               isDamageEffect(effect),
@@ -7563,11 +7570,6 @@ function DungeonRun({
             Math.max(...throws.map(throwImpactDelay)),
           );
         }
-      }
-      if (magicVisuals.length) {
-        addMagicVisuals(magicVisuals);
-        if (result.wandSoundId) playWandSound(result.wandSoundId);
-        else playSound("hit", 0.48, 120);
       }
       if (skillVisuals.length) {
         addSkillVisuals(skillVisuals);
@@ -7597,7 +7599,8 @@ function DungeonRun({
           result.effects,
           undefined,
           playerAttack
-            ? playerAttack.delay + playerAttack.duration * 0.52
+            ? playerAttack.delay +
+              impactDelayForMotion(playerAttack.motion)
             : 0,
         );
         if (playerAttack) {
@@ -7615,7 +7618,8 @@ function DungeonRun({
             addImpactVisual({
               point: playerAttack.motion.to,
               delay:
-                playerAttack.delay + playerAttack.duration * 0.52,
+                playerAttack.delay +
+                impactDelayForMotion(playerAttack.motion),
               color: hitEffect.color,
               strong: true,
               targetId: targetEnemy?.id,
@@ -7654,6 +7658,7 @@ function DungeonRun({
         entityFlashRef.current = [];
         defeatedEnemyVisualRef.current = [];
         defeatedCompanionVisualRef.current = [];
+        hiddenGroundItemUntilRef.current.clear();
         resetPixelFogRuntime(pixelFogRuntimeRef.current);
         commitGame(nextFloor);
         runStatsRef.current.deepestFloor = Math.max(
@@ -7684,9 +7689,8 @@ function DungeonRun({
         state: resolvedState,
       } = sessionResolution;
       recordRunProgress(visualStateBefore, resolvedState, pickups);
-      if (enemyTurns.length && !deferResolution) {
-        commitGame(withoutPendingAugmentModal(resolvedState));
-      }
+      const playerDefeatPending =
+        visualStateBefore.player.hp > 0 && resolvedState.player.hp <= 0;
 
       const allMotions = [
         ...result.motions,
@@ -7771,12 +7775,26 @@ function DungeonRun({
           )
           .map((scheduled) => [scheduled.motion.id, scheduled]),
       );
-      const skillTravelImpactDelay = (sourceId: string | undefined) => {
-        const travel = sourceId ? skillTravelSchedule.get(sourceId) : undefined;
-        return travel
-          ? travel.delay + impactDelayForMotion(travel.motion)
-          : actionLeadEnd;
+      const attackImpactSchedule = new Map(
+        [...attackSchedule].map(([sourceId, scheduled]) => [
+          sourceId,
+          scheduled.delay + impactDelayForMotion(scheduled.motion),
+        ]),
+      );
+      const skillTravelImpactSchedule = new Map(
+        [...skillTravelSchedule].map(([sourceId, scheduled]) => [
+          sourceId,
+          scheduled.delay + impactDelayForMotion(scheduled.motion),
+        ]),
+      );
+      const throwImpactSchedule = new Map<string, number>();
+      const rememberThrowImpact = (itemThrow: ItemThrow, delay: number) => {
+        const impactAt = delay + throwImpactDelay(itemThrow);
+        [itemThrow.id, itemThrow.sourceId, `throw-${itemThrow.defId}`]
+          .filter((sourceId): sourceId is string => Boolean(sourceId))
+          .forEach((sourceId) => throwImpactSchedule.set(sourceId, impactAt));
       };
+      throws.forEach((itemThrow) => rememberThrowImpact(itemThrow, 0));
       turnThrows.forEach((itemThrow) => {
         const attack = itemThrow.sourceId
           ? attackSchedule.get(itemThrow.sourceId)
@@ -7785,9 +7803,11 @@ function DungeonRun({
           ? attack.delay + attack.duration * 0.18
           : actionLeadEnd;
         addThrowVisuals([itemThrow], delay);
+        rememberThrowImpact(itemThrow, delay);
         const hitEffect = allEffects.find(
           (effect) =>
-            effect.sourceId === itemThrow.sourceId &&
+            [itemThrow.id, itemThrow.sourceId, `throw-${itemThrow.defId}`]
+              .includes(timingSourceIdForEffect(effect)) &&
             effect.x === itemThrow.to.x &&
             effect.y === itemThrow.to.y &&
             isDamageEffect(effect),
@@ -7810,6 +7830,65 @@ function DungeonRun({
           delay + throwImpactDelay(itemThrow),
         );
       });
+      const magicImpactSchedule = new Map<string, number>();
+      const scheduleMagicVisual = (
+        visual: MagicVisual,
+        delay: number,
+        wandSoundId?: string,
+      ) => {
+        addMagicVisuals([visual], delay);
+        if (visual.sourceId) {
+          const impactAt = delay + magicVisualDuration(visual) * 0.82;
+          const previous = magicImpactSchedule.get(visual.sourceId);
+          magicImpactSchedule.set(
+            visual.sourceId,
+            previous === undefined ? impactAt : Math.min(previous, impactAt),
+          );
+        }
+        if (wandSoundId) {
+          if (delay <= 0) playWandSound(wandSoundId);
+          else window.setTimeout(() => playWandSound(wandSoundId), delay);
+        }
+      };
+      magicVisuals.forEach((visual, index) => {
+        const attack = visual.sourceId
+          ? attackSchedule.get(visual.sourceId)
+          : undefined;
+        const delay = attack
+          ? attack.delay + attack.duration * 0.2
+          : 0;
+        scheduleMagicVisual(
+          visual,
+          delay,
+          index === 0 ? result.wandSoundId : undefined,
+        );
+      });
+      if (magicVisuals.length && !result.wandSoundId) {
+        playSound("hit", 0.48, 120);
+      }
+      turnMagicVisuals.forEach((visual, index) => {
+        const attack = visual.sourceId
+          ? attackSchedule.get(visual.sourceId)
+          : undefined;
+        const delay = attack
+          ? attack.delay + attack.duration * 0.2
+          : actionLeadEnd;
+        scheduleMagicVisual(visual, delay, turnWandSoundIds[index]);
+      });
+      const impactDelayForSource = (sourceId: string | undefined) =>
+        impactTimeForSource(
+          sourceId,
+          [
+            throwImpactSchedule,
+            magicImpactSchedule,
+            attackImpactSchedule,
+            skillTravelImpactSchedule,
+          ],
+          actionLeadEnd,
+        );
+      const presentationDelayForEffect = (effect: CombatEffect) =>
+        impactDelayForSource(timingSourceIdForEffect(effect)) +
+        presentationOffsetForCombatEffect(effect);
       const defeatContexts = [
         {
           state: visualStateBefore,
@@ -7824,6 +7903,8 @@ function DungeonRun({
       ];
       const defeatVisualStartedAt = performance.now();
       const deathSoundDelays = new Set<number>();
+      const defeatEffectsByEnemyId = new Map<string, CombatEffect>();
+      let latestDeathPresentationDelay = 0;
       defeatContexts.forEach((context) => {
         context.ids.forEach((enemyId) => {
           const enemy = context.state.enemies.find(
@@ -7838,12 +7919,14 @@ function DungeonRun({
                 effect.x === enemy.x &&
                 effect.y === enemy.y,
             );
-          const attack = killEffect?.sourceId
-            ? attackSchedule.get(killEffect.sourceId)
-            : undefined;
-          const removalDelay = attack
-            ? attack.delay + attack.duration * 0.52
-            : skillTravelImpactDelay(killEffect?.sourceId);
+          const removalDelay = killEffect
+            ? presentationDelayForEffect(killEffect)
+            : actionLeadEnd + DEATH_EVENT_DELAY;
+          if (killEffect) defeatEffectsByEnemyId.set(enemy.id, killEffect);
+          latestDeathPresentationDelay = Math.max(
+            latestDeathPresentationDelay,
+            removalDelay,
+          );
           deathSoundDelays.add(Math.max(0, Math.round(removalDelay)));
           if (removalDelay <= 0) return;
           defeatedEnemyVisualRef.current =
@@ -7861,17 +7944,29 @@ function DungeonRun({
           });
         });
       });
-      enemyTurns.forEach((enemyTurn, index) => {
-        const before = enemyTurnStarts[index];
+      const companionDefeatContexts = [
+        {
+          before: visualStateBefore,
+          after: result.state,
+          effects: result.effects,
+        },
+        ...enemyTurns.map((enemyTurn, index) => ({
+          before: enemyTurnStarts[index],
+          after: enemyTurn.state,
+          effects: enemyTurn.effects,
+        })),
+      ];
+      companionDefeatContexts.forEach((context) => {
+        const { before, after, effects } = context;
         before.companions
           .filter((companion) => {
-            const resolved = enemyTurn.state.companions.find(
+            const resolved = after.companions.find(
               (candidate) => candidate.id === companion.id,
             );
             return companion.hp > 0 && Boolean(resolved && resolved.hp <= 0);
           })
           .forEach((companion) => {
-            const defeatEffect = [...enemyTurn.effects]
+            const defeatEffect = [...effects]
               .reverse()
               .find(
                 (effect) =>
@@ -7879,12 +7974,13 @@ function DungeonRun({
                   effect.x === companion.x &&
                   effect.y === companion.y,
               );
-            const attack = defeatEffect?.sourceId
-              ? attackSchedule.get(defeatEffect.sourceId)
-              : undefined;
-            const revealDelay = attack
-              ? attack.delay + attack.duration * 0.52
-              : actionLeadEnd;
+            const revealDelay = defeatEffect
+              ? presentationDelayForEffect(defeatEffect)
+              : actionLeadEnd + DEATH_EVENT_DELAY;
+            latestDeathPresentationDelay = Math.max(
+              latestDeathPresentationDelay,
+              revealDelay,
+            );
             defeatedCompanionVisualRef.current =
               defeatedCompanionVisualRef.current.filter(
                 (visual) => visual.companion.id !== companion.id,
@@ -7904,44 +8000,30 @@ function DungeonRun({
       deathSoundDelays.forEach((delay) => {
         playSound("death", 0.7, delay);
       });
-      turnMagicVisuals.forEach((visual, index) => {
-        const attack = visual.sourceId
-          ? attackSchedule.get(visual.sourceId)
-          : undefined;
-        const delay = attack
-          ? attack.delay + attack.duration * 0.2
-          : actionLeadEnd;
-        addMagicVisuals([visual], delay);
-        const wandId = turnWandSoundIds[index];
-        if (wandId) {
-          window.setTimeout(() => playWandSound(wandId), delay);
-        }
+      const previousGroundItemIds = new Set(
+        visualStateBefore.groundItems.map((item) => item.id),
+      );
+      defeatEffectsByEnemyId.forEach((effect, enemyId) => {
+        const revealAt =
+          defeatVisualStartedAt +
+          impactDelayForSource(timingSourceIdForEffect(effect)) +
+          worldRevealOffsetForDefeat(effect);
+        resolvedState.groundItems
+          .filter(
+            (item) =>
+              !previousGroundItemIds.has(item.id) &&
+              groundItemComesFromDefeatedEnemy(item.id, enemyId),
+          )
+          .forEach((item) => {
+            hiddenGroundItemUntilRef.current.set(item.id, revealAt);
+          });
       });
+      if (enemyTurns.length && !deferResolution && !playerDefeatPending) {
+        commitGame(withoutPendingAugmentModal(resolvedState));
+      }
       const effectGroups = new Map<number, CombatEffect[]>();
       allEffects.forEach((effect) => {
-        const initialThrow = throws.find(
-          (itemThrow) =>
-            itemThrow.sourceId === effect.sourceId &&
-            itemThrow.to.x === effect.x &&
-            itemThrow.to.y === effect.y,
-        );
-        const attack = effect.sourceId
-          ? attackSchedule.get(effect.sourceId)
-          : undefined;
-        const magicVisual = effect.sourceId
-          ? turnMagicVisuals.find((visual) => visual.sourceId === effect.sourceId)
-          : undefined;
-        const magicImpactDelay = magicVisual
-          ? (attack
-              ? attack.delay + attack.duration * 0.2
-              : actionLeadEnd) + magicVisualDuration(magicVisual) * 0.82
-          : null;
-        const delay = initialThrow
-          ? throwImpactDelay(initialThrow)
-          : magicImpactDelay ??
-            (attack
-              ? attack.delay + attack.duration * 0.52
-              : skillTravelImpactDelay(effect.sourceId));
+        const delay = presentationDelayForEffect(effect);
         effectGroups.set(delay, [
           ...(effectGroups.get(delay) ?? []),
           effect,
@@ -7950,9 +8032,34 @@ function DungeonRun({
       effectGroups.forEach((effects, delay) => {
         addVisuals([], effects, undefined, delay);
       });
+      allEffects
+        .filter(
+          (effect) =>
+            (effect.deathChainDepth ?? 0) > 0 && isImpactEffect(effect),
+        )
+        .forEach((effect) => {
+          const targetCompanion = visualStateBefore.companions.find(
+            (companion) =>
+              companion.x === effect.x && companion.y === effect.y,
+          );
+          const targetEnemy = visualStateBefore.enemies.find(
+            (enemy) => enemy.x === effect.x && enemy.y === effect.y,
+          );
+          addImpactVisual({
+            point: effect,
+            delay: presentationDelayForEffect(effect),
+            color: effect.color,
+            strong: true,
+            targetId:
+              effect.x === visualStateBefore.player.x &&
+              effect.y === visualStateBefore.player.y
+                ? PLAYER_ID
+                : targetCompanion?.id ?? targetEnemy?.id,
+          });
+        });
       timeline.motions
         .filter(({ motion }) => motion.kind === "attack")
-        .forEach(({ motion, delay, duration }) => {
+        .forEach(({ motion }) => {
           if (
             allTurnThrows.some(
               (itemThrow) => itemThrow.sourceId === motion.id,
@@ -7987,7 +8094,7 @@ function DungeonRun({
           ).some((companion) => companion.id === motion.id);
           addImpactVisual({
             point: motion.to,
-            delay: delay + duration * 0.52,
+            delay: presentationDelayForEffect(hitEffect),
             color: hitEffect.color,
             strong:
               motion.id === PLAYER_ID ||
@@ -8001,7 +8108,8 @@ function DungeonRun({
         });
       const playerAttackSchedule = attackSchedule.get(PLAYER_ID);
       const playerImpactDelay = playerAttackSchedule
-        ? playerAttackSchedule.delay + playerAttackSchedule.duration * 0.52
+        ? playerAttackSchedule.delay +
+          impactDelayForMotion(playerAttackSchedule.motion)
         : 0;
       const movementEnd = timeline.motions
         .filter(({ motion }) => motion.kind !== "attack")
@@ -8042,9 +8150,31 @@ function DungeonRun({
           delay + duration * 0.28,
         );
       });
-      const resolutionDelay = playerAttackSchedule
+      const playerDefeatEffect = playerDefeatPending
+        ? [...allEffects]
+            .reverse()
+            .find(
+              (effect) =>
+                isDamageEffect(effect) &&
+                effect.x === resolvedState.player.x &&
+                effect.y === resolvedState.player.y,
+            )
+        : undefined;
+      const playerDefeatDelay = playerDefeatPending
+        ? (playerDefeatEffect
+            ? presentationDelayForEffect(playerDefeatEffect)
+            : actionLeadEnd) + DEATH_EVENT_DELAY
+        : 0;
+      latestDeathPresentationDelay = Math.max(
+        latestDeathPresentationDelay,
+        playerDefeatDelay,
+      );
+      const actionResolutionDelay = playerAttackSchedule
         ? Math.max(playerImpactDelay, throwEnd, interactionEnd)
         : throwEnd || interactionEnd;
+      const resolutionDelay = playerDefeatPending
+        ? Math.max(actionResolutionDelay, playerDefeatDelay)
+        : actionResolutionDelay;
       if (didLevelUp) {
         addLevelUpVisual(resolutionDelay + 20);
         playSound("levelUp", 0.72, resolutionDelay + 20);
@@ -8069,11 +8199,12 @@ function DungeonRun({
           MIN_ACTION_DURATION,
           timeline.totalDuration,
           actionLeadEnd,
+          latestDeathPresentationDelay,
           didLevelUp
             ? resolutionDelay + LEVEL_UP_EFFECT_HOLD
             : 0,
         );
-        if (deferResolution) {
+        if (deferResolution || playerDefeatPending) {
           await wait(resolutionDelay);
           if (actionTokenRef.current !== token) return;
           commitGame(withoutPendingAugmentModal(resolvedState));
@@ -10147,6 +10278,7 @@ function DungeonRun({
         entityFlashRef,
         defeatedEnemyVisualRef,
         defeatedCompanionVisualRef,
+        hiddenGroundItemUntilRef,
         playerActionRef,
         cameraRef,
         cameraFollowRef,

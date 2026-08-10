@@ -166,6 +166,7 @@ export type DungeonRendererOptions = {
   entityFlashRef: RefLike<EntityFlashVisual[]>;
   defeatedEnemyVisualRef: RefLike<DefeatedEnemyVisual[]>;
   defeatedCompanionVisualRef: RefLike<DefeatedCompanionVisual[]>;
+  hiddenGroundItemUntilRef: RefLike<Map<string, number>>;
   playerActionRef: RefLike<PlayerActionAnimation | null>;
   cameraRef: RefLike<Point>;
   cameraFollowRef: RefLike<boolean>;
@@ -230,6 +231,7 @@ export function startDungeonRenderer({
   entityFlashRef,
   defeatedEnemyVisualRef,
   defeatedCompanionVisualRef,
+  hiddenGroundItemUntilRef,
   playerActionRef,
   cameraRef,
   cameraFollowRef,
@@ -343,6 +345,9 @@ export function startDungeonRenderer({
     };
 
     const render = (now: number) => {
+      hiddenGroundItemUntilRef.current.forEach((revealAt, itemId) => {
+        if (revealAt <= now) hiddenGroundItemUntilRef.current.delete(itemId);
+      });
       retainInPlace(
         defeatedEnemyVisualRef.current,
         (visual) => visual.removeAt > now,
@@ -619,6 +624,8 @@ export function startDungeonRenderer({
       });
 
       state.groundItems.forEach((item) => {
+        const hiddenUntil = hiddenGroundItemUntilRef.current.get(item.id);
+        if (hiddenUntil !== undefined && now < hiddenUntil) return;
         if (!inViewport(item.x, item.y)) return;
         if (!revealAll && !state.tiles[item.y][item.x].visible) return;
         const definition = ITEM_DEFS[item.defId];

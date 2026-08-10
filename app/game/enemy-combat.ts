@@ -152,10 +152,37 @@ const createCloud = (state: GameState, kind: "toxic" | "corrosive", tiles: reado
   });
 };
 
-const damageTarget = (state: GameState, enemy: Enemy, target: PartyTarget, amount: number, output: SkillTurnOutput) => {
+const damageTarget = (
+  state: GameState,
+  enemy: Enemy,
+  target: PartyTarget,
+  amount: number,
+  output: SkillTurnOutput,
+  presentation?: Pick<CombatEffect, "timingSourceId" | "deathChainDepth">,
+) => {
+  const wasAlive = target.hp > 0;
   const damage = output.playerInvincible && target === state.player ? 0 : Math.max(1, Math.round(amount - Math.max(0, target.baseDefense ?? 0) * 0.35));
   target.hp = Math.max(0, target.hp - damage);
-  output.effects.push({ x: target.x, y: target.y, text: damage ? `-${damage}` : "무효", color: damage ? "#ff6969" : "#8ce7ff", kind: damage ? "damage" : "blocked", sourceId: enemy.id });
+  output.effects.push({
+    x: target.x,
+    y: target.y,
+    text: damage ? `-${damage}` : "무효",
+    color: damage ? "#ff6969" : "#8ce7ff",
+    kind: damage ? "damage" : "blocked",
+    sourceId: enemy.id,
+    ...presentation,
+  });
+  if (wasAlive && target !== state.player && target.hp <= 0) {
+    output.effects.push({
+      x: target.x,
+      y: target.y,
+      text: "전투 불능!",
+      color: "#d8a0a0",
+      kind: "defeat",
+      sourceId: enemy.id,
+      ...presentation,
+    });
+  }
 };
 
 const applySkillStatus = (enemy: Enemy, target: PartyTarget, skillId: EnemySkillId) => {
@@ -513,8 +540,18 @@ export const applyEnemyIncomingDamage = (
   return damage;
 };
 
+type EnemyDeathPresentationCause = Pick<
+  CombatEffect,
+  "timingSourceId" | "deathChainDepth"
+>;
+
 /** Generic summon ownership cleanup and death mechanics, called before removal. */
-export const resolveEnemyDeathMechanics = (state: GameState, enemy: Enemy, effects: CombatEffect[]) => {
+export const resolveEnemyDeathMechanics = (
+  state: GameState,
+  enemy: Enemy,
+  effects: CombatEffect[],
+  cause: EnemyDeathPresentationCause = {},
+) => {
   if (enemy.hp > 0) return false;
   if ((enemy.kind === "brute" || enemy.kind === "armored_brute") && !enemy.behaviorState?.raged) {
     enemy.hp = Math.max(1, Math.round(enemy.maxHp / 2));
@@ -530,7 +567,17 @@ export const resolveEnemyDeathMechanics = (state: GameState, enemy: Enemy, effec
   }
   if (enemy.kind === "skeleton" || enemy.kind === "necro_skeleton") {
     for (const target of partyTargets(state).filter((candidate) => distance(candidate, enemy) <= 1)) {
-      damageTarget(state, enemy, target, Math.max(2, Math.round(enemy.attack * 0.7)), { effects, motions:[], signals:[] });
+      damageTarget(
+        state,
+        enemy,
+        target,
+        Math.max(2, Math.round(enemy.attack * 0.7)),
+        { effects, motions:[], signals:[] },
+        {
+          timingSourceId: cause.timingSourceId,
+          deathChainDepth: (cause.deathChainDepth ?? 0) + 1,
+        },
+      );
     }
   }
   for (const summonId of enemy.summonIds ?? []) {

@@ -1,4 +1,8 @@
-import { ActionInteractionKind, Motion } from "../game/types";
+import type {
+  ActionInteractionKind,
+  CombatEffect,
+  Motion,
+} from "../game/types";
 
 export const MIN_ACTION_DURATION = 112;
 // 160ms / 1.3: faster presentation only; the movement-speed stat is unchanged.
@@ -17,6 +21,8 @@ export const PLAYER_INTERACTION_DURATION = 360;
 export const PLAYER_PICKUP_DURATION = 50;
 export const ATTACK_START_DELAY = 70;
 export const ATTACK_SEQUENCE_GAP = 45;
+export const DEATH_EVENT_DELAY = 40;
+export const DEATH_SECONDARY_EFFECT_DELAY = 80;
 
 export const durationForInteraction = (
   kind: ActionInteractionKind | undefined,
@@ -73,6 +79,32 @@ export const impactDelayForMotion = (motion: Motion) => {
   }
   return duration;
 };
+
+export const presentationOffsetForCombatEffect = (effect: CombatEffect) => {
+  const deathChainDepth = Math.max(0, effect.deathChainDepth ?? 0);
+  const causalOffset =
+    deathChainDepth *
+    (DEATH_EVENT_DELAY + DEATH_SECONDARY_EFFECT_DELAY);
+  return causalOffset + (effect.kind === "defeat" ? DEATH_EVENT_DELAY : 0);
+};
+
+export const impactTimeForSource = (
+  sourceId: string | undefined,
+  schedules: readonly ReadonlyMap<string, number>[],
+  fallback = 0,
+) => {
+  if (!sourceId) return fallback;
+  for (const schedule of schedules) {
+    const impactAt = schedule.get(sourceId);
+    if (impactAt !== undefined) return impactAt;
+  }
+  return fallback;
+};
+
+export const worldRevealOffsetForDefeat = (effect: CombatEffect) =>
+  presentationOffsetForCombatEffect(effect) +
+  DEATH_SECONDARY_EFFECT_DELAY +
+  DEATH_EVENT_DELAY;
 
 export function createTurnMotionTimeline(
   motions: Motion[],
