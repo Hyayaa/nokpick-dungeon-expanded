@@ -8,11 +8,17 @@ import {
   DUNGEON_DEFINITIONS,
   bossDifficultyForClears,
   bossDungeonClearsAfterOutcome,
+  companionToPlayer,
   createBossDungeonOffer,
+  createStarterCompanionRoster,
   generateDungeonOffers,
   maximumRecommendedDifficulty,
+  normalizeCompanionForHubWithReleasedItems,
   normalizeBossDungeonClears,
 } from "../app/game/campaign";
+import { COMPANION_CLASS_IDS } from "../app/game/companions";
+import { ITEM_DEFS } from "../app/game/data";
+import { createPlainEquipmentInstance } from "../app/game/equipment";
 import {
   createExpeditionGame,
   createNewGame,
@@ -162,5 +168,35 @@ assert.match(
   uiSource,
   /bossDungeonClears: bossDungeonClearsAfterOutcome\([\s\S]*finishedDungeon,[\s\S]*outcome/,
 );
+
+const starterRoster = createStarterCompanionRoster(COMPANION_CLASS_IDS);
+for (const companion of starterRoster) {
+  assert.equal(companion.equipmentInstances.weapon?.grade, "F");
+  assert.equal(companion.equipmentInstances.armor?.grade, "F");
+}
+const starterLeader = companionToPlayer(starterRoster[0]);
+assert.equal(starterLeader.equipmentInstances.weapon?.grade, "F");
+assert.equal(starterLeader.equipmentInstances.armor?.grade, "F");
+assert.equal(
+  createPlainEquipmentInstance(ITEM_DEFS.shortsword, "default-grade").grade,
+  "C",
+  "the shared plain-equipment default must remain C",
+);
+const legacyCompanion = createStarterCompanionRoster(["warrior"])[0];
+legacyCompanion.equipmentInstances.weapon = createPlainEquipmentInstance(
+  ITEM_DEFS.shortsword,
+  "legacy-c-weapon",
+  "C",
+);
+legacyCompanion.equipmentInstances.armor = createPlainEquipmentInstance(
+  ITEM_DEFS.leather_armor,
+  "legacy-a-armor",
+  "A",
+);
+const restoredLegacy = normalizeCompanionForHubWithReleasedItems(
+  legacyCompanion,
+).companion;
+assert.equal(restoredLegacy.equipmentInstances.weapon?.grade, "C");
+assert.equal(restoredLegacy.equipmentInstances.armor?.grade, "A");
 
 console.log("Dungeon offer and boss-gate progression smoke checks passed.");

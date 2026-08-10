@@ -1461,10 +1461,12 @@ export const createStarterCompanionRoster = (
     companion.equipmentInstances.weapon = createPlainEquipmentInstance(
       ITEM_DEFS[gear.weapon],
       `roster-${classId}-weapon`,
+      "F",
     );
     companion.equipmentInstances.armor = createPlainEquipmentInstance(
       ITEM_DEFS[gear.armor],
       `roster-${classId}-armor`,
+      "F",
     );
     return companion;
   });
