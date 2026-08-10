@@ -190,6 +190,14 @@ const ESSENTIAL_ITEM_DEFS: Record<string, ItemDefinition> = {
     sprite: 56,
     accent: "#78d7ec",
   },
+  boss_exit_key: {
+    id: "boss_exit_key",
+    name: "탈출구 열쇠",
+    category: "key",
+    description: "쓰러진 보스가 남긴 열쇠입니다. 최종층 탈출구를 열 때 소모됩니다.",
+    sprite: 57,
+    accent: "#d7b15c",
+  },
   quest_sealed_relic: {
     id: "quest_sealed_relic",
     name: "봉인 유물",

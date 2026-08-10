@@ -18,6 +18,7 @@ import type {
   GuaranteedFloorSpawn,
 } from "./types";
 import type { BossArenaSettings } from "./boss-definitions";
+import { paintBossArena } from "./boss-arena";
 
 const CARDINALS: Point[] = [
   { x: 1, y: 0 },
@@ -1617,6 +1618,7 @@ export function generateFloor(
         tiles[y][x].terrain = "floor";
       }
     }
+    paintBossArena(tiles, bossRoom, bossArena?.profile ?? "plain");
     tiles[exit.y][exit.x].terrain = "exit";
     tiles[bossRoom.center.y][bossRoom.center.x].terrain = "floor";
   }

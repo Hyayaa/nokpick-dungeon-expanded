@@ -74,7 +74,7 @@
 | CrystalGuardian | Caves | special | crystal melee guardian | melee profile | - | 미구현 — crystal room producer 필요 |
 | VaultRat | Any | special | vault scaling rat | melee profile | - | 미구현 — vault producer 필요 |
 | VaultMob | Any | special | vault wrapper | registry delegation | - | 미구현 — vault producer 필요 |
-| Goo | Sewers | boss | pump-up + caustic arena | combat skills | 범위 | 후속 boss 작업 |
+| Goo | Sewers | boss | pump-up + caustic arena | gooSlam + phase/water behavior | 2턴 범위 | 구현 |
 | Tengu | Prison | boss | phase traps/arena | combat skills + script | 범위 | 후속 boss 작업 |
 | DM300 | Caves | boss | pylon phases | combat skills + arena | 범위 | 후속 boss 작업 |
 | DwarfKing | City | boss | throne phases/summons | combat skills + script | 범위 | 후속 boss 작업 |
@@ -82,4 +82,4 @@
 | YogFist variants | Halls | boss | elemental fists | combat skills | 범위 | 후속 boss 작업 |
 | Larva | Halls | summon | Yog minion | generic summon | - | 후속 boss 작업 |
 
-Production scope: MobSpawner standard rotation + 11 rare alternates + their hostile summons, plus Halls DemonSpawner/Ripper dependency. Boss phase/arena logic remains for `feature/boss-overhaul` on the same Combat Skill, summon, status, movement, AI, and Telegraph foundation.
+Production scope: MobSpawner standard rotation + 11 rare alternates + their hostile summons, Halls DemonSpawner/Ripper dependency, and the registry-only Goo boss. Goo stays outside ordinary rotations and reuses the same Combat Skill, status, movement, AI, and Telegraph foundation.

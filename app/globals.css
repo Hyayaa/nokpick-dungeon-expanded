@@ -1227,6 +1227,15 @@ button:not(:disabled):active {
   transition: width 180ms ease-out;
 }
 
+.boss-health-display--enraged {
+  border-color: rgba(232, 73, 55, .92);
+  box-shadow: 0 5px 24px rgba(151, 24, 18, .45);
+}
+
+.boss-health-display--enraged i {
+  background: linear-gradient(90deg, #bd211d, #ff744f);
+}
+
 .sleep-state {
   display: inline-block;
   margin-left: 8px;

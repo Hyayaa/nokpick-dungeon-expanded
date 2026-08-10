@@ -274,6 +274,9 @@ export const cloneGame = (
           center: { ...state.bossEncounter.room.center },
         },
         minionIds: [...state.bossEncounter.minionIds],
+        bossDeathPoint: state.bossEncounter.bossDeathPoint
+          ? { ...state.bossEncounter.bossDeathPoint }
+          : undefined,
       }
     : undefined,
   specialRoomPlan: (state.specialRoomPlan ?? []).map((entry) => ({ ...entry })),

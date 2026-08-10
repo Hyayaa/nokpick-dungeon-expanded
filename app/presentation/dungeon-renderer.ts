@@ -962,7 +962,7 @@ export function startDungeonRenderer({
           frames = sprite.specialFrames;
         }
         if (enemy.pendingSkill && !visual.motion) {
-          frames = sprite.specialFrames ?? sprite.attackFrames;
+          frames = sprite.chargeFrames ?? sprite.specialFrames ?? sprite.attackFrames;
         }
         const frameIndex = visual.motion
           ? Math.min(

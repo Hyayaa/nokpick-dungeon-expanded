@@ -3,7 +3,7 @@ import type { Enemy, EnemyKind, EnemyRegion, EnemySkillId, EnemySpriteDefinition
 
 export type EnemyProperty = "flying" | "undead" | "demonic" | "large" | "immovable" | "inorganic" | "aquatic";
 export type EnemyAiProfile = "melee" | "fastMelee" | "ranged" | "skirmisher" | "summoner" | "support" | "charger";
-export type EnemyRosterType = "standard" | "rareAlt" | "summon" | "special" | "dev";
+export type EnemyRosterType = "standard" | "rareAlt" | "summon" | "special" | "boss" | "dev";
 export type EnemyDefinition = {
   id: EnemyKind;
   name: string;
@@ -29,7 +29,8 @@ const frames = (
   file: string, sheetWidth: number, frameWidth: number, frameHeight: number,
   idle: number[], run: number[], attackFrames: number[], label: string,
   specialFrames?: number[],
-): EnemySpriteDefinition => ({ file: `/assets/sprites/${file}.png`, sheetWidth, frameWidth, frameHeight, idle, run, attackFrames, specialFrames, label });
+  chargeFrames?: number[],
+): EnemySpriteDefinition => ({ file: `/assets/sprites/${file}.png`, sheetWidth, frameWidth, frameHeight, idle, run, attackFrames, specialFrames, chargeFrames, label });
 
 const rule = (skillId: EnemySkillId, options: Partial<Omit<EnemySkillUseRule, "skillId">> = {}): EnemySkillUseRule => ({ skillId, priority: 10, ...options });
 const d = (definition: EnemyDefinition) => definition;
@@ -82,6 +83,7 @@ export const ENEMY_DEFINITIONS: Readonly<Record<EnemyKind, EnemyDefinition>> = {
   acidic: d({ id:"acidic", name:"산성 전갈", region:"halls", type:"rareAlt", baseStats:{hp:64,attack:21,defense:6,accuracy:23,evasion:15}, xp:46, properties:["demonic"], sprite:frames("scorpio",256,17,17,[15,15,16,17],[20,21],[15,18,19],"산성 전갈"), skills:["acidicShot"], skillRules:[rule("acidicShot",{minRange:2,maxRange:8,cooldown:1,requiresLineOfSight:true})], aiProfile:"skirmisher", description:"산성 독침과 근접 반격성 점액을 사용합니다.", dropProfile:"standard", spawnWeight:0, production:true }),
   demon_spawner: d({ id:"demon_spawner", name:"악마 생성기", region:"halls", type:"special", baseStats:{hp:80,attack:0,defense:7,accuracy:1,evasion:0}, xp:45, properties:["immovable","demonic"], sprite:frames("spawner",256,16,16,[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],[0,1,2],[0,1,2],"악마 생성기"), skills:["summonRipper"], skillRules:[rule("summonRipper",{maxRange:6,cooldown:12,windupTurns:1,maxActiveSummons:2})], aiProfile:"summoner", description:"주기적으로 리퍼 악마를 생성하는 고정형 악마 둥지입니다.", dropProfile:"none", spawnWeight:1, production:true }),
   ripper_demon: d({ id:"ripper_demon", name:"리퍼 악마", region:"halls", type:"summon", baseStats:{hp:42,attack:18,defense:4,accuracy:22,evasion:15}, xp:0, properties:["demonic","undead"], sprite:frames("ripper",256,15,14,[1,0,1,2],[3,4,5,6,7,8],[0,9,10,9],"리퍼 악마",[9,12]), skills:["shockLeap"], skillRules:[rule("shockLeap",{minRange:3,maxRange:6,cooldown:5,windupTurns:1,requiresLineOfSight:true,targetLockMode:"fixed"})], aiProfile:"charger", description:"고정된 착지점을 예고한 뒤 도약해 출혈을 일으킵니다.", dropProfile:"none", spawnWeight:0, production:true }),
+  goo_boss: d({ id:"goo_boss", name:"구", region:"sewers", type:"boss", baseStats:{hp:100,attack:8,defense:2,accuracy:10,evasion:4}, xp:40, properties:["large","demonic"], sprite:frames("goo",256,20,14,[2,1,0,0,1],[3,2,1,2],[8,9,10],"구",[4,3,2,1,0,7],[4,3,2,1,0]), skills:["gooSlam"], skillRules:[rule("gooSlam",{priority:12,minRange:0,maxRange:2,cooldown:5,windupTurns:2,requiresLineOfSight:true,targetLockMode:"fixed"})], aiProfile:"melee", description:"물을 흡수해 회복하고 몸을 부풀려 주변을 강타하는 하수도의 악마성 점액 보스입니다.", dropProfile:"none", spawnWeight:0, production:true }),
   training_leaper: d({ id:"training_leaper", name:"훈련용 도약체", region:"halls", type:"dev", baseStats:{hp:999,attack:8,defense:4,accuracy:30,evasion:0}, xp:0, properties:[], sprite:frames("ripper",256,15,14,[1,0,1,2],[3,4,5,6,7,8],[0,9,10,9],"훈련용 도약체",[9,12]), skills:["shockLeap"], skillRules:[rule("shockLeap",{minRange:2,maxRange:7,cooldown:4,windupTurns:2,requiresLineOfSight:true,targetLockMode:"fixed"})], aiProfile:"charger", description:"개발자 Arena에서 2턴 Telegraph를 검증하는 전용 적입니다.", dropProfile:"none", spawnWeight:0, production:false }),
 };
 

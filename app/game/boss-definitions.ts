@@ -1,10 +1,13 @@
 import type { EnemyKind, EnemyRegion } from "./types";
 
-export type BossId = "dev_training_boss";
+export type BossId = "dev_training_boss" | "goo";
+
+export type BossArenaProfile = "plain" | "goo";
 
 export type BossArenaSettings = {
   minimumWidth: number;
   minimumHeight: number;
+  profile: BossArenaProfile;
 };
 
 export type BossDefinition = {
@@ -15,6 +18,7 @@ export type BossDefinition = {
   region: EnemyRegion;
   minionCount: number;
   arena: BossArenaSettings;
+  phaseThreshold?: number;
   production: boolean;
 };
 
@@ -29,8 +33,24 @@ export const BOSS_DEFINITIONS: Readonly<Record<BossId, BossDefinition>> = {
     arena: {
       minimumWidth: 19,
       minimumHeight: 19,
+      profile: "plain",
     },
     production: false,
+  },
+  goo: {
+    id: "goo",
+    nameKo: "구",
+    nameEn: "Goo",
+    enemyKind: "goo_boss",
+    region: "sewers",
+    minionCount: 10,
+    arena: {
+      minimumWidth: 19,
+      minimumHeight: 19,
+      profile: "goo",
+    },
+    phaseThreshold: 0.5,
+    production: true,
   },
 };
 

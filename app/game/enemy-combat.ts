@@ -8,6 +8,10 @@ import {
 } from "./enemy-skills";
 import { hasLineOfSight, isWalkable, mapPointKey } from "./map";
 import { random, randomInt } from "./random";
+import {
+  applyBossMeleeIdentity,
+  syncBossPhaseInPlace,
+} from "./boss-behaviors";
 import type {
   CombatEffect, Companion, Enemy, EnemyKind, EnemySkillId, GameState, MagicVisual,
   Motion, Player, Point, StatusEffect, StatusSignal,
@@ -427,7 +431,9 @@ export const runEnemySkillTurn = (state: GameState, enemy: Enemy, output: SkillT
   if (!chosen) return false;
   const blueprint = enemySkill(chosen.rule.skillId);
   if (!blueprint) return false;
-  const chosenPoint = { x: chosen.target.x, y: chosen.target.y };
+  const chosenPoint = blueprint.areaAnchor === "caster"
+    ? { x: enemy.x, y: enemy.y }
+    : { x: chosen.target.x, y: chosen.target.y };
   const affectedTiles = resolveCombatSkillAffectedTiles(blueprint, enemy, chosenPoint)
     .filter((point) => state.tiles[point.y]?.[point.x]);
   const windupTurns = Math.max(0, chosen.rule.windupTurns ?? 0);
@@ -449,6 +455,7 @@ export const runEnemySkillTurn = (state: GameState, enemy: Enemy, output: SkillT
 };
 
 export const applyEnemyMeleeIdentity = (state: GameState, enemy: Enemy, target: PartyTarget, damage: number) => {
+  applyBossMeleeIdentity(state, enemy, target);
   if (enemy.kind === "bat") enemy.hp = Math.min(enemy.maxHp, enemy.hp + Math.max(0, damage - 4));
   if (enemy.kind === "albino" && random(state) < 0.5) addStatus(target.statuses, "bleeding", 4, 1);
   if (enemy.kind === "caustic_slime" && random(state) < 0.5) addStatus(target.statuses, "corroded", 4, 1);
@@ -488,6 +495,7 @@ export const applyEnemyIncomingDamage = (
     return 0;
   }
   enemy.hp -= damage;
+  syncBossPhaseInPlace(state, enemy);
   if (enemy.kind === "swarm" && enemy.hp > 1 && damage > 0) {
     const points = [
       {x:enemy.x+1,y:enemy.y},{x:enemy.x-1,y:enemy.y},

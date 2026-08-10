@@ -127,6 +127,13 @@ export const ENEMY_SKILLS: Readonly<Partial<Record<EnemySkillId, EnemySkillBluep
   lifeSteal: skill("lifeSteal", "흡혈", "공격으로 준 피해 일부를 생명력으로 회복합니다.", 1, 0, "target", { mechanics: ["healing"] }),
   bruteRage: skill("bruteRage", "광폭화", "치명상을 입으면 일시적인 보호막과 강화된 공격을 얻습니다.", 0, 0, "target", { areaAnchor: "caster", mechanics: ["threshold"] }),
   ghoulRevive: skill("ghoulRevive", "공동 부활", "다른 구울이 살아 있으면 쓰러진 뒤 일정 시간이 지나 부활합니다.", 0, 0, "target", { areaAnchor: "caster", mechanics: ["threshold"] }),
+  gooSlam: skill("gooSlam", "팽창 강타", "2턴 동안 몸을 부풀린 뒤 자신을 중심으로 반경 2칸을 강타합니다.", 2, 5, "burst", {
+    areaAnchor: "caster",
+    mechanics: ["area"],
+    scalars: { power: 3, radius: 2 },
+    impactMode: "shockwave",
+    visual: visual("burst", "#181818", "#626262", { durationMs: 520, impactStyle: "shockwave" }),
+  }),
 };
 
 export const enemySkill = (id: EnemySkillId) => ENEMY_SKILLS[id] ?? null;

@@ -9,6 +9,7 @@ import {
 } from "./enemy-spawn";
 import { isWalkable } from "./map";
 import { random } from "./random";
+import { initializeBossBehaviorInPlace } from "./boss-behaviors";
 import type {
   BossEncounterState,
   BossRoom,
@@ -154,7 +155,11 @@ export const spawnBossEncounterInPlace = (
     minionIds,
     activated: false,
     defeated: false,
+    phase: 1,
+    exitKeyDropped: false,
+    exitKeyCollected: false,
   };
+  initializeBossBehaviorInPlace(state, boss);
   return state.bossEncounter;
 };
 
@@ -166,12 +171,6 @@ export const syncBossEncounterInPlace = (state: GameState) => {
     (enemy) => enemy.id === encounter.bossEnemyId && enemy.hp > 0,
   );
   if (!boss) {
-    if (!encounter.defeated) {
-      encounter.defeated = true;
-      state.logs.push(
-        `${bossDefinition(encounter.bossId).nameKo}을(를) 쓰러뜨렸습니다. 출구가 열렸습니다.`,
-      );
-    }
     return encounter;
   }
   if (
@@ -199,6 +198,69 @@ export const syncBossEncounterInPlace = (state: GameState) => {
   return encounter;
 };
 
+/** Called before the boss actor is removed so its real death tile is retained. */
+export const recordBossDeathInPlace = (
+  state: GameState,
+  enemy: Enemy,
+) => {
+  const encounter = state.bossEncounter;
+  if (!encounter || enemy.id !== encounter.bossEnemyId || enemy.hp > 0) {
+    return false;
+  }
+  enemy.pendingSkill = null;
+  encounter.defeated = true;
+  encounter.bossDeathPoint = { x: enemy.x, y: enemy.y };
+  if (!encounter.exitKeyDropped) {
+    const keyId = `boss-exit-key-${encounter.bossEnemyId}`;
+    if (!state.groundItems.some((item) => item.id === keyId)) {
+      state.groundItems.push({
+        id: keyId,
+        defId: "boss_exit_key",
+        quantity: 1,
+        lootOrigin: "dungeon",
+        x: enemy.x,
+        y: enemy.y,
+      });
+    }
+    encounter.exitKeyDropped = true;
+    encounter.exitKeyCollected = false;
+    state.logs.push(
+      encounter.bossId === "goo"
+        ? "구를 쓰러뜨렸습니다."
+        : `${bossDefinition(encounter.bossId).nameKo}을(를) 쓰러뜨렸습니다.`,
+    );
+    state.logs.push("탈출구 열쇠가 떨어졌습니다.");
+  }
+  return true;
+};
+
+export const recordBossExitKeyPickupInPlace = (state: GameState) => {
+  if (!state.bossEncounter) return;
+  state.bossEncounter.exitKeyCollected = true;
+};
+
+export type BossCompletionBlockReason = "bossAlive" | "exitKeyMissing";
+
+export const bossCompletionBlockReason = (
+  state: GameState,
+): BossCompletionBlockReason | null => {
+  const encounter = syncBossEncounterInPlace(state);
+  if (!encounter) return null;
+  if (!encounter.defeated) return "bossAlive";
+  return (state.player.inventory.boss_exit_key ?? 0) > 0
+    ? null
+    : "exitKeyMissing";
+};
+
+export const consumeBossExitKeyInPlace = (state: GameState) => {
+  if (!state.bossEncounter) return false;
+  const quantity = state.player.inventory.boss_exit_key ?? 0;
+  if (quantity <= 0) return false;
+  if (quantity === 1) delete state.player.inventory.boss_exit_key;
+  else state.player.inventory.boss_exit_key = quantity - 1;
+  return true;
+};
+
 export const isDormantBossEncounterEnemy = (
   state: GameState,
   enemyId: string,
@@ -214,6 +276,5 @@ export const isDormantBossEncounterEnemy = (
 };
 
 export const bossCompletionBlocked = (state: GameState) => {
-  const encounter = syncBossEncounterInPlace(state);
-  return Boolean(encounter && !encounter.defeated);
+  return bossCompletionBlockReason(state) !== null;
 };

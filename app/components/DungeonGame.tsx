@@ -559,7 +559,7 @@ const DEVELOPER_BOSS_DUNGEON: DungeonDefinition = {
   difficultyLabelEn: "Developer",
   floorCount: 1,
   difficultyScale: 1,
-  bossId: "dev_training_boss",
+  bossId: "goo",
   mainDropIds: [],
   specialRoomPlan: [],
   lootPlan: [],
@@ -10734,7 +10734,9 @@ function DungeonRun({
             )}
             {visibleBoss && visibleBossDefinition && (
               <section
-                className="boss-health-display"
+                className={activeBossEncounter?.phase === 2
+                  ? "boss-health-display boss-health-display--enraged"
+                  : "boss-health-display"}
                 aria-label={text("보스 생명력", "Boss health")}
               >
                 <header>

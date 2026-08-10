@@ -6,6 +6,7 @@ import {
 } from "./equipment";
 import { updateFieldOfView } from "./map";
 import { spawnBossEncounterInPlace } from "./boss-encounter";
+import { paintBossArena } from "./boss-arena";
 import { P0_ROOM_PRESETS, paintP0Room } from "./room-presets";
 import {
   createInitialQuestStates,
@@ -369,6 +370,7 @@ export function createDeveloperTestMap(base: GameState): GameState {
     x: bossArenaRoom.center.x,
     y: bossArenaRoom.top,
   });
+  paintBossArena(tiles, bossArenaRoom, "goo");
 
   const start = { x: 3, y: 17 };
   const exit = { x: 3, y: 94 };
@@ -626,7 +628,7 @@ export function createDeveloperTestMap(base: GameState): GameState {
   next.gameOver = false;
   next.pendingAugmentOffers = [];
   next.equipmentOffers = [];
-  spawnBossEncounterInPlace(next, "dev_training_boss", bossArenaRoom);
+  spawnBossEncounterInPlace(next, "goo", bossArenaRoom);
   next.logs.push(
     "최하단 Boss Arena는 입장 전 정지 상태와 입장 후 encounter·Boss HP UI를 검증합니다.",
   );

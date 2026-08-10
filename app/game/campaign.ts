@@ -123,6 +123,7 @@ const DUNGEON_THEMES: DungeonTheme[] = [
       "침수된 수로 곳곳에 식량과 회복 물자, 낡은 장비가 떠밀려 와 있습니다.",
     descriptionEn:
       "Food, healing supplies, and worn equipment have washed into the flooded channels.",
+    bossId: "goo",
     lootCategories: ["potion", "food", "armor"],
     accent: "#789c86",
   },
@@ -1107,6 +1108,7 @@ export const generateDungeonOffers = (seed: number): DungeonDefinition[] => {
       difficultyLabelEn: rules.labelEn,
       floorCount,
       difficultyScale,
+      bossId: theme.bossId,
       mainDropIds,
       specialRoomPlan,
       lootPlan,

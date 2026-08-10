@@ -449,7 +449,7 @@ export type EnemyKind =
   | "ghoul" | "elemental_fire" | "elemental_frost" | "elemental_shock"
   | "elemental_chaos" | "warlock" | "monk" | "senior" | "golem"
   | "succubus" | "eye" | "scorpio" | "acidic"
-  | "demon_spawner" | "ripper_demon" | "training_leaper";
+  | "demon_spawner" | "ripper_demon" | "goo_boss" | "training_leaper";
 
 export type EnemySkillId =
   | CompanionSkillId
@@ -457,7 +457,8 @@ export type EnemySkillId =
   | "lightningBolt" | "shamanBolt" | "poisonWeb" | "toxicVent"
   | "corrosiveVent" | "elementalBolt" | "darkBolt" | "teleportSelf"
   | "charm" | "deathGaze" | "cripplingShot" | "acidicShot"
-  | "splitSwarm" | "lifeSteal" | "bruteRage" | "ghoulRevive";
+  | "splitSwarm" | "lifeSteal" | "bruteRage" | "ghoulRevive"
+  | "gooSlam";
 
 export type EnemyPendingSkill = {
   skillId: EnemySkillId;
@@ -517,6 +518,10 @@ export type BossEncounterState = {
   minionIds: string[];
   activated: boolean;
   defeated: boolean;
+  phase: 1 | 2;
+  exitKeyDropped: boolean;
+  exitKeyCollected: boolean;
+  bossDeathPoint?: Point;
 };
 
 export type QuestKind = "uniqueEnemy" | "recoverItem";
@@ -954,5 +959,6 @@ export type EnemySpriteDefinition = {
   run: number[];
   attackFrames: number[];
   specialFrames?: number[];
+  chargeFrames?: number[];
   label: string;
 };

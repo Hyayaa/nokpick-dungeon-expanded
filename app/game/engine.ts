@@ -70,8 +70,11 @@ import {
   enemyDefinition,
 } from "./enemy-definitions";
 import {
-  bossCompletionBlocked,
+  bossCompletionBlockReason,
+  consumeBossExitKeyInPlace,
   isDormantBossEncounterEnemy,
+  recordBossDeathInPlace,
+  recordBossExitKeyPickupInPlace,
   spawnBossEncounterInPlace,
   syncBossEncounterInPlace,
 } from "./boss-encounter";
@@ -80,6 +83,7 @@ import {
   isBossFloor,
   type BossId,
 } from "./boss-definitions";
+import { runBossTurnStartInPlace } from "./boss-behaviors";
 import {
   applyEnemyMeleeIdentity,
   applyEnemyIncomingDamage,
@@ -357,6 +361,7 @@ export const inventoryItemProfile = (player: Player, itemRef: string) =>
   resolveInventoryItem(player, itemRef).instance;
 
 const canAddInventoryItem = (player: Player, defId: string) =>
+  ITEM_DEFS[defId]?.category === "key" ||
   inventorySlotCount(player) < MAX_INVENTORY_SLOTS ||
   (!isIndividualInventoryItem(defId) && (player.inventory[defId] ?? 0) > 0);
 
@@ -1701,6 +1706,7 @@ const makeFloorState = (
   // descent to unlock an extra reward door.
   delete player.inventory.iron_key;
   delete player.inventory.crystal_key;
+  delete player.inventory.boss_exit_key;
 
   const rosterClasses: CompanionClassId[] = carriedCompanions !== undefined
     ? carriedCompanions.map((companion) => companion.classId)
@@ -1920,9 +1926,17 @@ export function advanceExpeditionFloor(state: GameState):
   | { kind: "blocked"; state: GameState }
   | { kind: "descended"; state: GameState } {
   if (state.floor >= state.maxFloor) {
-    if (bossCompletionBlocked(state)) {
-      state.logs.push("보스를 쓰러뜨리기 전에는 원정을 완료할 수 없습니다.");
+    const blocked = bossCompletionBlockReason(state);
+    if (blocked === "bossAlive") {
+      state.logs.push("보스를 먼저 처치해야 합니다.");
       return { kind: "blocked", state };
+    }
+    if (blocked === "exitKeyMissing") {
+      state.logs.push("탈출구 열쇠가 필요합니다.");
+      return { kind: "blocked", state };
+    }
+    if (consumeBossExitKeyInPlace(state)) {
+      state.player.inventorySlots = normalizePlayerInventorySlots(state.player);
     }
     return { kind: "completed", state };
   }
@@ -2127,7 +2141,10 @@ const removeDefeatedEnemies = (
       state.player.hp += momentumHealing;
       pushLog(state, `치명적 가속으로 생명력 ${momentumHealing}을 회복했습니다.`);
     }
-    pushLog(state, `${getEnemyLabel(enemy)}을(를) 쓰러뜨렸습니다.`);
+    const bossDeath = recordBossDeathInPlace(state, enemy);
+    if (!bossDeath) {
+      pushLog(state, `${getEnemyLabel(enemy)}을(를) 쓰러뜨렸습니다.`);
+    }
     recordQuestEnemyDefeat(state, enemy.questId);
     effects.push({
       x: enemy.x,
@@ -2250,7 +2267,10 @@ export function pickupGroundItems(
           );
     if (itemRef) {
       const quantity = recoveredCharge || item.quantity || 1;
-      pushLog(
+      if (item.defId === "boss_exit_key") {
+        recordBossExitKeyPickupInPlace(next);
+        pushLog(next, "탈출구 열쇠를 획득했습니다.");
+      } else pushLog(
         next,
         recoveredCharge > 0
           ? `${ITEM_DEFS[item.defId].name}을(를) 회수해 충전 ${recoveredCharge}을(를) 회복했습니다.`
@@ -2259,6 +2279,7 @@ export function pickupGroundItems(
           : `${ITEM_DEFS[item.defId].name}을(를) 주웠습니다.`,
       );
       if (
+        item.defId !== "boss_exit_key" &&
         autoEquipBetter &&
         ITEM_DEFS[item.defId]?.slot &&
         isBetterEquipment(next.player, item.defId, itemRef)
@@ -3382,7 +3403,16 @@ export function manualCompanionPickup(
   }
   const pickedIds = new Set(pickups.map((pickup) => pickup.id));
   next.groundItems = next.groundItems.filter((item) => !pickedIds.has(item.id));
-  pushLog(next, `${companion.name}이(가) 바닥의 아이템 ${pickups.length}개를 주웠습니다.`);
+  if (pickups.some((pickup) => pickup.defId === "boss_exit_key")) {
+    recordBossExitKeyPickupInPlace(next);
+    pushLog(next, "탈출구 열쇠를 획득했습니다.");
+  }
+  const ordinaryPickupCount = pickups.filter(
+    (pickup) => pickup.defId !== "boss_exit_key",
+  ).length;
+  if (ordinaryPickupCount > 0) {
+    pushLog(next, `${companion.name}이(가) 바닥의 아이템 ${ordinaryPickupCount}개를 주웠습니다.`);
+  }
   return {
     state: next,
     motions: [{
@@ -6045,7 +6075,10 @@ const pickupGroundItemsForCompanion = (
     (item) => !pickedIds.has(item.id),
   );
   picked.forEach(({ item, itemRef, quantity }) => {
-    pushLog(
+    if (item.defId === "boss_exit_key") {
+      recordBossExitKeyPickupInPlace(state);
+      pushLog(state, "탈출구 열쇠를 획득했습니다.");
+    } else pushLog(
       state,
       item.defId === "gold"
         ? `${companion.name}이(가) 골드 ${quantity.toLocaleString("ko-KR")}개를 주웠습니다.`
@@ -6055,7 +6088,11 @@ const pickupGroundItemsForCompanion = (
         ? `${companion.name}이(가) ${ITEM_DEFS[item.defId].name} ${quantity}개를 주웠습니다.`
         : `${companion.name}이(가) ${ITEM_DEFS[item.defId].name}을(를) 주웠습니다.`,
     );
-    if (!item.recoversThrowableCharge && item.defId !== "gold") {
+    if (
+      !item.recoversThrowableCharge &&
+      item.defId !== "gold" &&
+      item.defId !== "boss_exit_key"
+    ) {
       queueEquipmentOffer(state, item.defId, itemRef);
     }
     pickups.push({
@@ -6684,6 +6721,7 @@ export function runEnemyTurn(
     const lostAction = statusDamage(enemy, effects);
     if (windupInterrupted) cancelInterruptibleEnemyWindup(enemy);
     if (lostAction || enemy.hp <= 0) continue;
+    runBossTurnStartInPlace(next, enemy, effects);
     const playerInvisible = next.player.invisibleTurns > 0;
     const turnSight = sightAtTurnStart.get(enemy.id);
     const enemySawPlayer = turnSight?.enemySawPlayer ?? false;
