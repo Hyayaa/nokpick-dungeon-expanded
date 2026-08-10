@@ -1175,6 +1175,58 @@ button:not(:disabled):active {
   font-style: normal;
 }
 
+.boss-health-display {
+  position: absolute;
+  z-index: 6;
+  top: 102px;
+  left: 50%;
+  width: min(58%, 430px);
+  padding: 8px 11px 10px;
+  border: 1px solid rgba(193, 85, 76, .72);
+  background: rgba(20, 7, 8, .92);
+  box-shadow: 0 5px 20px rgba(0, 0, 0, .45);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.boss-health-display header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 6px;
+}
+
+.boss-health-display small {
+  color: #e07970;
+  font: 8px/1 var(--pixel);
+  letter-spacing: .14em;
+}
+
+.boss-health-display strong {
+  color: #f0d2bc;
+  font-size: calc(11px * var(--font-scale, 1));
+}
+
+.boss-health-display span {
+  color: #d9978f;
+  font: 8px/1 var(--pixel);
+}
+
+.boss-health-display > div {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid #5d302e;
+  background: #1a0d0e;
+}
+
+.boss-health-display i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #9f332f, #df665b);
+  transition: width 180ms ease-out;
+}
+
 .sleep-state {
   display: inline-block;
   margin-left: 8px;

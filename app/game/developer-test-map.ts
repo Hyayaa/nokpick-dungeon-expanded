@@ -5,6 +5,7 @@ import {
   upgradeEquipmentInstance,
 } from "./equipment";
 import { updateFieldOfView } from "./map";
+import { spawnBossEncounterInPlace } from "./boss-encounter";
 import { P0_ROOM_PRESETS, paintP0Room } from "./room-presets";
 import {
   createInitialQuestStates,
@@ -36,7 +37,7 @@ export const DEVELOPER_TEST_MAP_ID = "developer-showcase";
 export const DEVELOPER_TEST_MAP_SEED = 0x5a0ca5e;
 
 const WIDTH = 122;
-const HEIGHT = 96;
+const HEIGHT = 124;
 
 const makeRandom = (seed: number) => {
   let value = seed >>> 0;
@@ -361,6 +362,14 @@ export function createDeveloperTestMap(base: GameState): GameState {
     frameRoom(tiles, area, { x: area.center.x, y: area.top }),
   );
 
+  // Boss Arena reuses the same encounter helper as generated final floors.
+  setRect(tiles, 1, 96, WIDTH - 2, 98, "floor");
+  const bossArenaRoom = room("showcase-boss-arena", 45, 99, 75, 122);
+  frameRoom(tiles, bossArenaRoom, {
+    x: bossArenaRoom.center.x,
+    y: bossArenaRoom.top,
+  });
+
   const start = { x: 3, y: 17 };
   const exit = { x: 3, y: 94 };
   tiles[start.y][start.x].terrain = "entrance";
@@ -617,6 +626,10 @@ export function createDeveloperTestMap(base: GameState): GameState {
   next.gameOver = false;
   next.pendingAugmentOffers = [];
   next.equipmentOffers = [];
+  spawnBossEncounterInPlace(next, "dev_training_boss", bossArenaRoom);
+  next.logs.push(
+    "최하단 Boss Arena는 입장 전 정지 상태와 입장 후 encounter·Boss HP UI를 검증합니다.",
+  );
   updateFieldOfView(next.tiles, next.player, next.player.viewDistance);
   return next;
 }

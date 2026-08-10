@@ -27,6 +27,7 @@ import {
   OBJECT_SPRITES,
 } from "../game/data";
 import { enemyDefinition } from "../game/enemy-definitions";
+import { bossDefinition } from "../game/boss-definitions";
 import { enemySkill } from "../game/enemy-skills";
 import {
   acceptQuest,
@@ -542,6 +543,30 @@ const DEVELOPER_TEST_DUNGEON: DungeonDefinition = {
   completionGold: 0,
   goldTarget: 0,
   accent: "#78d7ec",
+};
+const DEVELOPER_BOSS_DUNGEON: DungeonDefinition = {
+  id: "developer-boss-floor",
+  themeId: "developer-showcase",
+  nameKo: "개발자 보스 플로어",
+  nameEn: "Developer Boss Floor",
+  subtitleKo: "Boss Encounter Framework",
+  subtitleEn: "Boss Encounter Framework",
+  descriptionKo: "실제 던전 생성 흐름으로 최종층 Boss Room과 encounter를 검증합니다.",
+  descriptionEn: "Validates the final-floor Boss Room and encounter through the production generator.",
+  difficulty: 1,
+  difficultyGrade: "F",
+  difficultyLabelKo: "개발자",
+  difficultyLabelEn: "Developer",
+  floorCount: 1,
+  difficultyScale: 1,
+  bossId: "dev_training_boss",
+  mainDropIds: [],
+  specialRoomPlan: [],
+  lootPlan: [],
+  goldPlan: [],
+  completionGold: 0,
+  goldTarget: 0,
+  accent: "#c97863",
 };
 const FONT_SCALE_OPTIONS = [0.85, 1, 1.15, 1.3] as const;
 const UiLanguageContext = createContext<UiLanguage>("ko");
@@ -4251,6 +4276,7 @@ function SettingsModal({
   onSoundEnabledChange,
   onDeveloperModeChange,
   onEnterTestMap,
+  onEnterBossFloor,
   onClose,
 }: {
   uiScale: number;
@@ -4264,6 +4290,7 @@ function SettingsModal({
   onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
   onEnterTestMap?: () => void;
+  onEnterBossFloor?: () => void;
   onClose: () => void;
 }) {
   const text = (korean: string, english: string) =>
@@ -4455,6 +4482,22 @@ function SettingsModal({
                 </p>
               </div>
               <button type="button" onClick={onEnterTestMap}>
+                {text("입장", "Enter")}
+              </button>
+            </div>
+          )}
+          {developerMode && onEnterBossFloor && (
+            <div className="developer-setting">
+              <div>
+                <span>Boss Floor</span>
+                <p>
+                  {text(
+                    "실제 최종층 생성기로 대형 Boss Room, 중앙 Boss, minion과 완료 차단을 확인합니다.",
+                    "Open a generated final floor to validate the large room, centered boss, minions, and completion gate.",
+                  )}
+                </p>
+              </div>
+              <button type="button" onClick={onEnterBossFloor}>
                 {text("입장", "Enter")}
               </button>
             </div>
@@ -7592,6 +7635,10 @@ function DungeonRun({
           finishCurrentExpedition("completed");
           return;
         }
+        if (floorAdvance.kind === "blocked") {
+          commitGame(floorAdvance.state);
+          return;
+        }
         const nextFloor = floorAdvance.state;
         motionRef.current.clear();
         playerMoveCycleStartedAtRef.current = null;
@@ -10156,6 +10203,23 @@ function DungeonRun({
     (quest) =>
       quest.status === "active" || quest.status === "readyToTurnIn",
   );
+  const activeBossEncounter = game.bossEncounter?.activated &&
+    !game.bossEncounter.defeated
+    ? game.bossEncounter
+    : null;
+  const activeBoss = activeBossEncounter
+    ? game.enemies.find(
+        (enemy) =>
+          enemy.id === activeBossEncounter.bossEnemyId && enemy.hp > 0,
+      ) ?? null
+    : null;
+  const visibleBoss = activeBoss &&
+    game.tiles[activeBoss.y]?.[activeBoss.x]?.visible
+    ? activeBoss
+    : null;
+  const visibleBossDefinition = visibleBoss && activeBossEncounter
+    ? bossDefinition(activeBossEncounter.bossId)
+    : null;
   const itemsHere = game.groundItems.filter((item) =>
     pointEquals(item, controlledCharacter),
   );
@@ -10667,6 +10731,30 @@ function DungeonRun({
                   <em>{text("수면 중", "Sleeping")}</em>
                 )}
               </div>
+            )}
+            {visibleBoss && visibleBossDefinition && (
+              <section
+                className="boss-health-display"
+                aria-label={text("보스 생명력", "Boss health")}
+              >
+                <header>
+                  <small>BOSS</small>
+                  <strong>
+                    {text(
+                      visibleBossDefinition.nameKo,
+                      visibleBossDefinition.nameEn,
+                    )}
+                  </strong>
+                  <span>{visibleBoss.hp}/{visibleBoss.maxHp}</span>
+                </header>
+                <div>
+                  <i
+                    style={{
+                      width: `${Math.max(0, Math.min(100, visibleBoss.hp / Math.max(1, visibleBoss.maxHp) * 100))}%`,
+                    }}
+                  />
+                </div>
+              </section>
             )}
             {trackedQuests.length > 0 && (
               <div className="quest-tracker" aria-label={text("퀘스트 진행", "Quest progress")}>
@@ -11477,6 +11565,45 @@ export default function DungeonGame() {
     setScreen("dungeon");
   }, [campaign.companions, developerMode]);
 
+  const enterDeveloperBossFloor = useCallback(() => {
+    if (!developerMode) return;
+    const party = campaign.companions
+      .slice(0, 3)
+      .map((companion) => normalizeCompanionForHub(companion));
+    const leader = party[0];
+    if (!leader) return;
+    const initialGame = createExpeditionGame(
+      0xb055f100,
+      {
+        dungeonId: DEVELOPER_BOSS_DUNGEON.id,
+        dungeonName: DEVELOPER_BOSS_DUNGEON.nameKo,
+        maxFloor: DEVELOPER_BOSS_DUNGEON.floorCount,
+        difficultyScale: DEVELOPER_BOSS_DUNGEON.difficultyScale,
+        difficulty: DEVELOPER_BOSS_DUNGEON.difficulty,
+        bossId: DEVELOPER_BOSS_DUNGEON.bossId,
+        mainDropIds: [],
+        specialRoomPlan: [],
+        lootPlan: [],
+        goldPlan: [],
+        quests: [],
+      },
+      companionToPlayer(leader),
+      party.slice(1),
+    );
+    const active = {
+      dungeon: DEVELOPER_BOSS_DUNGEON,
+      initialGame,
+    };
+    setActiveExpedition(active);
+    window.localStorage.setItem(
+      ACTIVE_EXPEDITION_STORAGE_KEY,
+      JSON.stringify(active),
+    );
+    setExpeditionResult(null);
+    setHubSettingsOpen(false);
+    setScreen("dungeon");
+  }, [campaign.companions, developerMode]);
+
   const renderCampaignSurface = (content: ReactNode) => (
     <ItemSlotDragContext.Provider value={campaignSlotDrag}>
       <UiLanguageContext.Provider value={language}>
@@ -11554,6 +11681,7 @@ export default function DungeonGame() {
               onSoundEnabledChange={setSoundEnabled}
               onDeveloperModeChange={setDeveloperMode}
               onEnterTestMap={enterDeveloperTestMap}
+              onEnterBossFloor={enterDeveloperBossFloor}
               onClose={() => setHubSettingsOpen(false)}
             />
           )}
@@ -11613,6 +11741,7 @@ export default function DungeonGame() {
         maxFloor: dungeon.floorCount,
         difficultyScale: dungeon.difficultyScale,
         difficulty: dungeon.difficulty,
+        bossId: dungeon.bossId,
         mainDropIds: [...dungeon.mainDropIds],
         specialRoomPlan: dungeon.specialRoomPlan,
         lootPlan: dungeon.lootPlan,
