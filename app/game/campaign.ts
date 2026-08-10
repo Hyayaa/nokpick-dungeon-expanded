@@ -60,6 +60,7 @@ import {
   materialKindForItem,
   type CampaignMaterials,
 } from "./campaign-materials";
+import type { BossId } from "./boss-definitions";
 
 export type DungeonId = string;
 export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -80,6 +81,7 @@ export type DungeonDefinition = {
   difficultyLabelEn: string;
   floorCount: number;
   difficultyScale: number;
+  bossId?: BossId;
   mainDropIds: string[];
   specialRoomPlan: DungeonSpecialRoomPlanEntry[];
   lootPlan: DungeonLootPlanEntry[];

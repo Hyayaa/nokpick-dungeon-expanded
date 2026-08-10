@@ -70,6 +70,17 @@ import {
   enemyDefinition,
 } from "./enemy-definitions";
 import {
+  bossCompletionBlocked,
+  isDormantBossEncounterEnemy,
+  spawnBossEncounterInPlace,
+  syncBossEncounterInPlace,
+} from "./boss-encounter";
+import {
+  bossDefinition,
+  isBossFloor,
+  type BossId,
+} from "./boss-definitions";
+import {
   applyEnemyMeleeIdentity,
   applyEnemyIncomingDamage,
   canEnemySpawnAt,
@@ -202,6 +213,7 @@ export type ExpeditionRules = {
   difficultyScale: number;
   difficulty?: number;
   enemyRegion?: GameState["enemyRegion"];
+  bossId?: BossId;
   mainDropIds: string[];
   specialRoomPlan?: GameState["specialRoomPlan"];
   lootPlan?: GameState["lootPlan"];
@@ -962,6 +974,7 @@ const populateFloor = (
   specialRewards: readonly SpecialRewardSlot[] = [],
   toxicGasTiles: readonly Point[] = [],
   magicalFireTiles: readonly Point[] = [],
+  suppressEnemyPopulation = false,
 ) => {
   const flattenOccupiedGrass = (point: Point) => {
     if (state.tiles[point.y][point.x].terrain === "highGrass") {
@@ -1306,6 +1319,8 @@ const populateFloor = (
       flattenOccupiedGrass(point);
     });
 
+  if (suppressEnemyPopulation) return;
+
   const enemyRegion = state.enemyRegion ?? enemyRegionForDifficulty(state.difficulty);
   const enemyStage = relativeEnemyStage(state.floor, state.maxFloor);
   const difficultyScale = Math.max(1, state.difficultyScale ?? 1);
@@ -1556,6 +1571,14 @@ const makeFloorState = (
   forcedRoomPresets: readonly P0RoomPreset[] = [],
   forcedSpecialPreset?: SpecialRoomPreset,
 ) => {
+  const bossFloor = isBossFloor(
+    expeditionRules.bossId,
+    floor,
+    expeditionRules.maxFloor,
+  );
+  const boss = bossFloor && expeditionRules.bossId
+    ? bossDefinition(expeditionRules.bossId)
+    : null;
   const plannedSpecialRooms = expeditionRules.specialRoomPlan?.length
     ? expeditionRules.specialRoomPlan
     : Array.from(
@@ -1583,6 +1606,7 @@ const makeFloorState = (
       (entry) => entry.floor === floor,
     )?.preset,
     floor,
+    boss?.arena,
   );
   const player = carriedPlayer
     ? {
@@ -1726,6 +1750,8 @@ const makeFloorState = (
     enemyRegion:
       expeditionRules.enemyRegion ??
       enemyRegionForDifficulty(Math.max(1, Math.min(7, expeditionRules.difficulty ?? 1))),
+    bossId: expeditionRules.bossId,
+    bossEncounter: undefined,
     mainDropIds: [...expeditionRules.mainDropIds],
     specialRoomPlan: plannedSpecialRooms.map((entry) => ({
       ...entry,
@@ -1779,8 +1805,18 @@ const makeFloorState = (
     generated.specialRewards,
     generated.toxicGasTiles,
     generated.magicalFireTiles,
+    bossFloor,
   );
-  populateProductionQuestAreas(state, generated.roomRegions);
+  if (bossFloor && expeditionRules.bossId && generated.bossRoom) {
+    spawnBossEncounterInPlace(
+      state,
+      expeditionRules.bossId,
+      generated.bossRoom,
+    );
+  }
+  if (!bossFloor) {
+    populateProductionQuestAreas(state, generated.roomRegions);
+  }
   updatePlayerFieldOfView(state);
   return state;
 };
@@ -1859,6 +1895,7 @@ export function descendFloor(state: GameState): GameState {
       difficultyScale: state.difficultyScale,
       difficulty: state.difficulty,
       enemyRegion: state.enemyRegion,
+      bossId: state.bossId,
       mainDropIds: [...state.mainDropIds],
       specialRoomPlan: state.specialRoomPlan,
       lootPlan: state.lootPlan,
@@ -1880,8 +1917,13 @@ export function descendFloor(state: GameState): GameState {
 
 export function advanceExpeditionFloor(state: GameState):
   | { kind: "completed"; state: GameState }
+  | { kind: "blocked"; state: GameState }
   | { kind: "descended"; state: GameState } {
   if (state.floor >= state.maxFloor) {
+    if (bossCompletionBlocked(state)) {
+      state.logs.push("보스를 쓰러뜨리기 전에는 원정을 완료할 수 없습니다.");
+      return { kind: "blocked", state };
+    }
     return { kind: "completed", state };
   }
   return { kind: "descended", state: descendFloor(state) };
@@ -2809,6 +2851,7 @@ export function playerStep(
     next.tiles[from.y][from.x].terrain = "door";
   }
   triggerQuestRoomInPlace(next, target);
+  syncBossEncounterInPlace(next);
   applyMagicalFireContact(next, next.player, effects);
   const elapsedTurns = spendPlayerTime(
     next,
@@ -6539,6 +6582,7 @@ export function runEnemyTurn(
   } = {},
 ): ActionResult {
   const next = cloneGame(state);
+  syncBossEncounterInPlace(next);
   const motions: Motion[] = [];
   const effects: CombatEffect[] = [];
   const signals: StatusSignal[] = [];
@@ -6629,6 +6673,7 @@ export function runEnemyTurn(
 
   for (const enemy of [...next.enemies]) {
     if (next.player.hp <= 0) break;
+    if (isDormantBossEncounterEnemy(next, enemy.id)) continue;
     if (enemy.questId && !isQuestActive(next, enemy.questId)) {
       enemy.hp = enemy.maxHp;
       continue;
@@ -7104,6 +7149,7 @@ export function runEnemyTurn(
     ...companionDefeatedIds,
     ...removeDefeatedEnemies(next, effects, false),
   ];
+  syncBossEncounterInPlace(next);
   if (next.player.hp <= 0) {
     next.gameOver = true;
     pushLog(next, "시야가 어두워집니다. 이번 탐사는 여기까지입니다.");

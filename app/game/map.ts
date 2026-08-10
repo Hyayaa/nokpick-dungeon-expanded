@@ -12,10 +12,12 @@ import {
   type SpecialRoomPreset,
 } from "./special-rooms";
 import type {
+  BossRoom,
   DungeonSpecialRoom,
   DungeonTrap,
   GuaranteedFloorSpawn,
 } from "./types";
+import type { BossArenaSettings } from "./boss-definitions";
 
 const CARDINALS: Point[] = [
   { x: 1, y: 0 },
@@ -106,6 +108,7 @@ export type GeneratedFloor = {
   specialRewards: SpecialRewardSlot[];
   toxicGasTiles: Point[];
   magicalFireTiles: Point[];
+  bossRoom?: BossRoom;
   rng: number;
 };
 
@@ -976,6 +979,7 @@ const roomSpecs = (
   random: ReturnType<typeof makeRandom>,
   forcedPresets: readonly P0RoomPreset[] = [],
   forcedSpecialPreset?: SpecialRoomPreset,
+  bossArena?: BossArenaSettings,
 ) => {
   // Keep the large party-friendly room sizes, but use a tighter per-floor
   // graph so each expedition floor has fewer stops and shorter transfers.
@@ -1040,7 +1044,15 @@ const roomSpecs = (
     };
   };
   const entrance = makeSpec("entrance", "entrance", "transition");
-  const exit = makeSpec("exit", "exit", "transition");
+  const ordinaryExit = makeSpec("exit", "exit", "transition");
+  const exit = bossArena
+    ? {
+        ...ordinaryExit,
+        id: "boss-room",
+        width: Math.max(ordinaryExit.width, bossArena.minimumWidth),
+        height: Math.max(ordinaryExit.height, bossArena.minimumHeight),
+      }
+    : ordinaryExit;
   const standards: RoomSpec[] = [];
   forcedPresets.slice(0, standardCount).forEach((preset) => {
     standards.push(
@@ -1367,9 +1379,15 @@ export function generateFloor(
   forcedPresets: readonly P0RoomPreset[] = [],
   forcedSpecialPreset?: SpecialRoomPreset,
   floor = 1,
+  bossArena?: BossArenaSettings,
 ): GeneratedFloor {
   const random = makeRandom(seed);
-  const specs = roomSpecs(random, forcedPresets, forcedSpecialPreset);
+  const specs = roomSpecs(
+    random,
+    forcedPresets,
+    forcedSpecialPreset,
+    bossArena,
+  );
   // RegularLevel chooses evenly between LoopBuilder and FigureEightBuilder.
   const layout =
     random.next() < 0.5
@@ -1578,15 +1596,40 @@ export function generateFloor(
   const exitRoom =
     roomById.get(specs.exit.id) ?? layout.rooms.at(-1) ?? layout.rooms[0];
   const start = roomFloorPoint(tiles, entranceRoom, random);
-  const exit = roomFloorPoint(tiles, exitRoom, random);
+  const bossRoom: BossRoom | undefined = bossArena
+    ? {
+        id: "boss-room",
+        left: exitRoom.left,
+        top: exitRoom.top,
+        right: exitRoom.right,
+        bottom: exitRoom.bottom,
+        center: { ...exitRoom.center },
+      }
+    : undefined;
+  const exit = bossRoom
+    ? { x: bossRoom.center.x, y: bossRoom.bottom - 1 }
+    : roomFloorPoint(tiles, exitRoom, random);
   tiles[start.y][start.x].terrain = "entrance";
   tiles[exit.y][exit.x].terrain = "exit";
+  if (bossRoom) {
+    for (let y = bossRoom.top + 1; y < bossRoom.bottom; y += 1) {
+      for (let x = bossRoom.left + 1; x < bossRoom.right; x += 1) {
+        tiles[y][x].terrain = "floor";
+      }
+    }
+    tiles[exit.y][exit.x].terrain = "exit";
+    tiles[bossRoom.center.y][bossRoom.center.x].terrain = "floor";
+  }
 
   // RegularPainter only decorates room-approved empty cells, never the
   // connecting tunnels. SewerPainter uses water 0.30/5 and grass 0.20/4.
   const roomPaintable = new Set(
     layout.rooms
-      .filter((room) => !isSpecialRoomPreset(room.preset))
+      .filter(
+        (room) =>
+          !isSpecialRoomPreset(room.preset) &&
+          (!bossRoom || room.id !== specs.exit.id),
+      )
       .flatMap((room) => roomInterior(room).map(pointKey)),
   );
   const roomAnchorPoint = (room: Room) =>
@@ -1732,6 +1775,7 @@ export function generateFloor(
       forcedPresets,
       forcedSpecialPreset,
       floor,
+      bossArena,
     );
   }
   if (!validLayout) {
@@ -1842,6 +1886,7 @@ export function generateFloor(
     specialRewards,
     toxicGasTiles,
     magicalFireTiles,
+    bossRoom,
     rng: random.value(),
   };
 }

@@ -1,4 +1,5 @@
 import { advanceExpeditionFloor, runEnemyTurn } from "./engine";
+import { syncBossEncounterInPlace } from "./boss-encounter";
 import { ActionResult, GameState } from "./types";
 
 export type GameSessionOptions = {
@@ -36,6 +37,7 @@ export function resolveGameSession(
   action: ActionResult,
   options: GameSessionOptions = {},
 ): GameSessionResolution {
+  syncBossEncounterInPlace(action.state);
   if (action.reachedExit && !action.state.gameOver) {
     return {
       kind: "floorExit",

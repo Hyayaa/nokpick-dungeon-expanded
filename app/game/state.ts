@@ -266,6 +266,16 @@ export const cloneGame = (
   })),
   questNpcs: (state.questNpcs ?? []).map((npc) => ({ ...npc })),
   questRooms: (state.questRooms ?? []).map((room) => ({ ...room })),
+  bossEncounter: state.bossEncounter
+    ? {
+        ...state.bossEncounter,
+        room: {
+          ...state.bossEncounter.room,
+          center: { ...state.bossEncounter.room.center },
+        },
+        minionIds: [...state.bossEncounter.minionIds],
+      }
+    : undefined,
   specialRoomPlan: (state.specialRoomPlan ?? []).map((entry) => ({ ...entry })),
   logs: [...state.logs],
   // The expedition loot plan is immutable after the contract is accepted.

@@ -501,6 +501,24 @@ export type Enemy = Point & {
   uniqueName?: string;
 };
 
+export type BossRoom = {
+  id: string;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  center: Point;
+};
+
+export type BossEncounterState = {
+  bossId: import("./boss-definitions").BossId;
+  room: BossRoom;
+  bossEnemyId: string;
+  minionIds: string[];
+  activated: boolean;
+  defeated: boolean;
+};
+
 export type QuestKind = "uniqueEnemy" | "recoverItem";
 
 export type QuestStatus =
@@ -808,6 +826,8 @@ export type GameState = {
   difficultyScale: number;
   difficulty: number;
   enemyRegion?: EnemyRegion;
+  bossId?: import("./boss-definitions").BossId;
+  bossEncounter?: BossEncounterState;
   mainDropIds: string[];
   specialRoomPlan: DungeonSpecialRoomPlanEntry[];
   lootPlan: DungeonLootPlanEntry[];
