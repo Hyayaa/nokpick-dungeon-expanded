@@ -9,7 +9,7 @@ import type { EnemyKind, EnemyRegion } from "../app/game/types";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const productionSet = new Set(PRODUCTION_ENEMY_KINDS);
-assert.equal(PRODUCTION_ENEMY_KINDS.length, 43, "production roster count changed; update parity intentionally");
+assert.equal(PRODUCTION_ENEMY_KINDS.length, 44, "production roster count changed; update parity intentionally");
 
 for (const kind of PRODUCTION_ENEMY_KINDS) {
   const definition = ENEMY_DEFINITIONS[kind];
