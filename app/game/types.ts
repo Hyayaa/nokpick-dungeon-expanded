@@ -697,6 +697,7 @@ export type Companion = Point & SkillResourceState & {
   nextXp: number;
   traits: CompanionTraitId[];
   learnedSkills: CompanionSkillId[];
+  skillLevels: Partial<Record<CompanionSkillId, number>>;
   skills: CompanionSkillId[];
   skillCooldowns: CompanionSkillCooldowns;
   statuses: StatusEffect[];
@@ -749,6 +750,7 @@ export type Player = Point & SkillResourceState & {
   professionId: CompanionProfessionId;
   traits: CompanionTraitId[];
   learnedSkills: CompanionSkillId[];
+  skillLevels: Partial<Record<CompanionSkillId, number>>;
   skills: CompanionSkillId[];
   skillCooldowns: CompanionSkillCooldowns;
   hp: number;

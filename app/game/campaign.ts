@@ -50,6 +50,10 @@ import {
 import { isQuestItemDefinitionId } from "./quests";
 import { normalizeSkillResources } from "./skill-resources";
 import {
+  normalizeCompanionSkillLevels,
+  normalizeLearnedSkills,
+} from "./companion-skills";
+import {
   addMaterials,
   createCampaignMaterials,
   extractWarehouseMaterials,
@@ -1293,6 +1297,14 @@ export const normalizeHeroForHub = (player: Player): Player => ({
   ...normalizeSkillResources(player),
   traits: [...(player.traits ?? [])],
   learnedSkills: [...(player.learnedSkills ?? player.skills ?? [])],
+  skillLevels: normalizeCompanionSkillLevels(
+    normalizeLearnedSkills(
+      player.professionId,
+      player.learnedSkills,
+      player.skills,
+    ),
+    player.skillLevels,
+  ),
   skills: [...(player.skills ?? [])],
   skillCooldowns: {},
   x: 0,
@@ -1454,6 +1466,7 @@ export const companionToPlayer = (companion: Companion): Player => {
     professionId: normalized.professionId,
     traits: [...normalized.traits],
     learnedSkills: [...normalized.learnedSkills],
+    skillLevels: { ...normalized.skillLevels },
     skills: [...normalized.skills],
     skillCooldowns: {},
     x: 0,
@@ -1534,6 +1547,14 @@ export const playerToCompanion = (player: Player): Companion => {
     nextXp: player.nextXp,
     traits: [...(player.traits ?? [])],
     learnedSkills: [...(player.learnedSkills ?? player.skills ?? [])],
+    skillLevels: normalizeCompanionSkillLevels(
+      normalizeLearnedSkills(
+        player.professionId,
+        player.learnedSkills,
+        player.skills,
+      ),
+      player.skillLevels,
+    ),
     skills: [...(player.skills ?? [])],
     skillCooldowns: {},
     statuses: (player.statuses ?? []).map((status) => ({ ...status })),

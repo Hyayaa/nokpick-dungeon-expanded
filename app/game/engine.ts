@@ -47,12 +47,13 @@ import {
 import {
   COMPANION_SKILLS,
   normalizeCompanionProfession,
+  normalizeCompanionSkillLevels,
   normalizeCompanionSkills,
   normalizeLearnedSkills,
   normalizeSkillCooldowns,
 } from "./companion-skills";
 import {
-  companionSkillBlueprint,
+  companionSkillLevelModifier,
   companionSkillScalar,
   deriveCompanionSkill,
   type CompanionSkillModifier,
@@ -1387,6 +1388,7 @@ const makePlayer = (point: Point): Player => {
     professionId: adventurer.professionId,
     traits: [...adventurer.traits],
     learnedSkills: [...adventurer.learnedSkills],
+    skillLevels: { ...adventurer.skillLevels },
     skills: [...adventurer.skills],
     skillCooldowns: {},
     hp: adventurer.hp,
@@ -4218,17 +4220,15 @@ export function activateCompanionSkill(
     modifiers?: readonly CompanionSkillModifier[];
   }> = {},
 ): ActionResult {
-  const modifiers = options.modifiers ?? [];
   if (state.gameOver) {
     return { state, motions: [], effects: [], consumedTurn: false };
   }
   const currentActor = resolveSkillActor(state, casterId);
-  const definition = COMPANION_SKILLS[skillId]
-    ? modifiers.length
-      ? deriveCompanionSkill(skillId, modifiers)
-      : companionSkillBlueprint(skillId)
-    : null;
-  if (!currentActor || !definition || currentActor.character.hp <= 0) {
+  if (
+    !currentActor ||
+    !COMPANION_SKILLS[skillId] ||
+    currentActor.character.hp <= 0
+  ) {
     return skillFailure(state, "이 스킬을 사용할 원정대원이 없습니다.");
   }
   const assignedSkills = normalizeCompanionSkills(
@@ -4252,6 +4252,22 @@ export function activateCompanionSkill(
   if (!assignedSkills.includes(skillId)) {
     return skillFailure(state, "이 원정대원이 보유하지 않은 스킬입니다.");
   }
+  const skillLevel = normalizeCompanionSkillLevels(
+    normalizeLearnedSkills(
+      normalizeCompanionProfession(
+        currentActor.character.classId,
+        currentActor.character.professionId,
+      ),
+      currentActor.character.learnedSkills,
+      currentActor.character.skills,
+    ),
+    currentActor.character.skillLevels,
+  )[skillId] ?? 1;
+  const modifiers: readonly CompanionSkillModifier[] = [
+    companionSkillLevelModifier(skillId, skillLevel),
+    ...(options.modifiers ?? []),
+  ];
+  const definition = deriveCompanionSkill(skillId, modifiers);
   const cooldown = currentActor.character.skillCooldowns?.[skillId] ?? 0;
   if (cooldown > 0) {
     return skillFailure(state, `${definition.nameKo} 재사용까지 ${cooldown}턴 남았습니다.`);
@@ -4410,7 +4426,7 @@ export function activateCompanionSkill(
   const next = cloneGame(state);
   const actor = resolveSkillActor(next, casterId)!;
   const resourceActorId = actor.kind === "player"
-    ? actor.character.companionId
+    ? (actor.character as Player).companionId
     : (actor.character as Companion).id;
   paySkillResource(
     actor.character,

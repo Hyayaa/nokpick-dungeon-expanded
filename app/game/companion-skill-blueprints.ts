@@ -1,5 +1,7 @@
 import {
   COMPANION_SKILLS,
+  MAX_COMPANION_SKILL_LEVEL,
+  normalizeCompanionSkillLevel,
   type CompanionSkillDefinition,
 } from "./companion-skills";
 import type { CompanionSkillId } from "./types";
@@ -55,6 +57,45 @@ export type CompanionSkillModifier = {
   accent?: string;
   addSpecialEffects?: readonly CompanionSkillSpecialEffect[];
   removeSpecialEffectIds?: readonly string[];
+};
+
+export const COMPANION_SKILL_POTENCY_MULTIPLIERS = [
+  1,
+  1.08,
+  1.16,
+  1.24,
+  1.35,
+] as const;
+
+const COMPANION_SKILL_DURATION_BONUSES = [0, 0, 1, 1, 2] as const;
+
+export const companionSkillLevelModifier = (
+  skillId: CompanionSkillId,
+  rawLevel: number | undefined,
+): CompanionSkillModifier => {
+  const level = normalizeCompanionSkillLevel(rawLevel);
+  const blueprint = companionSkillBlueprint(skillId);
+  const potencyKeys = (["power", "secondaryPower", "healRatio"] as const)
+    .filter((key) => blueprint.scalars[key] !== undefined);
+  const scalarChanges: NonNullable<CompanionSkillModifier["scalarChanges"]> =
+    potencyKeys.length > 0
+      ? Object.fromEntries(
+          potencyKeys.map((key) => [
+            key,
+            { multiply: COMPANION_SKILL_POTENCY_MULTIPLIERS[level - 1] },
+          ]),
+        )
+      : blueprint.scalars.durationTurns !== undefined
+        ? {
+            durationTurns: {
+              add: COMPANION_SKILL_DURATION_BONUSES[level - 1],
+            },
+          }
+        : {};
+  return {
+    id: `skill-level:${skillId}:${Math.min(level, MAX_COMPANION_SKILL_LEVEL)}`,
+    scalarChanges,
+  };
 };
 
 type CompanionSkillBehavior = Pick<

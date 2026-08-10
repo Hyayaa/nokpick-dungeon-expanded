@@ -17,16 +17,26 @@ import {
 import { ENEMY_STATS } from "../app/game/data";
 import { COMPANION_SKILLS } from "../app/game/companion-skills";
 import {
+  companionToPlayer,
   createInitialWarehouse,
+  normalizeCompanionForHub,
+  playerToCompanion,
   type CampaignSave,
 } from "../app/game/campaign";
 import { createShopState } from "../app/game/commerce";
 import {
+  canLevelCompanionSkill,
   equipCompanionSkill,
   learnCompanionSkill,
+  levelCompanionSkill,
+  skillLevelRequirements,
   swapCompanionSkills,
 } from "../app/game/skill-training";
-import { companionSkillBlueprint } from "../app/game/companion-skill-blueprints";
+import {
+  companionSkillBlueprint,
+  companionSkillLevelModifier,
+  deriveCompanionSkill,
+} from "../app/game/companion-skill-blueprints";
 import { isWalkable, mapPointKey } from "../app/game/map";
 import {
   createSkillResources,
@@ -168,6 +178,44 @@ const fireballResult = activateCompanionSkill(
 );
 assert.equal(fireballResult.consumedTurn, true);
 assert.equal(fireballResult.state.player.currentMana, 80);
+
+const levelOneLeap = deriveCompanionSkill("shockLeap", [
+  companionSkillLevelModifier("shockLeap", 1),
+]);
+const levelFiveLeap = deriveCompanionSkill("shockLeap", [
+  companionSkillLevelModifier("shockLeap", 5),
+]);
+assert.equal(levelOneLeap.scalars.power, 1.6);
+assert.equal(levelFiveLeap.scalars.power, 1.6 * 1.35);
+assert.equal(levelOneLeap.resourceCost, levelFiveLeap.resourceCost);
+assert.equal(levelOneLeap.cooldown, levelFiveLeap.cooldown);
+const levelFiveMedicine = deriveCompanionSkill("fieldMedicine", [
+  companionSkillLevelModifier("fieldMedicine", 5),
+]);
+assert.equal(levelFiveMedicine.scalars.healRatio, 0.5 * 1.35);
+const levelFiveToxicOrb = deriveCompanionSkill("toxicOrb", [
+  companionSkillLevelModifier("toxicOrb", 5),
+]);
+assert.equal(levelFiveToxicOrb.scalars.durationTurns, 8);
+
+const healingState = createNewGame(0xc1e71c);
+healingState.player.professionId = "cleric";
+healingState.player.learnedSkills = ["fieldMedicine"];
+healingState.player.skills = ["fieldMedicine"];
+healingState.player.skillLevels = { fieldMedicine: 5 };
+healingState.player.skillCooldowns = {};
+healingState.player.maxHp = 100;
+healingState.player.hp = 1;
+healingState.player.currentMana = 100;
+const healingResult = activateCompanionSkill(
+  healingState,
+  healingState.player.companionId,
+  "fieldMedicine",
+  { x: healingState.player.x, y: healingState.player.y },
+);
+assert.equal(healingResult.consumedTurn, true);
+assert.equal(healingResult.state.player.hp, 69);
+assert.equal(healingResult.state.player.currentMana, 82);
 
 const fullTurnResources = { ...createSkillResources(), currentStamina: 0, currentMana: 0 };
 recoverSkillResources(fullTurnResources, 1);
@@ -312,8 +360,14 @@ assert.equal(cooldownResult.state.player.currentStamina, 100);
 assert.equal(cooldownResult.state.player.skillCooldowns.shockLeap, 2);
 
 const trainingCompanion = createCompanion("warrior", { x: 0, y: 0 }, 20);
+assert.deepEqual(
+  Object.values(trainingCompanion.skillLevels),
+  [1, 1],
+  "new companion skills must start at Lv.1",
+);
 trainingCompanion.learnedSkills = ["shockLeap", "weaponThrow"];
 trainingCompanion.skills = ["shockLeap", "weaponThrow"];
+trainingCompanion.skillLevels = { shockLeap: 1, weaponThrow: 1 };
 const trainingCampaign: CampaignSave = {
   version: 7,
   warehouse: createInitialWarehouse(),
@@ -334,6 +388,7 @@ assert.equal(learned.changed, true);
 assert.equal(learned.campaign.gold, 500);
 assert.deepEqual(learned.campaign.companions[0].skills, ["shockLeap", "weaponThrow"]);
 assert.ok(learned.campaign.companions[0].learnedSkills.includes("shieldCharge"));
+assert.equal(learned.campaign.companions[0].skillLevels.shieldCharge, 1);
 const duplicateLearn = learnCompanionSkill(
   learned.campaign,
   trainingCompanion.id,
@@ -374,15 +429,67 @@ const swapped = swapCompanionSkills(
 );
 assert.deepEqual(swapped.campaign.companions[0].skills, ["shieldCharge", "shockLeap"]);
 
+const levelCampaign: CampaignSave = {
+  ...trainingCampaign,
+  gold: 1_000,
+  materials: { potion: 1, seed: 4, runestone: 0 },
+};
+assert.deepEqual(skillLevelRequirements("shockLeap", 1), {
+  currentLevel: 1,
+  nextLevel: 2,
+  gold: 800,
+  materials: { seed: 4, potion: 1 },
+});
+assert.equal(canLevelCompanionSkill(
+  levelCampaign,
+  trainingCompanion.id,
+  "shockLeap",
+).changed, true);
+const leveled = levelCompanionSkill(
+  levelCampaign,
+  trainingCompanion.id,
+  "shockLeap",
+);
+assert.equal(leveled.changed, true);
+assert.equal(leveled.campaign.gold, 200);
+assert.deepEqual(leveled.campaign.materials, { potion: 0, seed: 0, runestone: 0 });
+assert.equal(leveled.campaign.companions[0].skillLevels.shockLeap, 2);
+const poorLevelCampaign: CampaignSave = {
+  ...trainingCampaign,
+  gold: 1_000,
+  materials: { potion: 5, seed: 3, runestone: 0 },
+};
+const rejectedLevel = levelCompanionSkill(
+  poorLevelCampaign,
+  trainingCompanion.id,
+  "shockLeap",
+);
+assert.equal(rejectedLevel.changed, false);
+assert.strictEqual(rejectedLevel.campaign, poorLevelCampaign);
+assert.equal(rejectedLevel.campaign.gold, 1_000);
+assert.deepEqual(rejectedLevel.campaign.materials, { potion: 5, seed: 3, runestone: 0 });
+assert.equal(rejectedLevel.campaign.companions[0].skillLevels.shockLeap, 1);
+
 const legacyCompanion = JSON.parse(JSON.stringify(trainingCompanion)) as typeof trainingCompanion & Record<string, unknown>;
-delete legacyCompanion.learnedSkills;
+Reflect.deleteProperty(legacyCompanion, "learnedSkills");
+Reflect.deleteProperty(legacyCompanion, "skillLevels");
 const normalizedLegacySkills = normalizeCompanionProgression(legacyCompanion);
 assert.deepEqual(normalizedLegacySkills.learnedSkills, trainingCompanion.skills);
 assert.deepEqual(normalizedLegacySkills.skills, trainingCompanion.skills);
+assert.deepEqual(normalizedLegacySkills.skillLevels, {
+  [trainingCompanion.skills[0]]: 1,
+  [trainingCompanion.skills[1]]: 1,
+});
 const savedTraining = JSON.parse(JSON.stringify(swapped.campaign)) as CampaignSave;
 const reloadedTraining = normalizeCompanionProgression(savedTraining.companions[0]);
 assert.deepEqual(reloadedTraining.learnedSkills, swapped.campaign.companions[0].learnedSkills);
 assert.deepEqual(reloadedTraining.skills, ["shieldCharge", "shockLeap"]);
+const travelCompanion = createCompanion("warrior", { x: 0, y: 0 }, 21);
+travelCompanion.skillLevels[travelCompanion.skills[0]] = 4;
+const returnedCompanion = normalizeCompanionForHub(
+  playerToCompanion(companionToPlayer(travelCompanion)),
+);
+assert.equal(returnedCompanion.skillLevels[travelCompanion.skills[0]], 4);
 
 const equippedOnlyState = createNewGame(0xc04ba7);
 equippedOnlyState.player.professionId = "warrior";

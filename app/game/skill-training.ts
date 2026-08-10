@@ -2,7 +2,10 @@ import type { CampaignSave } from "./campaign";
 import {
   COMPANION_PROFESSIONS,
   COMPANION_SKILLS,
+  MAX_COMPANION_SKILL_LEVEL,
   normalizeEquippedSkills,
+  normalizeCompanionSkillLevel,
+  normalizeCompanionSkillLevels,
   normalizeLearnedSkills,
 } from "./companion-skills";
 import type { Companion, CompanionSkillId } from "./types";
@@ -20,6 +23,7 @@ export type SkillTrainingFailure =
   | "not-learned"
   | "not-enough-gold"
   | "not-enough-materials"
+  | "maximum-level"
   | "already-equipped"
   | "slot-required";
 
@@ -29,6 +33,45 @@ type SkillTrainingResult = {
   reason: "ok" | SkillTrainingFailure;
   cost: number;
   materialCost: CampaignMaterialCost;
+};
+
+export type SkillLevelRequirement = {
+  currentLevel: number;
+  nextLevel: number;
+  gold: number;
+  materials: CampaignMaterialCost;
+};
+
+const SKILL_LEVEL_MATERIAL_COSTS: Readonly<
+  Record<1 | 2 | 3 | 4, CampaignMaterialCost>
+> = {
+  1: { seed: 4, potion: 1 },
+  2: { seed: 6, potion: 2 },
+  3: { seed: 9, potion: 3 },
+  4: { seed: 12, potion: 4 },
+};
+
+export const skillLevelRequirements = (
+  skillId: CompanionSkillId,
+  currentLevel: number,
+): SkillLevelRequirement | null => {
+  const definition = COMPANION_SKILLS[skillId];
+  const level = normalizeCompanionSkillLevel(currentLevel);
+  if (!definition || level >= MAX_COMPANION_SKILL_LEVEL) return null;
+  const materials = SKILL_LEVEL_MATERIAL_COSTS[level as 1 | 2 | 3 | 4];
+  return {
+    currentLevel: level,
+    nextLevel: level + 1,
+    gold: definition.trainingCost * (2 ** level),
+    materials: { ...materials },
+  };
+};
+
+export type SkillLevelResult = {
+  campaign: CampaignSave;
+  changed: boolean;
+  reason: "ok" | SkillTrainingFailure;
+  requirement: SkillLevelRequirement | null;
 };
 
 const replaceCompanion = (
@@ -136,9 +179,14 @@ export const learnCompanionSkill = (
     [...(companion.learnedSkills ?? companion.skills), skillId],
     companion.skills,
   );
+  const skillLevels = {
+    ...normalizeCompanionSkillLevels(learnedSkills, companion.skillLevels),
+    [skillId]: 1,
+  };
   const nextCampaign = replaceCompanion(campaign, {
     ...companion,
     learnedSkills,
+    skillLevels,
     skills: normalizeEquippedSkills(
       companion.professionId,
       learnedSkills,
@@ -156,6 +204,104 @@ export const learnCompanionSkill = (
     reason: "ok",
     cost: validation.cost,
     materialCost: validation.materialCost,
+  };
+};
+
+export const canLevelCompanionSkill = (
+  campaign: CampaignSave,
+  companionId: string,
+  skillId: CompanionSkillId,
+): Omit<SkillLevelResult, "campaign"> => {
+  const companion = campaign.companions.find(
+    (candidate) => candidate.id === companionId,
+  );
+  const definition = COMPANION_SKILLS[skillId];
+  if (!companion) {
+    return { changed: false, reason: "companion-not-found", requirement: null };
+  }
+  if (!definition) {
+    return { changed: false, reason: "invalid-skill", requirement: null };
+  }
+  if (!COMPANION_PROFESSIONS[companion.professionId].skillPool.includes(skillId)) {
+    return { changed: false, reason: "wrong-profession", requirement: null };
+  }
+  const learnedSkills = normalizeLearnedSkills(
+    companion.professionId,
+    companion.learnedSkills,
+    companion.skills,
+  );
+  if (!learnedSkills.includes(skillId)) {
+    return { changed: false, reason: "not-learned", requirement: null };
+  }
+  const skillLevels = normalizeCompanionSkillLevels(
+    learnedSkills,
+    companion.skillLevels,
+  );
+  const requirement = skillLevelRequirements(skillId, skillLevels[skillId] ?? 1);
+  if (!requirement) {
+    return { changed: false, reason: "maximum-level", requirement: null };
+  }
+  if (campaign.gold < requirement.gold) {
+    return { changed: false, reason: "not-enough-gold", requirement };
+  }
+  if (!canPayMaterials(campaign.materials, requirement.materials)) {
+    return { changed: false, reason: "not-enough-materials", requirement };
+  }
+  return { changed: true, reason: "ok", requirement };
+};
+
+export const levelCompanionSkill = (
+  campaign: CampaignSave,
+  companionId: string,
+  skillId: CompanionSkillId,
+): SkillLevelResult => {
+  const validation = canLevelCompanionSkill(campaign, companionId, skillId);
+  if (!validation.changed || !validation.requirement) {
+    return { campaign, ...validation };
+  }
+  const companion = campaign.companions.find(
+    (candidate) => candidate.id === companionId,
+  )!;
+  const learnedSkills = normalizeLearnedSkills(
+    companion.professionId,
+    companion.learnedSkills,
+    companion.skills,
+  );
+  const skillLevels = normalizeCompanionSkillLevels(
+    learnedSkills,
+    companion.skillLevels,
+  );
+  const materials = payMaterials(
+    campaign.materials,
+    validation.requirement.materials,
+  );
+  if (!materials) {
+    return {
+      campaign,
+      changed: false,
+      reason: "not-enough-materials",
+      requirement: validation.requirement,
+    };
+  }
+  return {
+    campaign: replaceCompanion(
+      {
+        ...campaign,
+        gold: campaign.gold - validation.requirement.gold,
+        materials,
+      },
+      {
+        ...companion,
+        learnedSkills,
+        skillLevels: {
+          ...skillLevels,
+          [skillId]: validation.requirement.nextLevel,
+        },
+      },
+    ),
+    changed: true,
+    reason: "ok",
+    requirement: validation.requirement,
   };
 };
 

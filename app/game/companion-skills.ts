@@ -595,6 +595,24 @@ export const normalizeLearnedSkills = (
   );
 };
 
+export const MAX_COMPANION_SKILL_LEVEL = 5;
+
+export const normalizeCompanionSkillLevel = (level: unknown) =>
+  typeof level === "number" && Number.isFinite(level)
+    ? Math.max(1, Math.min(MAX_COMPANION_SKILL_LEVEL, Math.floor(level)))
+    : 1;
+
+export const normalizeCompanionSkillLevels = (
+  learnedSkillIds: readonly CompanionSkillId[],
+  skillLevels: Partial<Record<CompanionSkillId, number>> | undefined,
+): Partial<Record<CompanionSkillId, number>> =>
+  Object.fromEntries(
+    learnedSkillIds.map((skillId) => [
+      skillId,
+      normalizeCompanionSkillLevel(skillLevels?.[skillId]),
+    ]),
+  );
+
 export const normalizeEquippedSkills = (
   professionId: CompanionProfessionId,
   learnedSkillIds: readonly CompanionSkillId[],

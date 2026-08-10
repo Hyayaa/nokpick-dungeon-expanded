@@ -4,6 +4,7 @@ import { normalizeEquipmentInstance } from "./equipment";
 import {
   normalizeCompanionProfession,
   normalizeCompanionSkills,
+  normalizeCompanionSkillLevels,
   normalizeLearnedSkills,
   normalizeSkillCooldowns,
 } from "./companion-skills";
@@ -57,6 +58,17 @@ export const cloneGame = (
       ),
       state.player.learnedSkills,
       state.player.skills,
+    ),
+    skillLevels: normalizeCompanionSkillLevels(
+      normalizeLearnedSkills(
+        normalizeCompanionProfession(
+          state.player.classId,
+          state.player.professionId,
+        ),
+        state.player.learnedSkills,
+        state.player.skills,
+      ),
+      state.player.skillLevels,
     ),
     skills: normalizeCompanionSkills(
       normalizeCompanionProfession(
@@ -133,6 +145,17 @@ export const cloneGame = (
       ),
       companion.learnedSkills,
       companion.skills,
+    ),
+    skillLevels: normalizeCompanionSkillLevels(
+      normalizeLearnedSkills(
+        normalizeCompanionProfession(
+          companion.classId,
+          companion.professionId,
+        ),
+        companion.learnedSkills,
+        companion.skills,
+      ),
+      companion.skillLevels,
     ),
     skills: normalizeCompanionSkills(
       normalizeCompanionProfession(
