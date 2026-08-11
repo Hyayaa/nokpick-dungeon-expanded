@@ -61,6 +61,7 @@ import {
   type CampaignMaterials,
 } from "./campaign-materials";
 import type { BossId } from "./boss-definitions";
+import { normalizeCombatStats } from "./combat-stats";
 
 export type DungeonId = string;
 export type DungeonDifficulty = 1 | 2 | 3 | 4 | 5 | 6 | 7;
@@ -1473,6 +1474,7 @@ export const createStarterCompanionRoster = (
 
 export const normalizeHeroForHub = (player: Player): Player => ({
   ...player,
+  ...normalizeCombatStats(player),
   ...normalizeSkillResources(player),
   traits: [...(player.traits ?? [])],
   learnedSkills: [...(player.learnedSkills ?? player.skills ?? [])],
@@ -1639,6 +1641,7 @@ export const companionToPlayer = (companion: Companion): Player => {
   );
   return {
     ...normalizeSkillResources(normalized),
+    ...normalizeCombatStats(normalized),
     companionId: normalized.id,
     name: normalized.name,
     classId: normalized.classId,
@@ -1712,6 +1715,7 @@ export const playerToCompanion = (player: Player): Companion => {
   }) as Companion["autoSlots"];
   return normalizeCompanionForHub({
     ...normalizeSkillResources(player),
+    ...normalizeCombatStats(player),
     id: player.companionId,
     name: player.name || definition.defaultNameKo,
     classId: player.classId,

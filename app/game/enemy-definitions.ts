@@ -1,5 +1,6 @@
 import type { EnemySkillUseRule } from "./enemy-skills";
-import type { Enemy, EnemyKind, EnemyRegion, EnemySkillId, EnemySpriteDefinition, Point } from "./types";
+import { normalizeCombatStats } from "./combat-stats";
+import type { CombatStats, Enemy, EnemyKind, EnemyRegion, EnemySkillId, EnemySpriteDefinition, Point } from "./types";
 
 export type EnemyProperty = "flying" | "undead" | "demonic" | "large" | "immovable" | "inorganic" | "aquatic";
 export type EnemyAiProfile = "melee" | "fastMelee" | "ranged" | "skirmisher" | "summoner" | "support" | "charger";
@@ -9,7 +10,13 @@ export type EnemyDefinition = {
   name: string;
   region: EnemyRegion;
   type: EnemyRosterType;
-  baseStats: { hp: number; attack: number; defense: number; accuracy: number; evasion: number };
+  baseStats: {
+    hp: number;
+    attack: number;
+    defense: number;
+    accuracy: number;
+    evasion: number;
+  } & Partial<CombatStats>;
   xp: number;
   properties: readonly EnemyProperty[];
   sprite: EnemySpriteDefinition;
@@ -112,6 +119,7 @@ export const createEnemyFromDefinition = (
     defense: stats.defense,
     accuracy: stats.accuracy,
     evasion: stats.evasion,
+    ...normalizeCombatStats({ ...definition.baseStats, ...stats }),
     xp: stats.xp,
     alerted: false,
     sawPlayerLastTurn: false,

@@ -1,4 +1,5 @@
 import { ENEMY_STATS, ITEM_DEFS } from "./data";
+import { normalizeCombatStats } from "./combat-stats";
 import {
   createEquipmentInstance,
   enchantEquipmentInstance,
@@ -133,6 +134,7 @@ const enemy = (kind: EnemyKind, id: string, point: Point): Enemy => {
     defense: stats.defense,
     accuracy: stats.accuracy,
     evasion: stats.evasion,
+    ...normalizeCombatStats(undefined),
     xp: stats.xp,
     alerted: false,
     sawPlayerLastTurn: false,

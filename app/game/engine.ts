@@ -145,6 +145,11 @@ import {
 } from "./loadout";
 import { random, randomInt } from "./random";
 import {
+  applyLifeSteal,
+  normalizeCombatStats,
+  resolveCriticalDamage,
+} from "./combat-stats";
+import {
   canPaySkillResource,
   currentSkillResource,
   fillSkillResources,
@@ -199,6 +204,82 @@ import {
 } from "./types";
 
 const PLAYER_ID = "player";
+type DirectDamageAttacker = Player | Companion | Enemy;
+
+const directDamageSourceId = (attacker: DirectDamageAttacker) =>
+  "companionId" in attacker ? PLAYER_ID : attacker.id;
+
+const resolveDirectEnemyDamage = (
+  state: GameState,
+  attacker: DirectDamageAttacker,
+  target: Enemy,
+  normalDamage: number,
+  ranged = false,
+) => {
+  const criticalResult = resolveCriticalDamage(
+    normalDamage,
+    attacker,
+    random(state),
+  );
+  const damage = applyEnemyIncomingDamage(
+    state,
+    target,
+    criticalResult.damage,
+    ranged,
+  );
+  return {
+    damage,
+    critical: damage > 0 && criticalResult.critical,
+    healing: applyLifeSteal(attacker, damage),
+  };
+};
+
+const resolveDirectPartyDamage = (
+  state: GameState,
+  attacker: Enemy,
+  target: Player | Companion,
+  normalDamage: number,
+  playerInvincible = false,
+) => {
+  const criticalResult = resolveCriticalDamage(
+    normalDamage,
+    attacker,
+    random(state),
+  );
+  let damage = playerInvincible && target === state.player
+    ? 0
+    : criticalResult.damage;
+  if (target === state.player && target.shield > 0 && damage > 0) {
+    const blocked = Math.min(target.shield, damage);
+    target.shield -= blocked;
+    damage -= blocked;
+  }
+  const hpBefore = target.hp;
+  target.hp = Math.max(0, target.hp - damage);
+  const actualHpDamage = hpBefore - target.hp;
+  return {
+    damage: actualHpDamage,
+    critical: actualHpDamage > 0 && criticalResult.critical,
+    healing: applyLifeSteal(attacker, actualHpDamage),
+  };
+};
+
+const pushLifeStealEffect = (
+  attacker: DirectDamageAttacker,
+  healing: number,
+  effects: CombatEffect[],
+  sourceId = directDamageSourceId(attacker),
+) => {
+  if (healing <= 0) return;
+  effects.push({
+    x: attacker.x,
+    y: attacker.y,
+    text: `+${healing}`,
+    color: "#78df8b",
+    kind: "healing",
+    sourceId,
+  });
+};
 export { MAX_INVENTORY_SLOTS } from "./inventory-slots";
 export const HIGH_GRASS_SEED_DROP_CHANCE = 0.05;
 export { MAX_PLAYER_LEVEL } from "./progression";
@@ -1401,6 +1482,7 @@ const makePlayer = (point: Point): Player => {
   const adventurer = createCompanion("adventurer", point, 0);
   return {
     ...normalizeSkillResources(adventurer),
+    ...normalizeCombatStats(adventurer),
     ...point,
     companionId: adventurer.id,
     name: adventurer.name,
@@ -1500,6 +1582,7 @@ const cloneCompanionForFloor = (
   point: Point,
 ): Companion => ({
   ...companion,
+  ...normalizeCombatStats(companion),
   ...normalizeSkillResources(companion),
   ...point,
   professionId: normalizeCompanionProfession(
@@ -1616,6 +1699,7 @@ const makeFloorState = (
   const player = carriedPlayer
     ? {
         ...carriedPlayer,
+        ...normalizeCombatStats(carriedPlayer),
         ...normalizeSkillResources(carriedPlayer),
         ...generated.start,
         professionId: normalizeCompanionProfession(
@@ -2578,7 +2662,13 @@ export function playerStep(
           randomInt(next, -1, 2) +
           (surprise ? augmentRank(next.player, "suckerPunch") * 2 : 0),
       );
-      const dealtDamage = applyEnemyIncomingDamage(next, enemy, damage);
+      const resolvedDamage = resolveDirectEnemyDamage(
+        next,
+        next.player,
+        enemy,
+        damage,
+      );
+      const dealtDamage = resolvedDamage.damage;
       pushLog(
         next,
         surprise
@@ -2598,8 +2688,15 @@ export function playerStep(
         text: dealtDamage ? `-${dealtDamage}` : "막음!",
         color: "#fff0a6",
         kind: "damage",
+        critical: resolvedDamage.critical,
         sourceId: PLAYER_ID,
       });
+      pushLifeStealEffect(
+        next.player,
+        resolvedDamage.healing,
+        effects,
+        PLAYER_ID,
+      );
       const defeatedIds = removeDefeatedEnemies(
         next,
         effects,
@@ -3119,14 +3216,26 @@ export function manualCompanionStep(
           enemy.defense +
           randomInt(next, -1, 1),
       );
-      const dealtDamage = applyEnemyIncomingDamage(next, enemy, damage);
+      const resolvedDamage = resolveDirectEnemyDamage(
+        next,
+        companion,
+        enemy,
+        damage,
+      );
+      const dealtDamage = resolvedDamage.damage;
       effects.push({
         ...target,
         text: dealtDamage ? `-${dealtDamage}` : "막음!",
         color: "#ffe3a1",
         kind: "damage",
+        critical: resolvedDamage.critical,
         sourceId: companion.id,
       });
+      pushLifeStealEffect(
+        companion,
+        resolvedDamage.healing,
+        effects,
+      );
       pushLog(
         next,
         `${companion.name}이(가) ${getEnemyLabel(enemy)}에게 ${dealtDamage} 피해를 입혔습니다.`,
@@ -4155,7 +4264,14 @@ const damageWithSkill = (
   effects: CombatEffect[],
   color: string,
 ) => {
-  const damage = applyEnemyIncomingDamage(actor.state, enemy, Math.max(1, Math.round(amount)), true);
+  const resolvedDamage = resolveDirectEnemyDamage(
+    actor.state,
+    actor.character,
+    enemy,
+    Math.max(1, Math.round(amount)),
+    true,
+  );
+  const damage = resolvedDamage.damage;
   enemy.sleeping = false;
   enemy.alerted = true;
   enemy.lastSeenPlayer = {
@@ -4168,8 +4284,15 @@ const damageWithSkill = (
     text: damage ? `-${damage}` : "막음!",
     color,
     kind: "damage",
+    critical: resolvedDamage.critical,
     sourceId: actor.motionId,
   });
+  pushLifeStealEffect(
+    actor.character,
+    resolvedDamage.healing,
+    effects,
+    actor.motionId,
+  );
   return damage;
 };
 
@@ -6272,15 +6395,27 @@ const companionMeleeAttack = (
         target.defense +
         randomInt(state, -1, 1),
     );
-    const dealtDamage = applyEnemyIncomingDamage(state, target, damage);
+    const resolvedDamage = resolveDirectEnemyDamage(
+      state,
+      companion,
+      target,
+      damage,
+    );
+    const dealtDamage = resolvedDamage.damage;
     effects.push({
       x: target.x,
       y: target.y,
       text: dealtDamage ? `-${dealtDamage}` : "막음!",
       color: "#ffe3a1",
       kind: "damage",
+      critical: resolvedDamage.critical,
       sourceId: companion.id,
     });
+    pushLifeStealEffect(
+      companion,
+      resolvedDamage.healing,
+      effects,
+    );
     pushLog(
       state,
       `${companion.name}이(가) ${getEnemyLabel(target)}에게 ${dealtDamage} 피해를 입혔습니다.`,
@@ -6827,15 +6962,28 @@ export function runEnemyTurn(
             1,
             enemy.attack - allyTarget.defense + randomInt(next, -1, 1),
           );
-          allyTarget.hp -= amount;
+          const resolvedDamage = resolveDirectEnemyDamage(
+            next,
+            enemy,
+            allyTarget,
+            amount,
+          );
           effects.push({
             x: allyTarget.x,
             y: allyTarget.y,
-            text: `-${amount}`,
+            text: resolvedDamage.damage
+              ? `-${resolvedDamage.damage}`
+              : "막음!",
             color: "#d5adff",
             kind: "damage",
+            critical: resolvedDamage.critical,
             sourceId: enemy.id,
           });
+          pushLifeStealEffect(
+            enemy,
+            resolvedDamage.healing,
+            effects,
+          );
           pushLog(
             next,
             `타락한 ${getEnemyLabel(enemy)}이(가) ${getEnemyLabel(allyTarget)}을(를) 공격했습니다.`,
@@ -6939,13 +7087,14 @@ export function runEnemyTurn(
             enemy.attack - getPlayerDefense(next.player) + randomInt(next, -1, 1),
           ),
         );
-        let damage = options.playerInvincible ? 0 : rolledDamage;
-        if (next.player.shield > 0 && damage > 0) {
-          const blocked = Math.min(next.player.shield, damage);
-          next.player.shield -= blocked;
-          damage -= blocked;
-        }
-        next.player.hp = Math.max(0, next.player.hp - damage);
+        const resolvedDamage = resolveDirectPartyDamage(
+          next,
+          enemy,
+          next.player,
+          rolledDamage,
+          options.playerInvincible,
+        );
+        const damage = resolvedDamage.damage;
         applyEnemyMeleeIdentity(next, enemy, next.player, damage);
         pushLog(
           next,
@@ -6968,8 +7117,14 @@ export function runEnemyTurn(
           text: options.playerInvincible ? "무효" : `-${damage}`,
           color: options.playerInvincible ? "#8ce7ff" : "#ff6969",
           kind: options.playerInvincible ? "blocked" : "damage",
+          critical: resolvedDamage.critical,
           sourceId: enemy.id,
         });
+        pushLifeStealEffect(
+          enemy,
+          resolvedDamage.healing,
+          effects,
+        );
       } else {
         pushLog(next, `${getEnemyLabel(enemy)}의 공격을 회피했습니다.`);
         effects.push({
@@ -7013,7 +7168,7 @@ export function runEnemyTurn(
         kind: "attack",
       });
       if (hit) {
-        const damage = reduceCharacterDamage(
+        const normalDamage = reduceCharacterDamage(
           adjacentCompanion,
           Math.max(
             1,
@@ -7022,7 +7177,13 @@ export function runEnemyTurn(
               randomInt(next, -1, 1),
           ),
         );
-        adjacentCompanion.hp = Math.max(0, adjacentCompanion.hp - damage);
+        const resolvedDamage = resolveDirectPartyDamage(
+          next,
+          enemy,
+          adjacentCompanion,
+          normalDamage,
+        );
+        const damage = resolvedDamage.damage;
         applyEnemyMeleeIdentity(next, enemy, adjacentCompanion, damage);
         effects.push({
           x: adjacentCompanion.x,
@@ -7030,8 +7191,14 @@ export function runEnemyTurn(
           text: `-${damage}`,
           color: "#ff8d7c",
           kind: "damage",
+          critical: resolvedDamage.critical,
           sourceId: enemy.id,
         });
+        pushLifeStealEffect(
+          enemy,
+          resolvedDamage.healing,
+          effects,
+        );
         pushLog(
           next,
           `${getEnemyLabel(enemy)}이(가) ${adjacentCompanion.name}에게 ${damage} 피해를 입혔습니다.`,
@@ -7389,14 +7556,29 @@ const damageEnemiesInRange = (
       (!visibleOnly || state.tiles[enemy.y][enemy.x].visible)
     ) {
       const amount = damage(enemy);
-      const dealtDamage = applyEnemyIncomingDamage(state, enemy, amount, true);
+      const resolvedDamage = resolveDirectEnemyDamage(
+        state,
+        state.player,
+        enemy,
+        amount,
+        true,
+      );
+      const dealtDamage = resolvedDamage.damage;
       effects.push({
         x: enemy.x,
         y: enemy.y,
         text: dealtDamage ? `-${dealtDamage}` : "막음!",
         color: "#9deaff",
         kind: "damage",
+        critical: resolvedDamage.critical,
+        sourceId: PLAYER_ID,
       });
+      pushLifeStealEffect(
+        state.player,
+        resolvedDamage.healing,
+        effects,
+        PLAYER_ID,
+      );
     }
   });
   return removeDefeatedEnemies(state, effects, false);
@@ -9029,7 +9211,14 @@ export function zapWand(
   const effects: CombatEffect[] = [];
   const hit = (enemy: Enemy, amount: number, color: string) => {
     const resolvedAmount = amount + wandPowerBonus;
-    const dealtDamage = applyEnemyIncomingDamage(next, enemy, resolvedAmount, true);
+    const resolvedDamage = resolveDirectEnemyDamage(
+      next,
+      next.player,
+      enemy,
+      resolvedAmount,
+      true,
+    );
+    const dealtDamage = resolvedDamage.damage;
     enemy.sleeping = false;
     enemy.alerted = true;
     enemy.lastSeenPlayer = { ...next.player };
@@ -9039,8 +9228,15 @@ export function zapWand(
       text: dealtDamage ? `-${dealtDamage}` : "막음!",
       color,
       kind: "damage",
+      critical: resolvedDamage.critical,
       sourceId: `wand-${defId}`,
     });
+    pushLifeStealEffect(
+      next.player,
+      resolvedDamage.healing,
+      effects,
+      `wand-${defId}`,
+    );
     return resolvedAmount;
   };
   const magicVisuals = [{
@@ -9359,7 +9555,14 @@ export function throwItem(
   const dealtDamage = Boolean(enemy && damage > 0);
   if (enemy && damage > 0) {
     const amount = Math.max(1, damage - Math.floor(enemy.defense / 2));
-    const dealtDamage = applyEnemyIncomingDamage(next, enemy, amount, true);
+    const resolvedDamage = resolveDirectEnemyDamage(
+      next,
+      next.player,
+      enemy,
+      amount,
+      true,
+    );
+    const dealtDamage = resolvedDamage.damage;
     enemy.sleeping = false;
     enemy.alerted = true;
     effects.push({
@@ -9367,8 +9570,15 @@ export function throwItem(
       text: dealtDamage ? `-${dealtDamage}` : "막음!",
       color: "#ffd27c",
       kind: "damage",
+      critical: resolvedDamage.critical,
       sourceId: `throw-${defId}`,
     });
+    pushLifeStealEffect(
+      next.player,
+      resolvedDamage.healing,
+      effects,
+      `throw-${defId}`,
+    );
     pushLog(next, `${definition.name}이(가) ${getEnemyLabel(enemy)}에게 적중했습니다.`);
     if (LIGHTNING_THROWABLE_IDS.has(defId)) {
       conductLightningFromEnemy(

@@ -11,6 +11,7 @@ import {
 import { normalizePlayerInventorySlots } from "./inventory-slots";
 import { FLEX_EQUIPMENT_KEYS as RING_EQUIPMENT_KEYS } from "./loadout";
 import { normalizeSkillResources } from "./skill-resources";
+import { normalizeCombatStats } from "./combat-stats";
 import type {
   Direction,
   GameState,
@@ -45,6 +46,7 @@ export const cloneGame = (
     : state.tiles,
   player: {
     ...state.player,
+    ...normalizeCombatStats(state.player),
     ...normalizeSkillResources(state.player),
     professionId: normalizeCompanionProfession(
       state.player.classId,
@@ -132,6 +134,7 @@ export const cloneGame = (
   },
   companions: (state.companions ?? []).map((companion) => ({
     ...companion,
+    ...normalizeCombatStats(companion),
     ...normalizeSkillResources(companion),
     professionId: normalizeCompanionProfession(
       companion.classId,
@@ -210,6 +213,7 @@ export const cloneGame = (
   companionTrail: (state.companionTrail ?? []).map((point) => ({ ...point })),
   enemies: state.enemies.map((enemy) => ({
     ...enemy,
+    ...normalizeCombatStats(enemy),
     statuses: (enemy.statuses ?? []).map((status) => ({ ...status })),
     skillCooldowns: { ...(enemy.skillCooldowns ?? {}) },
     skillUses: { ...(enemy.skillUses ?? {}) },

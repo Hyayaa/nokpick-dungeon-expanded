@@ -3,6 +3,12 @@ export type Point = {
   y: number;
 };
 
+export type CombatStats = {
+  criticalChance: number;
+  criticalDamageBonus: number;
+  lifeSteal: number;
+};
+
 export type Direction = "up" | "down" | "left" | "right";
 
 export type Terrain =
@@ -472,7 +478,7 @@ export type EnemyPendingSkill = {
   targetLockMode: "fixed" | "tracking";
 };
 
-export type Enemy = Point & {
+export type Enemy = Point & CombatStats & {
   id: string;
   kind: EnemyKind;
   hp: number;
@@ -707,7 +713,7 @@ export type PlayerAutoSlots = [
   string | null,
 ];
 
-export type Companion = Point & SkillResourceState & {
+export type Companion = Point & SkillResourceState & CombatStats & {
   id: string;
   name: string;
   classId: CompanionClassId;
@@ -766,7 +772,7 @@ export type AugmentId =
   | "runicTemper"
   | "royalArmory";
 
-export type Player = Point & SkillResourceState & {
+export type Player = Point & SkillResourceState & CombatStats & {
   companionId: string;
   name: string;
   classId: CompanionClassId;
@@ -872,6 +878,7 @@ export type CombatEffect = Point & {
   text: string;
   color: string;
   kind?: CombatEffectKind;
+  critical?: boolean;
   sourceId?: string;
   /** Visual action whose impact starts this effect's presentation timeline. */
   timingSourceId?: string;

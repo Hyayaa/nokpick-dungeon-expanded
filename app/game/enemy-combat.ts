@@ -9,6 +9,11 @@ import {
 import { hasLineOfSight, isWalkable, mapPointKey } from "./map";
 import { random, randomInt } from "./random";
 import {
+  applyLifeSteal,
+  normalizeCombatStats,
+  resolveCriticalDamage,
+} from "./combat-stats";
+import {
   applyBossMeleeIdentity,
   syncBossPhaseInPlace,
 } from "./boss-behaviors";
@@ -129,6 +134,7 @@ const scaledSummon = (state: GameState, owner: Enemy, kind: EnemyKind, point: Po
     hp: stat(definition.baseStats.hp), maxHp: stat(definition.baseStats.hp),
     attack: stat(definition.baseStats.attack), defense: stat(definition.baseStats.defense),
     accuracy: stat(definition.baseStats.accuracy), evasion: stat(definition.baseStats.evasion),
+    ...normalizeCombatStats(definition.baseStats),
     xp: definition.xp, alerted: true, sawPlayerLastTurn: true, sleeping: false,
     wakeCooldown: 0, lastSeenPlayer: { x: state.player.x, y: state.player.y }, searchTurns: 0,
     statuses: [], skillCooldowns: {}, skillUses: {}, pendingSkill: null,
@@ -159,19 +165,51 @@ const damageTarget = (
   amount: number,
   output: SkillTurnOutput,
   presentation?: Pick<CombatEffect, "timingSourceId" | "deathChainDepth">,
+  direct = true,
 ) => {
   const wasAlive = target.hp > 0;
-  const damage = output.playerInvincible && target === state.player ? 0 : Math.max(1, Math.round(amount - Math.max(0, target.baseDefense ?? 0) * 0.35));
+  const normalDamage = Math.max(
+    1,
+    Math.round(amount - Math.max(0, target.baseDefense ?? 0) * 0.35),
+  );
+  const criticalResult = direct
+    ? resolveCriticalDamage(normalDamage, enemy, random(state))
+    : { damage: normalDamage, critical: false };
+  let damage = output.playerInvincible && target === state.player
+    ? 0
+    : criticalResult.damage;
+  if (target === state.player && target.shield > 0 && damage > 0) {
+    const blocked = Math.min(target.shield, damage);
+    target.shield -= blocked;
+    damage -= blocked;
+  }
+  const hpBefore = target.hp;
   target.hp = Math.max(0, target.hp - damage);
+  const actualHpDamage = hpBefore - target.hp;
   output.effects.push({
     x: target.x,
     y: target.y,
-    text: damage ? `-${damage}` : "무효",
-    color: damage ? "#ff6969" : "#8ce7ff",
-    kind: damage ? "damage" : "blocked",
+    text: actualHpDamage ? `-${actualHpDamage}` : "무효",
+    color: actualHpDamage ? "#ff6969" : "#8ce7ff",
+    kind: actualHpDamage ? "damage" : "blocked",
+    critical: actualHpDamage > 0 && criticalResult.critical,
     sourceId: enemy.id,
     ...presentation,
   });
+  if (direct) {
+    const healing = applyLifeSteal(enemy, actualHpDamage);
+    if (healing > 0) {
+      output.effects.push({
+        x: enemy.x,
+        y: enemy.y,
+        text: `+${healing}`,
+        color: "#78df8b",
+        kind: "healing",
+        sourceId: enemy.id,
+        ...presentation,
+      });
+    }
+  }
   if (wasAlive && target !== state.player && target.hp <= 0) {
     output.effects.push({
       x: target.x,
@@ -521,7 +559,9 @@ export const applyEnemyIncomingDamage = (
     };
     return 0;
   }
-  enemy.hp -= damage;
+  const hpBefore = enemy.hp;
+  enemy.hp = Math.max(0, enemy.hp - damage);
+  const actualHpDamage = hpBefore - enemy.hp;
   syncBossPhaseInPlace(state, enemy);
   if (enemy.kind === "swarm" && enemy.hp > 1 && damage > 0) {
     const points = [
@@ -537,7 +577,7 @@ export const applyEnemyIncomingDamage = (
       state.enemies.push(child);
     }
   }
-  return damage;
+  return actualHpDamage;
 };
 
 type EnemyDeathPresentationCause = Pick<
@@ -577,6 +617,7 @@ export const resolveEnemyDeathMechanics = (
           timingSourceId: cause.timingSourceId,
           deathChainDepth: (cause.deathChainDepth ?? 0) + 1,
         },
+        false,
       );
     }
   }

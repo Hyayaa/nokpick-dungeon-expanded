@@ -1,6 +1,7 @@
 import { ITEM_DEFS } from "./data";
 import { equipmentStatProfile, normalizeEquipmentInstance } from "./equipment";
 import { experienceForNextLevel } from "./progression";
+import { normalizeCombatStats } from "./combat-stats";
 import {
   createSkillResources,
   normalizeSkillResources,
@@ -339,6 +340,7 @@ export const createCompanion = (
     baseDefense: definition.defense,
     accuracy: definition.accuracy,
     evasion: definition.evasion,
+    ...normalizeCombatStats(undefined),
     viewDistance: definition.viewDistance,
     facing: "down",
     equipment: {
@@ -497,6 +499,7 @@ export const normalizeCompanionProgression = (
   );
   return {
     ...companion,
+    ...normalizeCombatStats(companion),
     ...normalizeSkillResources(companion),
     hp: Math.min(maxHp, companion.hp),
     maxHp,
