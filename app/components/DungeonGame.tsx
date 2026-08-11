@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   CATEGORY_LABELS,
   ENEMY_DESCRIPTIONS,
@@ -988,8 +989,8 @@ const parseDragSlotItem = (raw: string | undefined) => {
 };
 
 function HeldItemCursor({ held }: { held: HeldSlotItem | null }) {
-  if (!held) return null;
-  return (
+  if (!held || typeof document === "undefined") return null;
+  return createPortal(
     <div
       className="held-item-cursor"
       style={{ left: held.clientX, top: held.clientY }}
@@ -1012,7 +1013,8 @@ function HeldItemCursor({ held }: { held: HeldSlotItem | null }) {
         }}
         quantity={held.item.quantity}
       />
-    </div>
+    </div>,
+    document.body,
   );
 }
 

@@ -7265,21 +7265,21 @@ button.fixed-item-slot.is-filled:focus-visible {
   transform-origin: center;
 }
 
-.campaign-drag-surface:has(.held-item-cursor),
-.game-page:has(.held-item-cursor) {
+body:has(.held-item-cursor) .campaign-drag-surface,
+body:has(.held-item-cursor) .game-page {
   cursor: grabbing;
 }
 
-.campaign-drag-surface:has(.held-item-cursor) [data-item-slot-address],
-.game-page:has(.held-item-cursor) [data-item-slot-address] {
+body:has(.held-item-cursor) .campaign-drag-surface [data-item-slot-address],
+body:has(.held-item-cursor) .game-page [data-item-slot-address] {
   transition:
     border-color 80ms linear,
     background-color 80ms linear,
     opacity 80ms linear;
 }
 
-.campaign-drag-surface:has(.held-item-cursor) [data-item-slot-address]:hover,
-.game-page:has(.held-item-cursor) [data-item-slot-address]:hover {
+body:has(.held-item-cursor) .campaign-drag-surface [data-item-slot-address]:hover,
+body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   z-index: 3;
   border-color: #79bb91;
   background-color: #101a13;

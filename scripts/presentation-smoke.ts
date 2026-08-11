@@ -191,6 +191,31 @@ const dungeonGameSource = readFileSync(
   "utf8",
 );
 const dungeonCssSource = readFileSync("app/globals.css", "utf8");
+assert.match(
+  dungeonGameSource,
+  /function HeldItemCursor[\s\S]*createPortal\([\s\S]*document\.body/,
+  "all held item cursors must render in one unscaled viewport-level portal",
+);
+assert.match(
+  dungeonGameSource,
+  /style=\{\{ left: held\.clientX, top: held\.clientY \}\}/,
+  "the held item cursor must use raw viewport pointer coordinates",
+);
+assert.doesNotMatch(
+  dungeonGameSource,
+  /held\.clientX\s*[+-]|held\.clientY\s*[+-]/,
+  "held item rendering must not add a scale-specific magic offset",
+);
+assert.match(
+  dungeonGameSource,
+  /document[\s\S]*\.elementFromPoint\(event\.clientX, event\.clientY\)/,
+  "drop targeting must continue to use viewport pointer coordinates",
+);
+assert.match(
+  dungeonCssSource,
+  /\.held-item-cursor\s*\{[\s\S]*position:\s*fixed;[\s\S]*transform:\s*translate\(-50%, -50%\)/,
+  "the portal cursor must stay fixed and centered at 0.8x, 1x, and 1.2x UI scale",
+);
 assert.equal(
   (dungeonGameSource.match(/new GameAudioRuntime\(\)/g) ?? []).length,
   1,
