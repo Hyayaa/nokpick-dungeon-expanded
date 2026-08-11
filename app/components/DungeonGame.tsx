@@ -31,6 +31,7 @@ import { enemyDefinition } from "../game/enemy-definitions";
 import { bossDefinition } from "../game/boss-definitions";
 import { enemySkill } from "../game/enemy-skills";
 import {
+  effectiveCombatStats,
   formatCombatPercent,
   remainingCooldownTurns,
 } from "../game/combat-stats";
@@ -2713,6 +2714,7 @@ function PlayerInspector({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const player = game.player;
+  const combatStats = effectiveCombatStats(player);
   const definition = COMPANION_PRESENTATIONS[player.classId];
   const profession = COMPANION_PROFESSIONS[player.professionId];
   const equipment = PARTY_LOADOUT_TARGETS.map((target) => [
@@ -2767,12 +2769,12 @@ function PlayerInspector({
         <span><small>{text("공격 속도", "Attack Speed")}</small><strong>×{getPlayerAttackSpeed(player).toFixed(2)}</strong></span>
         <span><small>{text("시야", "Vision")}</small><strong>{getPlayerViewDistance(player)}</strong></span>
         <span><small>{text("턴 진행도", "Turn Progress")}</small><strong>{Math.round(player.actionProgress * 100)}%</strong></span>
-        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{formatCombatPercent(player.criticalChance)}</strong></span>
-        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{formatCombatPercent(player.criticalDamageBonus)} ({text("총", "Total")} {formatCombatPercent(1 + player.criticalDamageBonus)})</strong></span>
-        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{formatCombatPercent(player.lifeSteal)}</strong></span>
-        <span><small>{text("방어 관통", "Armor Penetration")}</small><strong>{formatCombatPercent(player.armorPenetration)}</strong></span>
-        <span><small>{text("재사용 대기시간 감소", "Cooldown Reduction")}</small><strong>{formatCombatPercent(player.cooldownReduction)}</strong></span>
-        <span><small>{text("상태이상 저항", "Status Resistance")}</small><strong>{formatCombatPercent(player.statusResistance)}</strong></span>
+        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{formatCombatPercent(combatStats.criticalChance)}</strong></span>
+        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{formatCombatPercent(combatStats.criticalDamageBonus)} ({text("총", "Total")} {formatCombatPercent(1 + combatStats.criticalDamageBonus)})</strong></span>
+        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{formatCombatPercent(combatStats.lifeSteal)}</strong></span>
+        <span><small>{text("방어 관통", "Armor Penetration")}</small><strong>{formatCombatPercent(combatStats.armorPenetration)}</strong></span>
+        <span><small>{text("재사용 대기시간 감소", "Cooldown Reduction")}</small><strong>{formatCombatPercent(combatStats.cooldownReduction)}</strong></span>
+        <span><small>{text("상태이상 저항", "Status Resistance")}</small><strong>{formatCombatPercent(combatStats.statusResistance)}</strong></span>
       </div>
       <div className="character-trait-list">
         <small>{text("고유 특성", "Traits")}</small>
@@ -2837,6 +2839,7 @@ function CompanionInspector({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const definition = COMPANION_PRESENTATIONS[companion.classId];
+  const combatStats = effectiveCombatStats(companion);
   const profession = COMPANION_PROFESSIONS[companion.professionId];
   const displayName =
     language === "en" && companion.name === definition.defaultNameKo
@@ -2903,12 +2906,12 @@ function CompanionInspector({
         <span><small>{text("이동 속도", "Move Speed")}</small><strong>×{getCompanionMoveSpeed(companion).toFixed(2)}</strong></span>
         <span><small>{text("공격 속도", "Attack Speed")}</small><strong>×{getCompanionAttackSpeed(companion).toFixed(2)}</strong></span>
         <span><small>{text("시야", "Vision")}</small><strong>{getCompanionViewDistance(companion)}</strong></span>
-        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{formatCombatPercent(companion.criticalChance)}</strong></span>
-        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{formatCombatPercent(companion.criticalDamageBonus)} ({text("총", "Total")} {formatCombatPercent(1 + companion.criticalDamageBonus)})</strong></span>
-        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{formatCombatPercent(companion.lifeSteal)}</strong></span>
-        <span><small>{text("방어 관통", "Armor Penetration")}</small><strong>{formatCombatPercent(companion.armorPenetration)}</strong></span>
-        <span><small>{text("재사용 대기시간 감소", "Cooldown Reduction")}</small><strong>{formatCombatPercent(companion.cooldownReduction)}</strong></span>
-        <span><small>{text("상태이상 저항", "Status Resistance")}</small><strong>{formatCombatPercent(companion.statusResistance)}</strong></span>
+        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{formatCombatPercent(combatStats.criticalChance)}</strong></span>
+        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{formatCombatPercent(combatStats.criticalDamageBonus)} ({text("총", "Total")} {formatCombatPercent(1 + combatStats.criticalDamageBonus)})</strong></span>
+        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{formatCombatPercent(combatStats.lifeSteal)}</strong></span>
+        <span><small>{text("방어 관통", "Armor Penetration")}</small><strong>{formatCombatPercent(combatStats.armorPenetration)}</strong></span>
+        <span><small>{text("재사용 대기시간 감소", "Cooldown Reduction")}</small><strong>{formatCombatPercent(combatStats.cooldownReduction)}</strong></span>
+        <span><small>{text("상태이상 저항", "Status Resistance")}</small><strong>{formatCombatPercent(combatStats.statusResistance)}</strong></span>
       </div>
       <div className="character-trait-list">
         <small>{text("고유 특성", "Traits")}</small>

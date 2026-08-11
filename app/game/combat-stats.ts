@@ -1,4 +1,8 @@
-import type { CombatStats } from "./types";
+import {
+  equipmentCombatStatProfile,
+  formatRatePercent,
+} from "./equipment";
+import type { CombatStats, InventoryInstance } from "./types";
 
 export const DEFAULT_CRITICAL_CHANCE = 0.01;
 export const DEFAULT_CRITICAL_DAMAGE_BONUS = 0.5;
@@ -9,6 +13,8 @@ export const DEFAULT_STATUS_RESISTANCE = 0;
 
 const finiteOr = (value: number | undefined, fallback: number) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
+const addRate = (base: number, bonus: number) =>
+  Math.round((base + bonus) * 1_000_000) / 1_000_000;
 
 export const normalizeCombatStats = (
   stats: Partial<CombatStats> | null | undefined,
@@ -36,23 +42,80 @@ export const normalizeCombatStats = (
   ),
 });
 
+const equippedCombatStatBonus = (
+  actor: Partial<CombatStats> | null | undefined,
+) => {
+  const equipmentInstances = (
+    actor as Partial<{
+      equipmentInstances: Record<string, InventoryInstance | null | undefined>;
+    }> | null | undefined
+  )?.equipmentInstances;
+  return Object.values(equipmentInstances ?? {}).reduce(
+    (total, instance) => {
+      const bonus = equipmentCombatStatProfile(instance);
+      total.criticalChance += bonus.criticalChance;
+      total.criticalDamageBonus += bonus.criticalDamageBonus;
+      total.lifeSteal += bonus.lifeSteal;
+      total.armorPenetration += bonus.armorPenetration;
+      total.cooldownReduction += bonus.cooldownReduction;
+      total.statusResistance += bonus.statusResistance;
+      return total;
+    },
+    {
+      criticalChance: 0,
+      criticalDamageBonus: 0,
+      lifeSteal: 0,
+      armorPenetration: 0,
+      cooldownReduction: 0,
+      statusResistance: 0,
+    } satisfies CombatStats,
+  );
+};
+
+export const effectiveCombatStats = (
+  actor: Partial<CombatStats> | null | undefined,
+): CombatStats => {
+  const base = normalizeCombatStats(actor);
+  const equipment = equippedCombatStatBonus(actor);
+  return normalizeCombatStats({
+    criticalChance: addRate(base.criticalChance, equipment.criticalChance),
+    criticalDamageBonus: addRate(
+      base.criticalDamageBonus,
+      equipment.criticalDamageBonus,
+    ),
+    lifeSteal: addRate(base.lifeSteal, equipment.lifeSteal),
+    armorPenetration: addRate(
+      base.armorPenetration,
+      equipment.armorPenetration,
+    ),
+    cooldownReduction: addRate(
+      base.cooldownReduction,
+      equipment.cooldownReduction,
+    ),
+    statusResistance: addRate(
+      base.statusResistance,
+      equipment.statusResistance,
+    ),
+  });
+};
+
 export const getCriticalChance = (actor: Partial<CombatStats>) =>
-  normalizeCombatStats(actor).criticalChance;
+  effectiveCombatStats(actor).criticalChance;
 
 export const getCriticalDamageBonus = (actor: Partial<CombatStats>) =>
-  normalizeCombatStats(actor).criticalDamageBonus;
+  effectiveCombatStats(actor).criticalDamageBonus;
 
 export const getLifeSteal = (actor: Partial<CombatStats>) =>
-  normalizeCombatStats(actor).lifeSteal;
+  effectiveCombatStats(actor).lifeSteal;
 
 export const getArmorPenetration = (actor: Partial<CombatStats>) =>
-  normalizeCombatStats(actor).armorPenetration;
+  effectiveCombatStats(actor).armorPenetration;
 
 export const getCooldownReduction = (actor: Partial<CombatStats>) =>
-  normalizeCombatStats(actor).cooldownReduction;
+  effectiveCombatStats(actor).cooldownReduction;
 
 export const getStatusResistance = (actor: Partial<CombatStats>) =>
-  normalizeCombatStats(actor).statusResistance;
+  effectiveCombatStats(actor).statusResistance;
 
 export const effectiveDefense = (
   targetDefense: number,
@@ -68,7 +131,7 @@ export const remainingCooldownTurns = (remainingCooldown: number) =>
   Math.max(0, Math.ceil(finiteOr(remainingCooldown, 0)));
 
 export const formatCombatPercent = (value: number) =>
-  `${Math.round(Math.max(0, finiteOr(value, 0)) * 100)}%`;
+  formatRatePercent(finiteOr(value, 0));
 
 export const resolveCriticalDamage = (
   normalDamage: number,
@@ -76,7 +139,7 @@ export const resolveCriticalDamage = (
   roll: number,
 ) => {
   const damage = Math.max(0, Math.round(normalDamage));
-  const stats = normalizeCombatStats(attacker);
+  const stats = effectiveCombatStats(attacker);
   const critical = Math.min(1, Math.max(0, roll)) < stats.criticalChance;
   return {
     damage: critical

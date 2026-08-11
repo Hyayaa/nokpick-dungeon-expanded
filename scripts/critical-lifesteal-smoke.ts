@@ -14,12 +14,27 @@ import {
   DEFAULT_LIFE_STEAL,
   DEFAULT_STATUS_RESISTANCE,
   applyLifeSteal,
+  effectiveCombatStats,
   effectiveCooldown,
   effectiveDefense,
+  formatCombatPercent,
   normalizeCombatStats,
   remainingCooldownTurns,
   resolveCriticalDamage,
 } from "../app/game/combat-stats";
+import {
+  availableEquipmentTraits,
+  combatStatEnchantmentBonus,
+  createEquipmentInstance,
+  enchantEquipmentInstance,
+  enchantmentGradeChances,
+  enchantmentGradePower,
+  equipmentStatProfile,
+  equipmentTraitSummary,
+  normalizeEquipmentInstance,
+} from "../app/game/equipment";
+import { ITEM_DEFS } from "../app/game/data";
+import { ITEM_GRADES } from "../app/game/item-grade";
 import { tryApplyStatus } from "../app/game/status-effects";
 import { createDeveloperTestMap } from "../app/game/developer-test-map";
 import {
@@ -53,6 +68,8 @@ import type {
   Enemy,
   EnemyKind,
   GameState,
+  InventoryInstance,
+  ItemGrade,
   Point,
 } from "../app/game/types";
 
@@ -131,6 +148,228 @@ assert.equal(defaultGame.player.lifeSteal, 0);
 assert.equal(defaultGame.player.armorPenetration, 0);
 assert.equal(defaultGame.companions[0].cooldownReduction, 0);
 assert.equal(defaultGame.enemies[0].statusResistance, 0);
+
+const equipmentInstance = (
+  id: string,
+  defId: string,
+  grade: ItemGrade,
+  traits: InventoryInstance["traits"],
+): InventoryInstance => ({
+  id,
+  defId,
+  grade,
+  upgradeLevel: 0,
+  statRoll: { attack: 0, defense: 0, magic: 0, speed: 0 },
+  traits,
+});
+
+const lethalValues: Record<ItemGrade, number> = {
+  F: 0.02,
+  E: 0.04,
+  D: 0.06,
+  C: 0.09,
+  B: 0.12,
+  A: 0.18,
+  S: 0.25,
+};
+for (const grade of ITEM_GRADES) {
+  assert.equal(combatStatEnchantmentBonus("lethal", grade), lethalValues[grade]);
+}
+assert.equal(combatStatEnchantmentBonus("vampiric", "F"), 0);
+assert.equal(combatStatEnchantmentBonus("vampiric", "E"), 0);
+assert.equal(combatStatEnchantmentBonus("vampiric", "D"), 0);
+assert.equal(combatStatEnchantmentBonus("vampiric", "C"), 0);
+assert.equal(combatStatEnchantmentBonus("vampiric", "B"), 0.08);
+assert.equal(combatStatEnchantmentBonus("vampiric", "A"), 0.16);
+assert.equal(combatStatEnchantmentBonus("vampiric", "S"), 0.32);
+assert.equal(combatStatEnchantmentBonus("quickened", "F"), 0.005);
+assert.equal(formatCombatPercent(0.005), "0.5%");
+assert.equal(formatCombatPercent(0.125), "12.5%");
+
+const weaponDefinition = ITEM_DEFS.shortsword;
+assert.equal(availableEquipmentTraits(weaponDefinition, "C").includes("vampiric"), false);
+assert.equal(availableEquipmentTraits(weaponDefinition, "B").includes("vampiric"), true);
+const lowPreferredVampiric = createEquipmentInstance(
+  weaponDefinition,
+  "low-preferred-vampiric",
+  () => 0,
+  { grade: "C", allowCurse: false, preferredFirstTrait: "vampiric" },
+);
+assert.notEqual(lowPreferredVampiric.traits?.[0]?.id, "vampiric");
+assert.equal(lowPreferredVampiric.traits?.[0]?.grade, "C");
+const validPreferredVampiric = createEquipmentInstance(
+  weaponDefinition,
+  "valid-preferred-vampiric",
+  () => 0,
+  { grade: "B", allowCurse: false, preferredFirstTrait: "vampiric" },
+);
+assert.deepEqual(validPreferredVampiric.traits?.[0], { id: "vampiric", grade: "B" });
+
+const invalidLoadedVampiric = normalizeEquipmentInstance(
+  equipmentInstance(
+    "invalid-loaded-vampiric",
+    weaponDefinition.id,
+    "C",
+    [{ id: "vampiric", grade: "C" }],
+  ),
+  weaponDefinition,
+);
+assert.equal(
+  invalidLoadedVampiric.traits?.some((trait) => trait.id === "vampiric"),
+  false,
+);
+
+const rollInsideGrade = (itemGrade: ItemGrade, target: ItemGrade) => {
+  const chances = enchantmentGradeChances(itemGrade);
+  const targetIndex = ITEM_GRADES.indexOf(target);
+  return ITEM_GRADES.slice(0, targetIndex).reduce(
+    (total, grade) => total + chances[grade],
+    0,
+  ) + chances[target] / 2;
+};
+const cFollowup = equipmentInstance(
+  "c-followup",
+  weaponDefinition.id,
+  "C",
+  [{ id: "keen", grade: "C" }],
+);
+let cFollowupRolls = 0;
+const cFollowupValues = [rollInsideGrade("C", "C"), 0];
+enchantEquipmentInstance(
+  cFollowup,
+  weaponDefinition,
+  () => cFollowupValues[Math.min(cFollowupRolls++, cFollowupValues.length - 1)],
+  "vampiric",
+);
+assert.equal(cFollowup.traits?.[1]?.grade, "C");
+assert.notEqual(cFollowup.traits?.[1]?.id, "vampiric");
+assert.equal(cFollowupRolls, 2);
+const bFollowup = equipmentInstance(
+  "b-followup",
+  weaponDefinition.id,
+  "C",
+  [{ id: "keen", grade: "C" }],
+);
+let bFollowupRolls = 0;
+enchantEquipmentInstance(
+  bFollowup,
+  weaponDefinition,
+  () => {
+    bFollowupRolls += 1;
+    return rollInsideGrade("C", "B");
+  },
+  "vampiric",
+);
+assert.deepEqual(bFollowup.traits?.[1], { id: "vampiric", grade: "B" });
+assert.equal(bFollowupRolls, 1, "valid preferred vampiric must not reroll its grade");
+assert.equal(enchantmentGradeChances("F").S, 0.002);
+assert.equal(enchantmentGradeChances("S").S, 0.1);
+assert.equal(enchantmentGradePower("F"), 1);
+assert.equal(enchantmentGradePower("S"), 64);
+
+const wandDefinition = Object.values(ITEM_DEFS).find(
+  (definition) => definition.category === "wand",
+);
+if (!wandDefinition) throw new Error("Expected a wand definition");
+const chargedWand = createEquipmentInstance(
+  wandDefinition,
+  "charged-wand-regression",
+  () => 0,
+  { grade: "D", allowCurse: false, preferredFirstTrait: "charged" },
+);
+assert.equal(chargedWand.maxCharges, 3 + enchantmentGradePower("D"));
+assert.equal(
+  equipmentTraitSummary(chargedWand)[0].description,
+  `지팡이 최대 충전 +${enchantmentGradePower("D")}`,
+);
+const lethalSummary = equipmentTraitSummary(
+  equipmentInstance("c-lethal-summary", weaponDefinition.id, "C", [
+    { id: "lethal", grade: "C" },
+  ]),
+)[0];
+assert.equal(lethalSummary.description, "치명타 확률 +9%");
+const quickenedSummary = equipmentTraitSummary(
+  equipmentInstance("f-quickened-summary", weaponDefinition.id, "F", [
+    { id: "quickened", grade: "F" },
+  ]),
+)[0];
+assert.equal(quickenedSummary.description, "재사용 대기시간 감소 +0.5%");
+assert.equal(
+  equipmentStatProfile(weaponDefinition, lowPreferredVampiric).criticalChance,
+  0,
+);
+
+const equipmentCombatGame = createNewGame(0xc8170e01);
+equipmentCombatGame.player.equipmentInstances = {
+  weapon: equipmentInstance("c-lethal", weaponDefinition.id, "C", [
+    { id: "lethal", grade: "C" },
+    { id: "devastating", grade: "A" },
+    { id: "piercing", grade: "A" },
+    { id: "quickened", grade: "F" },
+  ]),
+  armor: equipmentInstance("d-lethal", weaponDefinition.id, "D", [
+    { id: "lethal", grade: "D" },
+    { id: "vampiric", grade: "B" },
+    { id: "resistant", grade: "S" },
+  ]),
+  ring: equipmentInstance("a-vampiric", weaponDefinition.id, "A", [
+    { id: "vampiric", grade: "A" },
+    { id: "resistant", grade: "S" },
+  ]),
+  ring2: null,
+  ring3: null,
+  ring4: null,
+};
+const baseCriticalChance = equipmentCombatGame.player.criticalChance;
+const equipmentTotals = effectiveCombatStats(equipmentCombatGame.player);
+assert.equal(equipmentTotals.criticalChance, 0.16);
+assert.equal(equipmentTotals.criticalDamageBonus, 0.82);
+assert.equal(equipmentTotals.lifeSteal, 0.24);
+assert.equal(equipmentTotals.armorPenetration, 0.32);
+assert.equal(equipmentTotals.cooldownReduction, 0.005);
+assert.equal(equipmentTotals.statusResistance, 1);
+assert.equal(equipmentCombatGame.player.criticalChance, baseCriticalChance);
+assert.deepEqual(
+  resolveCriticalDamage(10, equipmentCombatGame.player, 0.05),
+  { damage: 18, critical: true },
+);
+assert.ok(
+  Math.abs(effectiveDefense(10, equipmentCombatGame.player) - 6.8) < 1e-9,
+);
+assert.ok(
+  Math.abs(effectiveCooldown(10, equipmentCombatGame.player) - 9.95) < 1e-9,
+);
+equipmentCombatGame.player.hp = 1;
+equipmentCombatGame.player.maxHp = 100;
+assert.equal(applyLifeSteal(equipmentCombatGame.player, 100), 24);
+const equipmentResistanceRng = equipmentCombatGame.rng;
+assert.deepEqual(
+  tryApplyStatus(
+    equipmentCombatGame,
+    equipmentCombatGame.player,
+    "poisoned",
+    3,
+  ),
+  { applied: false, resisted: true },
+);
+assert.equal(equipmentCombatGame.rng, equipmentResistanceRng);
+equipmentCombatGame.player.equipmentInstances.weapon = null;
+equipmentCombatGame.player.equipmentInstances.armor = null;
+equipmentCombatGame.player.equipmentInstances.ring = null;
+assert.deepEqual(
+  effectiveCombatStats(equipmentCombatGame.player),
+  normalizeCombatStats(equipmentCombatGame.player),
+  "unequipping must immediately restore the unchanged base combat stats",
+);
+
+const companionEquipmentStats = createCompanion("mage", { x: 0, y: 0 });
+companionEquipmentStats.equipmentInstances.weapon = equipmentInstance(
+  "companion-c-lethal",
+  weaponDefinition.id,
+  "C",
+  [{ id: "lethal", grade: "C" }],
+);
+assert.equal(effectiveCombatStats(companionEquipmentStats).criticalChance, 0.1);
 
 assert.equal(effectiveDefense(10, { armorPenetration: 0 }), 10);
 assert.equal(effectiveDefense(10, { armorPenetration: 0.5 }), 5);
