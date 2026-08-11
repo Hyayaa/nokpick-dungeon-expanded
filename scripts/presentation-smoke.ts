@@ -191,6 +191,12 @@ const dungeonGameSource = readFileSync(
   "utf8",
 );
 const dungeonCssSource = readFileSync("app/globals.css", "utf8");
+const companionRosterSource = dungeonGameSource.slice(
+  dungeonGameSource.indexOf("function CampaignCompanionEquipmentRoster"),
+  dungeonGameSource.indexOf("function CharacterResourceBars"),
+);
+const companionOwnerOpeningTag =
+  companionRosterSource.match(/<article[\s\S]*?>/)?.[0] ?? "";
 assert.match(
   dungeonGameSource,
   /function HeldItemCursor[\s\S]*createPortal\([\s\S]*document\.body/,
@@ -215,6 +221,21 @@ assert.match(
   dungeonCssSource,
   /\.held-item-cursor\s*\{[\s\S]*position:\s*fixed;[\s\S]*transform:\s*translate\(-50%, -50%\)/,
   "the portal cursor must stay fixed and centered at 0.8x, 1x, and 1.2x UI scale",
+);
+assert.match(
+  dungeonGameSource,
+  /const ITEM_DRAG_MOVE_THRESHOLD = 5;[\s\S]*const TOUCH_ITEM_DRAG_LONG_PRESS_MS = 200;/,
+  "mouse movement must activate item dragging at five pixels while touch keeps a short long press",
+);
+assert.match(
+  dungeonGameSource,
+  /const activatePendingDrag[\s\S]*clientX: pending\.clientX,[\s\S]*clientY: pending\.clientY,[\s\S]*setPointerCapture/,
+  "timer and movement activation must share the latest pointer coordinates",
+);
+assert.match(
+  dungeonGameSource,
+  /onPointerMove:[\s\S]*pending\.clientX = event\.clientX;[\s\S]*pending\.pointerType !== "touch"[\s\S]*Math\.hypot\([\s\S]*ITEM_DRAG_MOVE_THRESHOLD[\s\S]*activatePendingDrag\(pending\)/,
+  "mouse and pen movement beyond the threshold must activate dragging immediately",
 );
 assert.equal(
   (dungeonGameSource.match(/new GameAudioRuntime\(\)/g) ?? []).length,
@@ -250,8 +271,33 @@ assert.match(
 );
 assert.match(
   dungeonGameSource,
-  /application\/x-nokpick-companion[\s\S]*onDoubleClick[\s\S]*onTrainingSelect/,
-  "companions must support drag and double-click Training Ground selection",
+  /const setCompanionDragData[\s\S]*setData\(COMPANION_DRAG_TYPE[\s\S]*querySelector<HTMLElement>\([\s\S]*\.pixel-sprite-frame[\s\S]*setDragImage\(dragImage, bounds\.width \/ 2, bounds\.height \/ 2\)/,
+  "Training and Preparation companion drags must share a centered sprite-only drag image",
+);
+assert.doesNotMatch(
+  companionOwnerOpeningTag,
+  /draggable=/,
+  "the companion equipment card must not own companion dragging",
+);
+assert.match(
+  companionRosterSource,
+  /className="prep-companion-portrait-button"[\s\S]*draggable=\{[\s\S]*placement === "party"[\s\S]*placement === "reserve"[\s\S]*placement === "training"[\s\S]*setCompanionDragData/,
+  "only the companion portrait must be draggable in Training and Preparation",
+);
+assert.match(
+  companionRosterSource,
+  /onDoubleClick[\s\S]*onTrainingSelect/,
+  "double-click Training Ground selection must remain available",
+);
+assert.match(
+  dungeonGameSource,
+  /function PreparationScreen[\s\S]*handleCompanionDrop[\s\S]*selectedCompanionIds\.length >= 3[\s\S]*onCompanionToggle\(companionId\)[\s\S]*handleCompanionDrop\(event, "party"\)[\s\S]*handleCompanionDrop\(event, "reserve"\)/,
+  "Preparation panels must reuse selection rules for reserve-to-party and party-to-reserve drops",
+);
+assert.match(
+  dungeonCssSource,
+  /\.preparation-party-panel\.is-companion-drop-target,[\s\S]*\.preparation-reserve-panel\.is-companion-drop-target[\s\S]*border-color:\s*#79bb91/,
+  "valid companion drop panels must provide a compact shared highlight",
 );
 assert.match(
   dungeonCssSource,

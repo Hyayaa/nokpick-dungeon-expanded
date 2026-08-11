@@ -6335,11 +6335,11 @@ kbd {
   overflow-y: auto;
 }
 
-.preparation-owner-card.is-training {
+.prep-companion-portrait-button[draggable="true"] {
   cursor: grab;
 }
 
-.preparation-owner-card.is-training:active {
+.prep-companion-portrait-button[draggable="true"]:active {
   cursor: grabbing;
 }
 
@@ -7385,6 +7385,22 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
 .preparation-reserve-panel {
   grid-area: reserve;
   margin-top: 0;
+}
+
+.preparation-party-panel.is-companion-drop-target,
+.preparation-reserve-panel.is-companion-drop-target {
+  border-color: #79bb91;
+  background:
+    linear-gradient(135deg, rgba(121, 187, 145, 0.11), transparent 44%),
+    #101713;
+  box-shadow: inset 0 0 0 1px rgba(121, 187, 145, 0.18);
+}
+
+.preparation-party-panel.is-companion-drop-disabled {
+  border-color: #7d554f;
+  background:
+    linear-gradient(135deg, rgba(155, 79, 69, 0.09), transparent 44%),
+    #15100f;
 }
 
 .preparation-equipment-panel > header,

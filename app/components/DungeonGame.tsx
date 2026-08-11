@@ -488,6 +488,23 @@ type HeldSlotItem = {
   clientY: number;
 };
 
+type PendingItemSlotDrag = {
+  pointerId: number;
+  pointerType: string;
+  source: ItemSlotAddress;
+  item: DragSlotItem;
+  startClientX: number;
+  startClientY: number;
+  clientX: number;
+  clientY: number;
+  timer: number;
+  container: HTMLElement;
+};
+
+const ITEM_DRAG_MOVE_THRESHOLD = 5;
+const ITEM_DRAG_LONG_PRESS_MS = 280;
+const TOUCH_ITEM_DRAG_LONG_PRESS_MS = 200;
+
 const upgradeTargetVisualKey = (target: UpgradeTarget) => {
   if (target.kind === "inventory") return `inventory:${target.itemRef}`;
   if (target.kind === "equipment") {
@@ -1023,15 +1040,7 @@ function useItemSlotDrag(
 ) {
   const [held, setHeld] = useState<HeldSlotItem | null>(null);
   const heldRef = useRef<HeldSlotItem | null>(null);
-  const pendingRef = useRef<{
-    pointerId: number;
-    source: ItemSlotAddress;
-    item: DragSlotItem;
-    clientX: number;
-    clientY: number;
-    timer: number;
-    container: HTMLElement;
-  } | null>(null);
+  const pendingRef = useRef<PendingItemSlotDrag | null>(null);
   const suppressClickRef = useRef(false);
 
   const clearDrag = useCallback(() => {
@@ -1065,6 +1074,27 @@ function useItemSlotDrag(
     [],
   );
 
+  const activatePendingDrag = useCallback((pending: PendingItemSlotDrag) => {
+    if (pendingRef.current !== pending) return;
+    window.clearTimeout(pending.timer);
+    pendingRef.current = null;
+    const active: HeldSlotItem = {
+      pointerId: pending.pointerId,
+      source: pending.source,
+      item: pending.item,
+      clientX: pending.clientX,
+      clientY: pending.clientY,
+    };
+    heldRef.current = active;
+    setHeld(active);
+    try {
+      pending.container.setPointerCapture(pending.pointerId);
+    } catch {
+      // Pointer capture is best-effort; document.elementFromPoint still
+      // resolves the eventual drop target when capture is unavailable.
+    }
+  }, []);
+
   const containerProps = {
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
       if (event.button !== 0 || pendingRef.current || heldRef.current) return;
@@ -1078,37 +1108,37 @@ function useItemSlotDrag(
       const container = event.currentTarget;
       const pending = {
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         source,
         item,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
         clientX: event.clientX,
         clientY: event.clientY,
         timer: 0,
         container,
       };
       pending.timer = window.setTimeout(() => {
-        if (pendingRef.current !== pending) return;
-        const active: HeldSlotItem = {
-          pointerId: pending.pointerId,
-          source: pending.source,
-          item: pending.item,
-          clientX: pending.clientX,
-          clientY: pending.clientY,
-        };
-        heldRef.current = active;
-        setHeld(active);
-        try {
-          pending.container.setPointerCapture(pending.pointerId);
-        } catch {
-          // Pointer capture is best-effort; document.elementFromPoint still
-          // resolves the eventual drop target when capture is unavailable.
-        }
-      }, 280);
+        activatePendingDrag(pending);
+      }, event.pointerType === "touch"
+        ? TOUCH_ITEM_DRAG_LONG_PRESS_MS
+        : ITEM_DRAG_LONG_PRESS_MS);
       pendingRef.current = pending;
     },
     onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
-      if (pendingRef.current?.pointerId === event.pointerId) {
-        pendingRef.current.clientX = event.clientX;
-        pendingRef.current.clientY = event.clientY;
+      const pending = pendingRef.current;
+      if (pending?.pointerId === event.pointerId) {
+        pending.clientX = event.clientX;
+        pending.clientY = event.clientY;
+        if (
+          pending.pointerType !== "touch" &&
+          Math.hypot(
+            event.clientX - pending.startClientX,
+            event.clientY - pending.startClientY,
+          ) >= ITEM_DRAG_MOVE_THRESHOLD
+        ) {
+          activatePendingDrag(pending);
+        }
       }
       if (heldRef.current?.pointerId !== event.pointerId) return;
       const next = {
@@ -1464,6 +1494,29 @@ type ResolvedCompanionEquipment = ReturnType<
   typeof resolveCompanionLoadoutItem
 >;
 
+const COMPANION_DRAG_TYPE = "application/x-nokpick-companion";
+
+const setCompanionDragData = (
+  event: ReactDragEvent<HTMLElement>,
+  companionId: string,
+  effectAllowed: "copy" | "move",
+) => {
+  event.dataTransfer.setData(COMPANION_DRAG_TYPE, companionId);
+  event.dataTransfer.effectAllowed = effectAllowed;
+  const dragImage = event.currentTarget.querySelector<HTMLElement>(
+    ".pixel-sprite-frame",
+  );
+  if (!dragImage) return;
+  const bounds = dragImage.getBoundingClientRect();
+  event.dataTransfer.setDragImage(dragImage, bounds.width / 2, bounds.height / 2);
+};
+
+const readCompanionDragData = (event: ReactDragEvent<HTMLElement>) =>
+  event.dataTransfer.getData(COMPANION_DRAG_TYPE) || null;
+
+const hasCompanionDragData = (event: ReactDragEvent<HTMLElement>) =>
+  Array.from(event.dataTransfer.types).includes(COMPANION_DRAG_TYPE);
+
 function CampaignCompanionEquipmentRoster({
   companions,
   placement,
@@ -1561,15 +1614,6 @@ function CampaignCompanionEquipmentRoster({
                 placement === "training" ? "is-training" : "",
               ].filter(Boolean).join(" ")}
               key={`${placement}-${companion.id}`}
-              draggable={placement === "training"}
-              onDragStart={(event) => {
-                if (placement !== "training") return;
-                event.dataTransfer.setData(
-                  "application/x-nokpick-companion",
-                  companion.id,
-                );
-                event.dataTransfer.effectAllowed = "copy";
-              }}
               onDoubleClick={() => {
                 if (placement === "training") onTrainingSelect?.(companion.id);
               }}
@@ -1578,6 +1622,18 @@ function CampaignCompanionEquipmentRoster({
                 <button
                   type="button"
                   className="prep-companion-portrait-button"
+                  draggable={
+                    placement === "party" ||
+                    placement === "reserve" ||
+                    placement === "training"
+                  }
+                  onDragStart={(event) =>
+                    setCompanionDragData(
+                      event,
+                      companion.id,
+                      placement === "training" ? "copy" : "move",
+                    )
+                  }
                   onClick={(event) =>
                     setCompanionPreview({
                       companion,
@@ -6220,7 +6276,7 @@ function TrainingGroundModal({
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
-                const companionId = event.dataTransfer.getData("application/x-nokpick-companion");
+                const companionId = readCompanionDragData(event);
                 if (campaign.companions.some((candidate) => candidate.id === companionId)) {
                   selectCompanion(companionId);
                 }
@@ -6408,6 +6464,9 @@ function PreparationScreen({
 }) {
   const slotDrag = useActiveItemSlotDrag();
   const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
+  const [companionDropTarget, setCompanionDropTarget] = useState<
+    "party" | "party-disabled" | "reserve" | null
+  >(null);
   const occupiedBagSlots = selectedLoadoutSlotCount(loadout);
   const selectedRefs = new Set([
     ...Object.keys(loadout.stacks).filter((itemId) => loadout.stacks[itemId] > 0),
@@ -6509,6 +6568,59 @@ function PreparationScreen({
   const reserveCompanions = campaign.companions.filter(
     (companion) => !selectedCompanionIds.includes(companion.id),
   );
+  useEffect(() => {
+    if (!companionDropTarget) return;
+    const clearCompanionDropTarget = () => setCompanionDropTarget(null);
+    window.addEventListener("dragend", clearCompanionDropTarget);
+    return () => window.removeEventListener("dragend", clearCompanionDropTarget);
+  }, [companionDropTarget]);
+  const handleCompanionDragOver = (
+    event: ReactDragEvent<HTMLElement>,
+    target: "party" | "reserve",
+  ) => {
+    if (!hasCompanionDragData(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setCompanionDropTarget(
+      target === "party" && selectedCompanionIds.length >= 3
+        ? "party-disabled"
+        : target,
+    );
+  };
+  const handleCompanionDragLeave = (
+    event: ReactDragEvent<HTMLElement>,
+    target: "party" | "reserve",
+  ) => {
+    const relatedTarget = event.relatedTarget as HTMLElement | null;
+    if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
+    setCompanionDropTarget((current) =>
+      current === target ||
+      (target === "party" && current === "party-disabled")
+        ? null
+        : current,
+    );
+  };
+  const handleCompanionDrop = (
+    event: ReactDragEvent<HTMLElement>,
+    target: "party" | "reserve",
+  ) => {
+    event.preventDefault();
+    setCompanionDropTarget(null);
+    const companionId = readCompanionDragData(event);
+    if (
+      !companionId ||
+      !campaign.companions.some(({ id }) => id === companionId)
+    ) {
+      return;
+    }
+    const selected = selectedCompanionIds.includes(companionId);
+    if (target === "party") {
+      if (selected || selectedCompanionIds.length >= 3) return;
+    } else if (!selected) {
+      return;
+    }
+    onCompanionToggle(companionId);
+  };
   return (
     <main className="campaign-page preparation-page">
       <header className="preparation-header">
@@ -6553,7 +6665,19 @@ function PreparationScreen({
           </section>
         </div>
 
-        <section className="preparation-equipment-panel preparation-party-panel">
+        <section
+          className={[
+            "preparation-equipment-panel",
+            "preparation-party-panel",
+            companionDropTarget === "party" ? "is-companion-drop-target" : "",
+            companionDropTarget === "party-disabled"
+              ? "is-companion-drop-disabled"
+              : "",
+          ].filter(Boolean).join(" ")}
+          onDragOver={(event) => handleCompanionDragOver(event, "party")}
+          onDragLeave={(event) => handleCompanionDragLeave(event, "party")}
+          onDrop={(event) => handleCompanionDrop(event, "party")}
+        >
           <header>
             <div><small>03</small><h2>동행 원정대 장비</h2></div>
             <span>{selectedCompanions.length}/3명 · 첫 번째 인원이 조작 캐릭터</span>
@@ -6569,7 +6693,15 @@ function PreparationScreen({
           />
         </section>
 
-        <section className="preparation-reserve-panel">
+        <section
+          className={[
+            "preparation-reserve-panel",
+            companionDropTarget === "reserve" ? "is-companion-drop-target" : "",
+          ].filter(Boolean).join(" ")}
+          onDragOver={(event) => handleCompanionDragOver(event, "reserve")}
+          onDragLeave={(event) => handleCompanionDragLeave(event, "reserve")}
+          onDrop={(event) => handleCompanionDrop(event, "reserve")}
+        >
           <header>
             <div><small>04</small><h2>동행하지 않는 동료</h2></div>
             <span>{reserveCompanions.length}명 대기</span>
