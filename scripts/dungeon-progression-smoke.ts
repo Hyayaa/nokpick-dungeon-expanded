@@ -30,10 +30,10 @@ const initial = generateDungeonOffers(seed, 0);
 const initialRecommended = initial.filter(
   (dungeon) => dungeon.offerKind === "recommended",
 );
-const initialBoss = initial[6];
+const initialBoss = initial[5];
 
-assert.equal(initial.length, 7);
-assert.equal(initialRecommended.length, 6);
+assert.equal(initial.length, 6);
+assert.equal(initialRecommended.length, 5);
 assert.equal(initialBoss.offerKind, "boss");
 assert.equal(initialBoss.difficulty, 2);
 assert.equal(initialBoss.difficultyGrade, "E");
@@ -95,8 +95,8 @@ assert.equal(Object.values(BOSS_DUNGEON_STAGES).filter(Boolean).length, 1);
 const afterGoo = bossDungeonClearsAfterOutcome(0, initialBoss, "completed");
 assert.equal(afterGoo, 1);
 const unlockedD = generateDungeonOffers(seed + 2, afterGoo);
-const recommendedD = unlockedD.slice(0, 6);
-const pendingD = unlockedD[6];
+const recommendedD = unlockedD.slice(0, 5);
+const pendingD = unlockedD[5];
 assert.ok(recommendedD.every((dungeon) => dungeon.difficulty <= 3));
 assert.ok(recommendedD.some((dungeon) => dungeon.difficulty === 1));
 assert.ok(recommendedD.some((dungeon) => dungeon.difficulty === 3));
@@ -118,11 +118,12 @@ for (const [clears, expected] of [
   assert.equal(maximumRecommendedDifficulty(clears), expected);
   assert.equal(bossDifficultyForClears(clears), expected);
   const offers = generateDungeonOffers(seed + clears, clears);
-  const recommended = offers.slice(0, 6);
+  const recommended = offers.slice(0, 5);
   assert.ok(recommended.every((dungeon) => dungeon.difficulty <= expected));
   assert.ok(recommended.some((dungeon) => dungeon.difficulty === 1));
   assert.ok(recommended.some((dungeon) => dungeon.difficulty === expected));
-  assert.equal(offers[6].difficulty, expected);
+  assert.equal(offers[5].difficulty, expected);
+  assert.equal(offers[5].offerKind, "boss");
 }
 
 assert.equal(normalizeBossDungeonClears(undefined), 0);
@@ -144,16 +145,32 @@ assert.equal(
 assert.equal(createBossDungeonOffer(seed, 100).difficulty, 7);
 assert.equal(createBossDungeonOffer(seed, 100).bossId, undefined);
 
-assert.equal(DUNGEON_DEFINITIONS.length, 7);
+assert.equal(DUNGEON_DEFINITIONS.length, 6);
 const initialHubHtml = renderToStaticMarkup(createElement(DungeonGame));
+const campaignHeaderActions = initialHubHtml.match(
+  /<nav class="campaign-header-actions"[\s\S]*?<\/nav>/,
+)?.[0];
+assert.ok(campaignHeaderActions, "the Hub header actions must render");
 assert.equal(
   (initialHubHtml.match(/class="dungeon-contract"/g) ?? []).length,
-  7,
+  6,
 );
 assert.equal(
   (initialHubHtml.match(/class="main-drops"/g) ?? []).length,
-  6,
+  5,
 );
+assert.match(
+  initialHubHtml,
+  /파밍용 추천 던전 5개와 보스 진행 던전 1개입니다\./,
+);
+assert.match(campaignHeaderActions, />도감</);
+assert.match(campaignHeaderActions, />설정</);
+assert.match(campaignHeaderActions, />탐사 안내</);
+assert.doesNotMatch(campaignHeaderActions, /상점|대장간|훈련장|창고/);
+assert.match(initialHubHtml, />전체 창고 열기</);
+assert.match(initialHubHtml, />상점 열기</);
+assert.match(initialHubHtml, />대장간 열기</);
+assert.match(initialHubHtml, />훈련장 열기</);
 assert.match(initialHubHtml, /보스 던전/);
 assert.match(initialHubHtml, /<dt>보스<\/dt><dd>구<\/dd>/);
 const uiSource = readFileSync("app/components/DungeonGame.tsx", "utf8");

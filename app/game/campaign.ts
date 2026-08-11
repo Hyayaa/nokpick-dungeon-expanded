@@ -1181,14 +1181,14 @@ export const generateRecommendedDungeonOffers = (
   const themes = shuffleWith(
     DUNGEON_THEMES.filter((theme) => theme.themeId !== activeBossThemeId),
     random,
-  ).slice(0, 6);
+  ).slice(0, 5);
   const maxDifficulty = maximumRecommendedDifficulty(bossDungeonClears);
   const unlockedDifficulties = Array.from(
     { length: maxDifficulty },
     (_, index) => (index + 1) as DungeonDifficulty,
   );
   const randomDifficulties = Array.from(
-    { length: 4 },
+    { length: 3 },
     () => unlockedDifficulties[Math.floor(random() * unlockedDifficulties.length)],
   );
   const difficulties = shuffleWith<DungeonDifficulty>(
@@ -1265,7 +1265,7 @@ export const createBossDungeonOffer = (
   }
   return createDungeonOffer({
     seed: (seed ^ 0xb055da7a) >>> 0,
-    index: 6,
+    index: 5,
     theme,
     difficulty,
     floorCount: stage.floorCount,

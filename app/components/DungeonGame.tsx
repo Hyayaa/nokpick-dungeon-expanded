@@ -5240,10 +5240,6 @@ function CampaignHeader({
   expeditions,
   gold,
   materials,
-  onOpenWarehouse,
-  onOpenShop,
-  onOpenBlacksmith,
-  onOpenTraining,
   onOpenCompendium,
   onOpenSettings,
   onOpenHelp,
@@ -5252,10 +5248,6 @@ function CampaignHeader({
   expeditions: number;
   gold: number;
   materials: CampaignMaterials;
-  onOpenWarehouse: () => void;
-  onOpenShop: () => void;
-  onOpenBlacksmith: () => void;
-  onOpenTraining: () => void;
   onOpenCompendium: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
@@ -5288,27 +5280,6 @@ function CampaignHeader({
         <button type="button" onClick={onOpenCompendium}>도감</button>
         <button type="button" onClick={onOpenSettings}>설정</button>
         <button type="button" onClick={onOpenHelp}>탐사 안내</button>
-        <button type="button" className="facility-button" onClick={onOpenShop}>
-          <span aria-hidden="true">◇</span>
-          상점
-        </button>
-        <button type="button" className="facility-button" onClick={onOpenBlacksmith}>
-          <span aria-hidden="true">♨</span>
-          대장간
-        </button>
-        <button type="button" className="facility-button" onClick={onOpenTraining}>
-          <span aria-hidden="true">✦</span>
-          훈련장
-        </button>
-        <button
-          type="button"
-          className="warehouse-button"
-          onClick={onOpenWarehouse}
-        >
-          <span aria-hidden="true">▣</span>
-          창고
-          <b>{warehouseCount}</b>
-        </button>
       </nav>
     </header>
   );
@@ -5477,10 +5448,6 @@ function HubScreen({
         expeditions={campaign.completedExpeditions}
         gold={campaign.gold}
         materials={campaign.materials}
-        onOpenWarehouse={onOpenWarehouse}
-        onOpenShop={onOpenShop}
-        onOpenBlacksmith={onOpenBlacksmith}
-        onOpenTraining={onOpenTraining}
         onOpenCompendium={onOpenCompendium}
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
@@ -5490,7 +5457,7 @@ function HubScreen({
           <p className="eyebrow">다음 원정</p>
           <h2>어디로 향하시겠습니까?</h2>
           <p>
-            파밍용 추천 던전 6개와 보스 진행 던전 1개입니다. 원정을 마치면 새로운 목록으로 교체됩니다.
+            파밍용 추천 던전 5개와 보스 진행 던전 1개입니다. 원정을 마치면 새로운 목록으로 교체됩니다.
           </p>
         </div>
         <div className="hub-party-summary">
