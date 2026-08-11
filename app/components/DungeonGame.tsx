@@ -930,13 +930,7 @@ function ItemSlotContents({
         <span className="item-upgrade-badge">+{upgradeLevel}</span>
       )}
       {instance?.cursed && (
-        <span
-          className="item-curse-badge"
-          aria-label="저주받은 장비"
-          title="저주받은 장비"
-        >
-          저
-        </span>
+        <span className="item-curse-marker" aria-hidden="true" />
       )}
       {chargeBased ? (
         <b className="wand-charge-badge slot-value-badge">
@@ -1012,23 +1006,7 @@ function HeldItemCursor({ held }: { held: HeldSlotItem | null }) {
       style={{ left: held.clientX, top: held.clientY }}
       aria-hidden="true"
     >
-      <ActiveSlotContents
-        entry={{
-          kind: "item",
-          itemRef: held.item.itemRef,
-          itemId: held.item.itemId,
-        }}
-        size={40}
-        instance={{
-          id: held.item.itemRef,
-          defId: held.item.itemId,
-          grade: held.item.grade,
-          upgradeLevel: held.item.upgradeLevel,
-          charges: held.item.charges,
-          maxCharges: held.item.maxCharges,
-        }}
-        quantity={held.item.quantity}
-      />
+      <ItemIcon itemId={held.item.itemId} size={40} />
     </div>,
     document.body,
   );
@@ -5715,28 +5693,17 @@ function HubScreen({
           );
         })}
       </section>
-      <section className="warehouse-strip">
-        <div>
-          <p className="eyebrow">WAREHOUSE</p>
-          <h2>창고 물자</h2>
-          <span>던전에서 회수한 아이템은 원정 종료와 함께 이곳에 보관됩니다.</span>
-        </div>
-        <div className="warehouse-strip__items">
-          {Object.entries(campaign.warehouse.stacks)
-            .filter(([, quantity]) => quantity > 0)
-            .slice(0, 5)
-            .map(([itemId, quantity]) => (
-              <span key={itemId} title={ITEM_DEFS[itemId]?.name}>
-                <ItemGradeMarker itemId={itemId} />
-                <ItemIcon itemId={itemId} size={28} />
-                <b>×{quantity}</b>
-              </span>
-            ))}
-          {storedCount === 0 && <em>창고가 비어 있습니다.</em>}
-        </div>
-        <button type="button" onClick={onOpenWarehouse}>전체 창고 열기</button>
-      </section>
       <section className="hub-facilities" aria-label="원정대 거점 시설">
+        <article className="hub-facility-card is-warehouse">
+          <span className="hub-facility-symbol" aria-hidden="true">▣</span>
+          <div>
+            <p className="eyebrow">WAREHOUSE</p>
+            <h2>창고</h2>
+            <p>보관 중인 물품 {storedCount}개</p>
+            <small>원정에서 회수한 장비와 아이템을 관리합니다.</small>
+          </div>
+          <button type="button" onClick={onOpenWarehouse}>창고 열기</button>
+        </article>
         <article className="hub-facility-card is-shop">
           <span className="hub-facility-symbol" aria-hidden="true">◇</span>
           <div>
@@ -5747,16 +5714,6 @@ function HubScreen({
           </div>
           <button type="button" onClick={onOpenShop}>상점 열기</button>
         </article>
-        <article className="hub-facility-card is-blacksmith">
-          <span className="hub-facility-symbol" aria-hidden="true">♨</span>
-          <div>
-            <p className="eyebrow">BLACKSMITH</p>
-            <h2>불꽃 대장간</h2>
-            <p>장비의 기본 등급을 F에서 S까지 한 단계씩 올립니다.</p>
-            <small>강화·추가 인챈트 유지 · 첫 인챈트는 등급과 함께 상승 · F→E 1,600 G부터</small>
-          </div>
-          <button type="button" onClick={onOpenBlacksmith}>대장간 열기</button>
-        </article>
         <article className="hub-facility-card is-training">
           <span className="hub-facility-symbol" aria-hidden="true">✦</span>
           <div>
@@ -5766,6 +5723,16 @@ function HubScreen({
             <small>스킬 습득만 유료 · 장착·해제·교체는 무료</small>
           </div>
           <button type="button" onClick={onOpenTraining}>훈련장 열기</button>
+        </article>
+        <article className="hub-facility-card is-blacksmith">
+          <span className="hub-facility-symbol" aria-hidden="true">♨</span>
+          <div>
+            <p className="eyebrow">BLACKSMITH</p>
+            <h2>불꽃 대장간</h2>
+            <p>장비의 기본 등급을 F에서 S까지 한 단계씩 올립니다.</p>
+            <small>강화·추가 인챈트 유지 · 첫 인챈트는 등급과 함께 상승 · F→E 1,600 G부터</small>
+          </div>
+          <button type="button" onClick={onOpenBlacksmith}>대장간 열기</button>
         </article>
       </section>
       {itemPreview && (

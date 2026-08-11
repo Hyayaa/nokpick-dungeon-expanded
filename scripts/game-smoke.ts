@@ -1943,8 +1943,18 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
-  /item-curse-badge[\s\S]*저주받은 장비/,
-  "cursed equipment must be visibly marked in item slots",
+  /instance\?\.cursed[\s\S]*item-curse-marker/,
+  "cursed equipment must expose the shared slot background marker",
+);
+assert.doesNotMatch(
+  dungeonUiSource,
+  /item-curse-badge/,
+  "cursed equipment must not render the old text badge",
+);
+assert.match(
+  globalStyleSource,
+  /:has\(> \.item-curse-marker\)\s*\{[\s\S]*background:/,
+  "cursed equipment markers must tint item slot backgrounds",
 );
 assert.equal(
   existsSync("app/components/pixel-ui.tsx"),

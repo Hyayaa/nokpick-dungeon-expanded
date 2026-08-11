@@ -195,6 +195,18 @@ const companionRosterSource = dungeonGameSource.slice(
   dungeonGameSource.indexOf("function CampaignCompanionEquipmentRoster"),
   dungeonGameSource.indexOf("function CharacterResourceBars"),
 );
+const itemSlotContentsSource = dungeonGameSource.slice(
+  dungeonGameSource.indexOf("function ItemSlotContents"),
+  dungeonGameSource.indexOf("function ActiveSlotContents"),
+);
+const heldItemCursorSource = dungeonGameSource.slice(
+  dungeonGameSource.indexOf("function HeldItemCursor"),
+  dungeonGameSource.indexOf("function useItemSlotDrag"),
+);
+const hubScreenSource = dungeonGameSource.slice(
+  dungeonGameSource.indexOf("function HubScreen"),
+  dungeonGameSource.indexOf("function CommerceModal"),
+);
 const companionOwnerOpeningTag =
   companionRosterSource.match(/<article[\s\S]*?>/)?.[0] ?? "";
 assert.match(
@@ -221,6 +233,61 @@ assert.match(
   dungeonCssSource,
   /\.held-item-cursor\s*\{[\s\S]*position:\s*fixed;[\s\S]*transform:\s*translate\(-50%, -50%\)/,
   "the portal cursor must stay fixed and centered at 0.8x, 1x, and 1.2x UI scale",
+);
+assert.match(
+  heldItemCursorSource,
+  /<ItemIcon itemId=\{held\.item\.itemId\} size=\{40\} \/>/,
+  "item and equipment drags must render only the item sprite",
+);
+assert.doesNotMatch(
+  heldItemCursorSource,
+  /ActiveSlotContents|ItemSlotContents|ItemGradeMarker|item-curse-marker|slot-value-badge/,
+  "the held item cursor must not render slot, grade, upgrade, charge, quantity, or curse UI",
+);
+assert.match(
+  dungeonCssSource,
+  /\.held-item-cursor\s*\{[\s\S]*width:\s*40px;[\s\S]*height:\s*40px;[\s\S]*overflow:\s*visible;/,
+  "the held item overlay must match the sprite footprint without a slot-sized frame",
+);
+assert.match(
+  itemSlotContentsSource,
+  /instance\?\.cursed[\s\S]*className="item-curse-marker" aria-hidden="true"/,
+  "cursed item slots must expose one shared text-free marker",
+);
+assert.doesNotMatch(
+  itemSlotContentsSource,
+  /item-curse-badge|>\s*저\s*</,
+  "cursed item slots must not render the old visible curse badge",
+);
+assert.match(
+  dungeonCssSource,
+  /\.item-grade-marker,[\s\S]*\.item-curse-marker\s*\{\s*display:\s*none;[\s\S]*:has\(> \.item-curse-marker\)\s*\{[\s\S]*background:/,
+  "the common curse marker must tint slot backgrounds while remaining invisible",
+);
+assert.match(
+  dungeonCssSource,
+  /:has\(> \.item-grade-marker\[data-item-grade\]\)\s*\{\s*border-color:/,
+  "curse background styling must keep the existing item-grade border",
+);
+assert.equal(
+  (hubScreenSource.match(/className="hub-facility-card /g) ?? []).length,
+  4,
+  "the Hub must render exactly four equal facility cards",
+);
+assert.match(
+  hubScreenSource,
+  /hub-facility-card is-warehouse[\s\S]*hub-facility-card is-shop[\s\S]*hub-facility-card is-training[\s\S]*hub-facility-card is-blacksmith/,
+  "Hub facilities must appear as Warehouse, Shop, Training Ground, and Blacksmith",
+);
+assert.doesNotMatch(
+  hubScreenSource,
+  /warehouse-strip/,
+  "the Warehouse must no longer occupy a separate full-width strip",
+);
+assert.match(
+  dungeonCssSource,
+  /\.hub-facilities\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[\s\S]*grid-auto-rows:\s*1fr;/,
+  "all four Hub facility cards must share the same grid sizing",
 );
 assert.match(
   dungeonGameSource,

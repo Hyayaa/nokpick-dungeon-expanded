@@ -3490,26 +3490,6 @@ kbd {
   pointer-events: none;
 }
 
-.item-curse-badge {
-  position: absolute;
-  z-index: 6;
-  top: 2px;
-  right: 3px;
-  display: grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  border: 1px solid #9c5267;
-  background: #250d18;
-  color: #ff94b4;
-  font-family: var(--pixel);
-  font-size: calc(8px * var(--font-scale, 1));
-  line-height: 1;
-  text-shadow: 1px 1px 0 #000;
-  box-shadow: 0 0 7px rgba(213, 61, 109, 0.48);
-  pointer-events: none;
-}
-
 .persistent-inventory__grid .item-upgrade-badge {
   top: 3px;
   left: 3px;
@@ -5249,58 +5229,6 @@ kbd {
   cursor: pointer;
 }
 
-.warehouse-strip {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr auto;
-  align-items: center;
-  gap: 22px;
-  margin-top: 14px;
-  padding: 17px 19px;
-  border: 1px solid #303730;
-  background: #0d120f;
-}
-
-.warehouse-strip h2 {
-  margin: 1px 0 4px;
-  font-size: 16px;
-}
-
-.warehouse-strip > div:first-child > span {
-  color: #7e857f;
-  font-size: 10px;
-}
-
-.warehouse-strip__items {
-  display: flex;
-  gap: 6px;
-}
-
-.warehouse-strip__items > span {
-  position: relative;
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border: 1px solid #343a35;
-  background: #090d0b;
-}
-
-.warehouse-strip__items b {
-  position: absolute;
-  right: 2px;
-  bottom: 1px;
-  color: #f0deb0;
-  font-family: var(--pixel);
-  font-size: 10px;
-  text-shadow: 1px 1px #000;
-}
-
-.warehouse-strip__items em {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.warehouse-strip > button,
 .preparation-header > button {
   min-height: 36px;
   padding: 0 13px;
@@ -5314,6 +5242,7 @@ kbd {
 .hub-facilities {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
   gap: 12px;
   margin-top: 12px;
 }
@@ -5331,6 +5260,12 @@ kbd {
   background:
     linear-gradient(135deg, rgba(216, 182, 107, 0.08), transparent 45%),
     #0d120f;
+}
+
+.hub-facility-card.is-warehouse {
+  background:
+    linear-gradient(135deg, rgba(91, 151, 111, 0.12), transparent 48%),
+    #0c120f;
 }
 
 .hub-facility-card.is-blacksmith {
@@ -5381,6 +5316,12 @@ kbd {
   box-shadow: inset 0 0 0 3px #101522;
 }
 
+.hub-facility-card.is-warehouse .hub-facility-symbol {
+  border-color: #3f684d;
+  color: #88bd96;
+  box-shadow: inset 0 0 0 3px #0e1912;
+}
+
 .hub-facility-card h2 {
   margin: 2px 0 6px;
   font-size: 17px;
@@ -5420,6 +5361,12 @@ kbd {
   border-color: #46557a;
   background: #101522;
   color: #adc0ef;
+}
+
+.hub-facility-card.is-warehouse > button {
+  border-color: #3e654a;
+  background: #0e1912;
+  color: #9ecaaa;
 }
 
 .warehouse-modal {
@@ -7186,8 +7133,7 @@ button.fixed-item-slot.is-filled:focus-visible {
   z-index: 1;
 }
 
-.fixed-item-slot .slot-value-badge,
-.held-item-cursor .slot-value-badge {
+.fixed-item-slot .slot-value-badge {
   position: absolute;
   z-index: 5;
   right: 2px;
@@ -7207,16 +7153,14 @@ button.fixed-item-slot.is-filled:focus-visible {
   text-shadow: 1px 1px 0 #000;
 }
 
-.fixed-item-slot .wand-charge-badge,
-.held-item-cursor .wand-charge-badge {
+.fixed-item-slot .wand-charge-badge {
   min-width: 36px;
   border: 1px solid #405a70;
   background: rgba(8, 18, 25, 0.92);
   color: #b8ddff;
 }
 
-.fixed-item-slot .item-upgrade-badge,
-.held-item-cursor .item-upgrade-badge {
+.fixed-item-slot .item-upgrade-badge {
   z-index: 5;
   top: 3px;
   left: 3px;
@@ -7247,21 +7191,12 @@ button.fixed-item-slot.is-filled:focus-visible {
   position: fixed;
   z-index: 10000;
   display: grid;
-  width: 56px;
-  height: 56px;
+  width: 40px;
+  height: 40px;
   place-items: center;
-  overflow: hidden;
-  border: 1px solid #e4c978;
-  background:
-    radial-gradient(circle, rgba(216, 182, 107, 0.18), transparent 67%),
-    #0c110e;
-  box-shadow:
-    inset 0 0 0 2px #242318,
-    0 7px 18px rgba(0, 0, 0, 0.7),
-    0 0 14px rgba(216, 182, 107, 0.24);
-  opacity: 0.96;
+  overflow: visible;
   pointer-events: none;
-  transform: translate(-50%, -50%) rotate(2deg) scale(1.04);
+  transform: translate(-50%, -50%);
   transform-origin: center;
 }
 
@@ -8195,15 +8130,6 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .warehouse-strip {
-    grid-template-columns: 1fr auto;
-  }
-
-  .warehouse-strip__items {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-
   .hub-facilities {
     grid-template-columns: 1fr;
   }
@@ -8303,16 +8229,6 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
 
   .main-drops > div {
     grid-template-columns: 1fr;
-  }
-
-  .warehouse-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .warehouse-strip > button,
-  .warehouse-strip__items {
-    grid-column: auto;
-    grid-row: auto;
   }
 
   .hub-facility-card {
@@ -8538,10 +8454,6 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
     padding: 8px;
   }
 
-  .held-item-cursor {
-    width: 52px;
-    height: 52px;
-  }
 }
 
 @media (max-width: 420px) {
@@ -8670,8 +8582,9 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   50% { filter: brightness(1.32); }
 }
 
-/* Item grade changes only the border of the existing interface slots. */
-.item-grade-marker {
+/* Grade owns the border; curse owns only the slot background. */
+.item-grade-marker,
+.item-curse-marker {
   display: none;
 }
 
@@ -8681,7 +8594,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade]) {
   border-color: var(--item-grade-border);
 }
@@ -8692,7 +8605,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade="F"]) {
   --item-grade-border: #8b5a2b;
 }
@@ -8703,7 +8616,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade="E"]) {
   --item-grade-border: #ffffff;
 }
@@ -8714,7 +8627,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade="D"]) {
   --item-grade-border: #ffffff;
 }
@@ -8725,7 +8638,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade="C"]) {
   --item-grade-border: #3b82f6;
 }
@@ -8736,7 +8649,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade="B"]) {
   --item-grade-border: #22c55e;
 }
@@ -8747,7 +8660,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade="A"]) {
   --item-grade-border: #ef4444;
 }
@@ -8758,7 +8671,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ):has(> .item-grade-marker[data-item-grade="S"]) {
   --item-grade-border: #ffffff;
 }
@@ -8769,7 +8682,7 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   .companion-slot.is-filled,
   .alchemy-inventory > button,
   .alchemy-selection > button,
-  .warehouse-strip__items > span
+  .blacksmith-item-icon
 ) > .item-grade-marker[data-item-grade="S"] {
   position: absolute;
   z-index: 8;
@@ -8778,6 +8691,20 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
   border: 1px solid #ef4444;
   pointer-events: none;
   animation: item-grade-rainbow 1800ms linear infinite;
+}
+
+:is(
+  .fixed-item-slot.is-filled,
+  .inventory-item-icon,
+  .companion-slot.is-filled,
+  .alchemy-inventory > button,
+  .alchemy-selection > button,
+  .blacksmith-item-icon
+):has(> .item-curse-marker) {
+  background:
+    radial-gradient(circle at 50% 45%, rgba(158, 53, 76, 0.2), transparent 68%),
+    linear-gradient(145deg, rgba(91, 20, 38, 0.38), rgba(31, 8, 15, 0.72)),
+    #12090c;
 }
 
 @keyframes item-grade-rainbow {
