@@ -7,16 +7,24 @@ import {
   combatEffectMotionAt,
 } from "../app/presentation/effects";
 import {
+  DEFAULT_ARMOR_PENETRATION,
+  DEFAULT_COOLDOWN_REDUCTION,
   DEFAULT_CRITICAL_CHANCE,
   DEFAULT_CRITICAL_DAMAGE_BONUS,
   DEFAULT_LIFE_STEAL,
+  DEFAULT_STATUS_RESISTANCE,
   applyLifeSteal,
+  effectiveCooldown,
+  effectiveDefense,
   normalizeCombatStats,
+  remainingCooldownTurns,
   resolveCriticalDamage,
 } from "../app/game/combat-stats";
+import { tryApplyStatus } from "../app/game/status-effects";
 import { createDeveloperTestMap } from "../app/game/developer-test-map";
 import {
   activateCompanionSkill,
+  advanceCompanionSkillCooldowns,
   createNewGame,
   developerGrantItem,
   manualCompanionStep,
@@ -25,6 +33,10 @@ import {
   throwItem,
   zapWand,
 } from "../app/game/engine";
+import {
+  COMPANION_SKILLS,
+  normalizeSkillCooldowns,
+} from "../app/game/companion-skills";
 import {
   companionToPlayer,
   playerToCompanion,
@@ -105,6 +117,9 @@ assert.deepEqual(normalizeCombatStats(undefined), {
   criticalChance: DEFAULT_CRITICAL_CHANCE,
   criticalDamageBonus: DEFAULT_CRITICAL_DAMAGE_BONUS,
   lifeSteal: DEFAULT_LIFE_STEAL,
+  armorPenetration: DEFAULT_ARMOR_PENETRATION,
+  cooldownReduction: DEFAULT_COOLDOWN_REDUCTION,
+  statusResistance: DEFAULT_STATUS_RESISTANCE,
 });
 
 const defaultGame = createNewGame(0xc8170001);
@@ -113,6 +128,19 @@ assert.equal(defaultGame.companions[0].criticalChance, 0.01);
 assert.equal(defaultGame.enemies[0].criticalChance, 0.01);
 assert.equal(defaultGame.player.criticalDamageBonus, 0.5);
 assert.equal(defaultGame.player.lifeSteal, 0);
+assert.equal(defaultGame.player.armorPenetration, 0);
+assert.equal(defaultGame.companions[0].cooldownReduction, 0);
+assert.equal(defaultGame.enemies[0].statusResistance, 0);
+
+assert.equal(effectiveDefense(10, { armorPenetration: 0 }), 10);
+assert.equal(effectiveDefense(10, { armorPenetration: 0.5 }), 5);
+assert.equal(effectiveDefense(10, { armorPenetration: 1 }), 0);
+assert.equal(effectiveDefense(10, { armorPenetration: 2 }), 0);
+assert.equal(effectiveCooldown(5, { cooldownReduction: 0 }), 5);
+assert.equal(effectiveCooldown(5, { cooldownReduction: 0.2 }), 4);
+assert.equal(effectiveCooldown(6, { cooldownReduction: 0.25 }), 4.5);
+assert.equal(remainingCooldownTurns(4.5), 5);
+assert.deepEqual(normalizeSkillCooldowns({ fireball: 4.5 }), { fireball: 4.5 });
 
 const forcedCritical = resolveCriticalDamage(
   10,
@@ -168,6 +196,9 @@ for (const actor of [oldSave.player, ...oldSave.companions, ...oldSave.enemies])
   delete (actor as Partial<typeof actor>).criticalChance;
   delete (actor as Partial<typeof actor>).criticalDamageBonus;
   delete (actor as Partial<typeof actor>).lifeSteal;
+  delete (actor as Partial<typeof actor>).armorPenetration;
+  delete (actor as Partial<typeof actor>).cooldownReduction;
+  delete (actor as Partial<typeof actor>).statusResistance;
 }
 const normalizedOldSave = cloneGame(oldSave);
 for (const actor of [
@@ -182,12 +213,34 @@ const convertedCompanion = createCompanion("mage", { x: 0, y: 0 });
 convertedCompanion.criticalChance = 0.33;
 convertedCompanion.criticalDamageBonus = 0.8;
 convertedCompanion.lifeSteal = 0.2;
+convertedCompanion.armorPenetration = 0.3;
+convertedCompanion.cooldownReduction = 0.25;
+convertedCompanion.statusResistance = 0.4;
 const convertedPlayer = companionToPlayer(convertedCompanion);
 const roundTripCompanion = playerToCompanion(convertedPlayer);
 assert.deepEqual(
   normalizeCombatStats(roundTripCompanion),
   normalizeCombatStats(convertedCompanion),
 );
+
+const penetrationBase = arena(0xc8170003);
+penetrationBase.player.accuracy = 1_000_000;
+penetrationBase.player.baseAttack = 30;
+penetrationBase.player.criticalChance = 0;
+penetrationBase.enemies = [makeEnemy("rat", "armor-target", { x: 30, y: 80 }, {
+  hp: 100,
+  maxHp: 100,
+  defense: 10,
+  evasion: 0,
+})];
+const noPenetration = cloneGame(penetrationBase);
+const halfPenetration = cloneGame(penetrationBase);
+halfPenetration.player.armorPenetration = 0.5;
+const noPenetrationResult = playerStep(noPenetration, 1, 0);
+const halfPenetrationResult = playerStep(halfPenetration, 1, 0);
+const noPenetrationDamage = 100 - noPenetrationResult.state.enemies[0].hp;
+const halfPenetrationDamage = 100 - halfPenetrationResult.state.enemies[0].hp;
+assert.equal(halfPenetrationDamage - noPenetrationDamage, 5);
 
 const playerAttackState = arena(0xc8170010);
 playerAttackState.player.accuracy = 1_000_000;
@@ -266,6 +319,7 @@ const shieldEnemy = makeEnemy("rat", "shield-attacker", { x: 30, y: 80 }, {
   accuracy: 1_000_000,
   criticalChance: 1,
   lifeSteal: 1,
+  armorPenetration: 1,
 });
 shieldState.enemies = [shieldEnemy];
 const shieldResult = runEnemyTurn(shieldState);
@@ -276,6 +330,19 @@ assert.equal(
   false,
 );
 
+const slimeMitigationState = arena(0xc8170018);
+const slimeTarget = makeEnemy("slime", "slime-mitigation", { x: 30, y: 80 }, {
+  hp: 100,
+  maxHp: 100,
+});
+slimeMitigationState.enemies = [slimeTarget];
+const slimeDamage = applyEnemyIncomingDamage(
+  slimeMitigationState,
+  slimeTarget,
+  20,
+);
+assert.ok(slimeDamage > 0 && slimeDamage < 20);
+
 const skillState = arena(0xc8170014);
 skillState.player.classId = "mage";
 skillState.player.professionId = "mage";
@@ -283,6 +350,8 @@ skillState.player.skills = ["fireball"];
 skillState.player.learnedSkills = ["fireball"];
 skillState.player.skillLevels = { fireball: 1 };
 skillState.player.criticalChance = 1;
+skillState.player.cooldownReduction = 0.25;
+skillState.player.currentMana = 100;
 skillState.enemies = [makeEnemy("rat", "skill-target", { x: 32, y: 80 }, {
   hp: 100,
   maxHp: 100,
@@ -298,12 +367,68 @@ assert.equal(
   skillResult.effects.find((effect) => effect.kind === "damage")?.critical,
   true,
 );
+assert.equal(
+  skillResult.state.player.skillCooldowns.fireball,
+  effectiveCooldown(COMPANION_SKILLS.fireball.cooldown, skillState.player) + 1,
+);
+assert.equal(
+  skillResult.state.player.currentMana,
+  100 - COMPANION_SKILLS.fireball.resourceCost,
+);
+const playerCooldownTick = cloneGame(skillResult.state);
+advanceCompanionSkillCooldowns(playerCooldownTick);
+assert.equal(
+  playerCooldownTick.player.skillCooldowns.fireball,
+  effectiveCooldown(COMPANION_SKILLS.fireball.cooldown, skillState.player),
+);
+
+const fractionalSaveState = cloneGame(skillResult.state);
+fractionalSaveState.player.skillCooldowns.fireball = 4.5;
+assert.equal(cloneGame(fractionalSaveState).player.skillCooldowns.fireball, 4.5);
+advanceCompanionSkillCooldowns(fractionalSaveState);
+assert.equal(fractionalSaveState.player.skillCooldowns.fireball, 3.5);
+
+const companionSkillState = arena(0xc8170019);
+const skillCompanion = createCompanion("mage", { x: 29, y: 80 });
+skillCompanion.skills = ["fireball"];
+skillCompanion.learnedSkills = ["fireball"];
+skillCompanion.skillLevels = { fireball: 1 };
+skillCompanion.cooldownReduction = 0.25;
+skillCompanion.currentMana = 100;
+companionSkillState.player.x = 24;
+companionSkillState.companions = [skillCompanion];
+companionSkillState.enemies = [makeEnemy("rat", "companion-skill-target", { x: 32, y: 80 }, {
+  hp: 100,
+  maxHp: 100,
+  defense: 0,
+})];
+const companionSkillResult = activateCompanionSkill(
+  companionSkillState,
+  skillCompanion.id,
+  "fireball",
+  { x: 32, y: 80 },
+);
+assert.equal(
+  companionSkillResult.state.companions[0].skillCooldowns.fireball,
+  effectiveCooldown(COMPANION_SKILLS.fireball.cooldown, skillCompanion) + 1,
+);
+assert.equal(
+  companionSkillResult.state.companions[0].currentMana,
+  100 - COMPANION_SKILLS.fireball.resourceCost,
+);
+const companionCooldownTick = cloneGame(companionSkillResult.state);
+advanceCompanionSkillCooldowns(companionCooldownTick);
+assert.equal(
+  companionCooldownTick.companions[0].skillCooldowns.fireball,
+  effectiveCooldown(COMPANION_SKILLS.fireball.cooldown, skillCompanion),
+);
 
 const enemySkillState = arena(0xc8170015);
 enemySkillState.player.evasion = 0;
 enemySkillState.enemies = [makeEnemy("shaman_red", "skill-attacker", { x: 26, y: 80 }, {
   accuracy: 1_000_000,
   criticalChance: 1,
+  cooldownReduction: 0.5,
 })];
 const enemySkillResult = runEnemyTurn(enemySkillState);
 assert.equal(
@@ -312,6 +437,20 @@ assert.equal(
   )?.critical,
   true,
 );
+assert.equal(
+  enemySkillResult.state.enemies[0].skillCooldowns?.shamanBolt,
+  0.5,
+);
+
+const windupState = arena(0xc817001a);
+windupState.enemies = [makeEnemy("spinner", "windup-attacker", { x: 26, y: 80 }, {
+  cooldownReduction: 0.5,
+})];
+const windupStarted = runEnemyTurn(windupState);
+assert.equal(windupStarted.state.enemies[0].pendingSkill?.remainingWindupTurns, 1);
+const windupResolved = runEnemyTurn(windupStarted.state);
+assert.equal(windupResolved.state.enemies[0].pendingSkill, null);
+assert.equal(windupResolved.state.enemies[0].skillCooldowns?.poisonWeb, 4);
 
 let wandState = arena(0xc8170016);
 wandState = developerGrantItem(wandState, "wand_magic_missile");
@@ -364,9 +503,76 @@ assert.deepEqual(
   damageSnapshot(deterministicB.effects),
 );
 
-const statusState = arena(0xc8170021);
+const zeroResistanceState = arena(0xc8170021);
+zeroResistanceState.player.statusResistance = 0;
+const zeroResistanceRng = zeroResistanceState.rng;
+assert.deepEqual(
+  tryApplyStatus(zeroResistanceState, zeroResistanceState.player, "poisoned", 3, 2),
+  { applied: true, resisted: false },
+);
+assert.equal(zeroResistanceState.rng, zeroResistanceRng);
+assert.ok(zeroResistanceState.player.statuses.some((status) => status.id === "poisoned"));
+
+const fullResistanceState = arena(0xc8170022);
+fullResistanceState.player.statusResistance = 1;
+const fullResistanceRng = fullResistanceState.rng;
+assert.deepEqual(
+  tryApplyStatus(fullResistanceState, fullResistanceState.player, "poisoned", 3, 2),
+  { applied: false, resisted: true },
+);
+assert.equal(fullResistanceState.rng, fullResistanceRng);
+assert.equal(fullResistanceState.player.statuses.length, 0);
+assert.deepEqual(
+  tryApplyStatus(fullResistanceState, fullResistanceState.player, "haste", 3, 1),
+  { applied: true, resisted: false },
+);
+assert.ok(fullResistanceState.player.statuses.some((status) => status.id === "haste"));
+
+const resistanceSeedBase = arena(0xc8170023);
+resistanceSeedBase.player.statusResistance = 0.5;
+const resistanceSeedA = cloneGame(resistanceSeedBase);
+const resistanceSeedB = cloneGame(resistanceSeedBase);
+const resistanceResultA = tryApplyStatus(
+  resistanceSeedA,
+  resistanceSeedA.player,
+  "rooted",
+  3,
+);
+const resistanceResultB = tryApplyStatus(
+  resistanceSeedB,
+  resistanceSeedB.player,
+  "rooted",
+  3,
+);
+assert.deepEqual(resistanceResultA, resistanceResultB);
+assert.equal(resistanceSeedA.rng, resistanceSeedB.rng);
+assert.deepEqual(resistanceSeedA.player.statuses, resistanceSeedB.player.statuses);
+
+const resistedEnemySkillState = arena(0xc8170024);
+resistedEnemySkillState.player.evasion = 0;
+resistedEnemySkillState.player.statusResistance = 1;
+resistedEnemySkillState.enemies = [makeEnemy(
+  "shaman_red",
+  "resistance-attacker",
+  { x: 26, y: 80 },
+  { accuracy: 1_000_000 },
+)];
+const resistedEnemySkill = runEnemyTurn(resistedEnemySkillState);
+assert.equal(
+  resistedEnemySkill.state.player.statuses.some(
+    (status) => status.id === "weakened",
+  ),
+  false,
+);
+assert.ok(resistedEnemySkill.signals?.some((signal) => signal.text === "저항!"));
+
+const statusState = arena(0xc8170025);
+statusState.player.statusResistance = 1;
 statusState.player.statuses = [{ id: "poisoned", turns: 3, power: 2 }];
+const poisonedHpBefore = statusState.player.hp;
 const statusResult = runEnemyTurn(statusState);
+assert.ok(statusResult.state.player.hp < poisonedHpBefore);
+assert.ok(statusResult.state.player.statuses.some((status) => status.id === "poisoned"));
 assert.equal(
   statusResult.effects
     .filter((effect) => effect.kind === "damage")
@@ -404,5 +610,5 @@ assert.equal(CRITICAL_DAMAGE_TEXT_FILL, "#ffffff");
 assert.equal(CRITICAL_DAMAGE_TEXT_STROKE, "#c52f3d");
 
 console.log(
-  "critical/lifesteal smoke passed (defaults, saves, basic attacks, skills, wand, throw, shield, determinism, visuals)",
+  "combat stat smoke passed (six-stat defaults, saves, penetration, cooldowns, resistance, direct damage, visuals)",
 );

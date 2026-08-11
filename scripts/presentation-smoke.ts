@@ -336,6 +336,22 @@ assert.match(
   /skill-resource-cost[\s\S]*skill\.resourceCost/,
   "skill details must derive cost metadata from the skill definition",
 );
+for (const label of [
+  "방어 관통",
+  "재사용 대기시간 감소",
+  "상태이상 저항",
+]) {
+  assert.equal(
+    (dungeonGameSource.match(new RegExp(label, "g")) ?? []).length,
+    3,
+    `${label} must appear in Player, Companion, and Enemy stat details`,
+  );
+}
+assert.match(
+  dungeonGameSource,
+  /remainingCooldownTurns\(cooldown\)/,
+  "fractional skill cooldowns must be rounded up only for display",
+);
 assert.match(
   dungeonGameSource,
   /function TrainingGroundModal[\s\S]*CampaignWarehouseInventory[\s\S]*CampaignCompanionEquipmentRoster/,

@@ -7,6 +7,9 @@ export type CombatStats = {
   criticalChance: number;
   criticalDamageBonus: number;
   lifeSteal: number;
+  armorPenetration: number;
+  cooldownReduction: number;
+  statusResistance: number;
 };
 
 export type Direction = "up" | "down" | "left" | "right";

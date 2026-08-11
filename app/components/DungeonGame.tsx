@@ -31,6 +31,10 @@ import { enemyDefinition } from "../game/enemy-definitions";
 import { bossDefinition } from "../game/boss-definitions";
 import { enemySkill } from "../game/enemy-skills";
 import {
+  formatCombatPercent,
+  remainingCooldownTurns,
+} from "../game/combat-stats";
+import {
   acceptQuest,
   acceptEquipmentOffer,
   activateCompanionSkill,
@@ -2029,6 +2033,7 @@ function CompanionPanel({
       {character.skills.slice(0, 2).map((skillId) => {
         const skill = COMPANION_SKILLS[skillId];
         const cooldown = character.skillCooldowns[skillId] ?? 0;
+        const displayedCooldown = remainingCooldownTurns(cooldown);
         const hasResource = canPaySkillResource(
           character,
           skill.resourceType,
@@ -2056,7 +2061,7 @@ function CompanionPanel({
                 <strong>{language === "ko" ? skill.nameKo : skill.nameEn}</strong>
                 <small>
                   {cooldown > 0
-                    ? text(`${cooldown}턴 후`, `${cooldown} turns`)
+                    ? text(`${displayedCooldown}턴 후`, `${displayedCooldown} turns`)
                     : !hasResource
                       ? skill.resourceType === "stamina"
                         ? text("기력 부족", "Low stamina")
@@ -2623,17 +2628,29 @@ function EntityInspector({
         </span>
         <span>
           <small>{text("치명타 확률", "Critical Chance")}</small>
-          <strong>{Math.round(enemy.criticalChance * 100)}%</strong>
+          <strong>{formatCombatPercent(enemy.criticalChance)}</strong>
         </span>
         <span>
           <small>{text("치명타 피해", "Critical Damage")}</small>
           <strong>
-            +{Math.round(enemy.criticalDamageBonus * 100)}% ({text("총", "Total")} {Math.round((1 + enemy.criticalDamageBonus) * 100)}%)
+            +{formatCombatPercent(enemy.criticalDamageBonus)} ({text("총", "Total")} {formatCombatPercent(1 + enemy.criticalDamageBonus)})
           </strong>
         </span>
         <span>
           <small>{text("피해 흡혈", "Life Steal")}</small>
-          <strong>{Math.round(enemy.lifeSteal * 100)}%</strong>
+          <strong>{formatCombatPercent(enemy.lifeSteal)}</strong>
+        </span>
+        <span>
+          <small>{text("방어 관통", "Armor Penetration")}</small>
+          <strong>{formatCombatPercent(enemy.armorPenetration)}</strong>
+        </span>
+        <span>
+          <small>{text("재사용 대기시간 감소", "Cooldown Reduction")}</small>
+          <strong>{formatCombatPercent(enemy.cooldownReduction)}</strong>
+        </span>
+        <span>
+          <small>{text("상태이상 저항", "Status Resistance")}</small>
+          <strong>{formatCombatPercent(enemy.statusResistance)}</strong>
         </span>
       </div>
       {(enemy.statuses ?? []).length > 0 && (
@@ -2750,9 +2767,12 @@ function PlayerInspector({
         <span><small>{text("공격 속도", "Attack Speed")}</small><strong>×{getPlayerAttackSpeed(player).toFixed(2)}</strong></span>
         <span><small>{text("시야", "Vision")}</small><strong>{getPlayerViewDistance(player)}</strong></span>
         <span><small>{text("턴 진행도", "Turn Progress")}</small><strong>{Math.round(player.actionProgress * 100)}%</strong></span>
-        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{Math.round(player.criticalChance * 100)}%</strong></span>
-        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{Math.round(player.criticalDamageBonus * 100)}% ({text("총", "Total")} {Math.round((1 + player.criticalDamageBonus) * 100)}%)</strong></span>
-        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{Math.round(player.lifeSteal * 100)}%</strong></span>
+        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{formatCombatPercent(player.criticalChance)}</strong></span>
+        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{formatCombatPercent(player.criticalDamageBonus)} ({text("총", "Total")} {formatCombatPercent(1 + player.criticalDamageBonus)})</strong></span>
+        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{formatCombatPercent(player.lifeSteal)}</strong></span>
+        <span><small>{text("방어 관통", "Armor Penetration")}</small><strong>{formatCombatPercent(player.armorPenetration)}</strong></span>
+        <span><small>{text("재사용 대기시간 감소", "Cooldown Reduction")}</small><strong>{formatCombatPercent(player.cooldownReduction)}</strong></span>
+        <span><small>{text("상태이상 저항", "Status Resistance")}</small><strong>{formatCombatPercent(player.statusResistance)}</strong></span>
       </div>
       <div className="character-trait-list">
         <small>{text("고유 특성", "Traits")}</small>
@@ -2883,9 +2903,12 @@ function CompanionInspector({
         <span><small>{text("이동 속도", "Move Speed")}</small><strong>×{getCompanionMoveSpeed(companion).toFixed(2)}</strong></span>
         <span><small>{text("공격 속도", "Attack Speed")}</small><strong>×{getCompanionAttackSpeed(companion).toFixed(2)}</strong></span>
         <span><small>{text("시야", "Vision")}</small><strong>{getCompanionViewDistance(companion)}</strong></span>
-        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{Math.round(companion.criticalChance * 100)}%</strong></span>
-        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{Math.round(companion.criticalDamageBonus * 100)}% ({text("총", "Total")} {Math.round((1 + companion.criticalDamageBonus) * 100)}%)</strong></span>
-        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{Math.round(companion.lifeSteal * 100)}%</strong></span>
+        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{formatCombatPercent(companion.criticalChance)}</strong></span>
+        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{formatCombatPercent(companion.criticalDamageBonus)} ({text("총", "Total")} {formatCombatPercent(1 + companion.criticalDamageBonus)})</strong></span>
+        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{formatCombatPercent(companion.lifeSteal)}</strong></span>
+        <span><small>{text("방어 관통", "Armor Penetration")}</small><strong>{formatCombatPercent(companion.armorPenetration)}</strong></span>
+        <span><small>{text("재사용 대기시간 감소", "Cooldown Reduction")}</small><strong>{formatCombatPercent(companion.cooldownReduction)}</strong></span>
+        <span><small>{text("상태이상 저항", "Status Resistance")}</small><strong>{formatCombatPercent(companion.statusResistance)}</strong></span>
       </div>
       <div className="character-trait-list">
         <small>{text("고유 특성", "Traits")}</small>
@@ -2990,6 +3013,7 @@ function SkillDescriptionWindow({
   const skill = COMPANION_SKILLS[skillId];
   const skillLevel = normalizeCompanionSkillLevel(caster.skillLevels?.[skillId]);
   const cooldown = caster.skillCooldowns[skillId] ?? 0;
+  const displayedCooldown = remainingCooldownTurns(cooldown);
   const hasResource = canPaySkillResource(
     caster,
     skill.resourceType,
@@ -3024,7 +3048,7 @@ function SkillDescriptionWindow({
           <div className={`skill-resource-cost is-${skill.resourceType}`}><dt>{text("소모", "Cost")}</dt><dd>{resourceLabel} {formatSkillResourceAmount(skill.resourceCost)}</dd></div>
           <div><dt>{text("재사용", "Cooldown")}</dt><dd>{skill.cooldown}{text("턴", " turns")}</dd></div>
           <div><dt>{text("현재 효과", "Current effect")}</dt><dd>{companionSkillEffectSummary(skillId, skillLevel, language)}</dd></div>
-          <div><dt>{text("현재", "Current")}</dt><dd>{cooldown > 0 ? text(`${cooldown}턴 남음`, `${cooldown} turns`) : !hasResource ? text(`${resourceLabel} 부족`, `Low ${resourceLabel.toLowerCase()}`) : text("사용 가능", "Ready")}</dd></div>
+          <div><dt>{text("현재", "Current")}</dt><dd>{cooldown > 0 ? text(`${displayedCooldown}턴 남음`, `${displayedCooldown} turns`) : !hasResource ? text(`${resourceLabel} 부족`, `Low ${resourceLabel.toLowerCase()}`) : text("사용 가능", "Ready")}</dd></div>
         </dl>
       </div>
       <footer className="description-window-actions">

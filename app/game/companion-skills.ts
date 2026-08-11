@@ -646,7 +646,7 @@ export const normalizeSkillCooldowns = (
   Object.fromEntries(
     Object.entries(cooldowns ?? {}).flatMap(([id, turns]) =>
       id in COMPANION_SKILLS && Number.isFinite(turns) && Number(turns) > 0
-        ? [[id, Math.max(1, Math.floor(Number(turns)))]]
+        ? [[id, Number(turns)]]
         : [],
     ),
   ) as CompanionSkillCooldowns;

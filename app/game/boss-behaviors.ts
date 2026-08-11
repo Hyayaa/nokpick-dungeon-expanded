@@ -1,30 +1,15 @@
 import { bossDefinition } from "./boss-definitions";
 import { random } from "./random";
+import { tryApplyStatus } from "./status-effects";
 import type {
   CombatEffect,
   Companion,
   Enemy,
   GameState,
   Player,
-  StatusEffect,
 } from "./types";
 
 type PartyTarget = Player | Companion;
-
-const addStatus = (
-  statuses: StatusEffect[],
-  id: StatusEffect["id"],
-  turns: number,
-  power = 1,
-) => {
-  const current = statuses.find((status) => status.id === id);
-  if (current) {
-    current.turns = Math.max(current.turns, turns);
-    current.power = Math.max(current.power, power);
-  } else {
-    statuses.push({ id, turns, power });
-  }
-};
 
 const isGooBoss = (state: GameState, enemy: Enemy) =>
   state.bossEncounter?.bossId === "goo" &&
@@ -110,6 +95,5 @@ export const applyBossMeleeIdentity = (
   target: PartyTarget,
 ) => {
   if (!isGooBoss(state, boss) || random(state) >= 1 / 3) return false;
-  addStatus(target.statuses, "corroded", 3, 1);
-  return true;
+  return tryApplyStatus(state, target, "corroded", 3, 1).applied;
 };

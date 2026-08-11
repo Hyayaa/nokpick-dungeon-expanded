@@ -146,9 +146,12 @@ import {
 import { random, randomInt } from "./random";
 import {
   applyLifeSteal,
+  effectiveCooldown,
+  effectiveDefense,
   normalizeCombatStats,
   resolveCriticalDamage,
 } from "./combat-stats";
+import { tryApplyStatus } from "./status-effects";
 import {
   canPaySkillResource,
   currentSkillResource,
@@ -2658,7 +2661,7 @@ export function playerStep(
       const damage = Math.max(
         1,
         getPlayerAttack(next.player) -
-          enemy.defense +
+          effectiveDefense(enemy.defense, next.player) +
           randomInt(next, -1, 2) +
           (surprise ? augmentRank(next.player, "suckerPunch") * 2 : 0),
       );
@@ -3213,7 +3216,7 @@ export function manualCompanionStep(
       const damage = Math.max(
         1,
         getCompanionAttack(companion) -
-          enemy.defense +
+          effectiveDefense(enemy.defense, companion) +
           randomInt(next, -1, 1),
       );
       const resolvedDamage = resolveDirectEnemyDamage(
@@ -3631,22 +3634,28 @@ const enemyCanSeePlayer = (state: GameState, enemy: Enemy) =>
 export const getEnemyWakeChance = (range: number) =>
   Math.max(0.12, Math.min(0.92, 0.92 - (Math.max(1, range) - 1) * 0.115));
 
-const addStatus = (
-  statuses: StatusEffect[],
+const applyStatus = (
+  state: GameState,
+  target: Player | Companion | Enemy,
   id: StatusEffectId,
   turns: number,
   power = 1,
+  feedback?: { push(value: StatusSignal): unknown },
 ) => {
   const resolvedTurns = id === "burning"
     ? Math.max(BURNING_DURATION, turns)
     : turns;
-  const existing = statuses.find((status) => status.id === id);
-  if (existing) {
-    existing.turns = Math.max(existing.turns, resolvedTurns);
-    existing.power = Math.max(existing.power, power);
-  } else {
-    statuses.push({ id, turns: resolvedTurns, power });
+  const result = tryApplyStatus(state, target, id, resolvedTurns, power);
+  if (result.resisted) {
+    feedback?.push({
+      x: target.x,
+      y: target.y,
+      text: "저항!",
+      color: "#8ce7ff",
+      sourceId: "companionId" in target ? PLAYER_ID : target.id,
+    });
   }
+  return result;
 };
 
 const applyMagicalFireContact = (
@@ -3661,11 +3670,13 @@ const applyMagicalFireContact = (
   );
   if (!cloud) return false;
   actor.hp = Math.max(0, actor.hp - cloud.power);
-  addStatus(
-    actor.statuses,
+  applyStatus(
+    state,
+    actor,
     "burning",
     MAGICAL_FIRE_CONFIG.burningTurns,
     cloud.power,
+    effects,
   );
   effects.push({
     x: actor.x,
@@ -3710,10 +3721,10 @@ const triggerTrapAt = (
   };
   if (trap.kind === "gripping") {
     harmPlayer(2, "속박!", "#a98d62");
-    addStatus(state.player.statuses, "rooted", 3, 1);
+    applyStatus(state, state.player, "rooted", 3, 1, effects);
   } else if (trap.kind === "poisonDart") {
     harmPlayer(3, "독침!", "#9ad36a");
-    addStatus(state.player.statuses, "poisoned", 5, 2);
+    applyStatus(state, state.player, "poisoned", 5, 2, effects);
   } else if (trap.kind === "explosive") {
     harmPlayer(7, "폭발!", "#ff9a55");
     state.enemies.forEach((enemy) => {
@@ -3732,8 +3743,8 @@ const triggerTrapAt = (
     effects.push({ ...state.player, text: "전이!", color: "#a9c8ff", sourceId: trap.id });
   } else if (trap.kind === "flashing") {
     harmPlayer(3, "섬광!", "#fff7ba");
-    addStatus(state.player.statuses, "blinded", 5, 1);
-    addStatus(state.player.statuses, "rooted", 2, 1);
+    applyStatus(state, state.player, "blinded", 5, 1, effects);
+    applyStatus(state, state.player, "rooted", 2, 1, effects);
   }
   pushLog(state, "바닥 함정이 발동했습니다.");
   return true;
@@ -4757,11 +4768,13 @@ export function activateCompanionSkill(
     skillEnemiesInRange(next, target, radius).forEach((candidate) => {
       damageWithSkill(candidate, power, actor, effects, "#ff8553");
       if (skillHasMechanic("status")) {
-        addStatus(
-          candidate.statuses,
+        applyStatus(
+          next,
+          candidate,
           "burning",
           companionSkillScalar(definition, "statusTurns", 4),
           2,
+          effects,
         );
       }
     });
@@ -4991,11 +5004,13 @@ export function activateCompanionSkill(
         "#8ee9ff",
       );
       if (skillHasMechanic("status")) {
-        addStatus(
-          candidate.statuses,
+        applyStatus(
+          next,
+          candidate,
           "frozen",
           companionSkillScalar(definition, "statusTurns", 2),
           1,
+          effects,
         );
       }
     });
@@ -5056,11 +5071,13 @@ export function activateCompanionSkill(
         "#81bc6c",
       );
       if (skillHasMechanic("status")) {
-        addStatus(
-          candidate.statuses,
+        applyStatus(
+          next,
+          candidate,
           "rooted",
           companionSkillScalar(definition, "statusTurns", 3),
           1,
+          effects,
         );
       }
     });
@@ -5114,11 +5131,13 @@ export function activateCompanionSkill(
         "#b8ced8",
       );
       if (skillHasMechanic("status")) {
-        addStatus(
-          enemy.statuses,
+        applyStatus(
+          next,
+          enemy,
           "paralyzed",
           companionSkillScalar(definition, "statusTurns", 2),
           1,
+          effects,
         );
       }
       moveSkillEnemy(enemy, destination, motions);
@@ -5186,11 +5205,13 @@ export function activateCompanionSkill(
         effects,
         "#d4ad76",
       );
-      addStatus(
-        candidate.statuses,
+      applyStatus(
+        next,
+        candidate,
         "paralyzed",
         companionSkillScalar(definition, "statusTurns", 1),
         1,
+        effects,
       );
     });
     magicVisuals.push({ id: `skill-quake-${next.turn}`, kind: "burst", from: target, to: target, color: "#b98b58", secondaryColor: "#e1c08a", sourceId: actor.motionId });
@@ -5255,11 +5276,13 @@ export function activateCompanionSkill(
       });
     } else if (specialEffect.kind === "status") {
       specialEffectTargets(specialEffect).forEach((candidate) => {
-        addStatus(
-          candidate.statuses,
+        applyStatus(
+          next,
+          candidate,
           specialEffect.statusId,
           specialEffect.turns,
           specialEffect.potency ?? 1,
+          effects,
         );
       });
     } else {
@@ -5285,7 +5308,7 @@ export function activateCompanionSkill(
 
   actor.character.skillCooldowns = {
     ...(actor.character.skillCooldowns ?? {}),
-    [skillId]: definition.cooldown + 1,
+    [skillId]: effectiveCooldown(definition.cooldown, actor.character) + 1,
   };
   if (actor.kind === "companion") {
     (actor.character as Companion).actionCooldown = Math.max(
@@ -5383,13 +5406,15 @@ const applyClouds = (
     ) => {
       if (actor.hp <= 0 || !occupied.has(mapPointKey(actor))) return;
       if (cloud.kind === "fire") {
-        addStatus(
-          actor.statuses,
+        applyStatus(
+          state,
+          actor,
           "burning",
           cloud.variant === "magicalFire"
             ? MAGICAL_FIRE_CONFIG.burningTurns
             : BURNING_DURATION,
           cloud.power,
+          effects,
         );
         if (cloud.variant === "magicalFire") {
           actor.hp = Math.max(0, actor.hp - cloud.power);
@@ -5403,16 +5428,16 @@ const applyClouds = (
           });
         }
       } else if (cloud.kind === "frost") {
-        addStatus(actor.statuses, "chilled", 3, cloud.power);
+        applyStatus(state, actor, "chilled", 3, cloud.power, effects);
       } else if (cloud.kind === "paralytic") {
-        addStatus(actor.statuses, "paralyzed", 2, 1);
+        applyStatus(state, actor, "paralyzed", 2, 1, effects);
       } else if (cloud.kind === "toxic") {
         if (!hasStatus(actor, "purified")) {
-          addStatus(actor.statuses, "poisoned", 4, cloud.power);
+          applyStatus(state, actor, "poisoned", 4, cloud.power, effects);
         }
       } else if (cloud.kind === "corrosive") {
         if (!hasStatus(actor, "purified")) {
-          addStatus(actor.statuses, "corroded", 5, cloud.power);
+          applyStatus(state, actor, "corroded", 5, cloud.power, effects);
         }
       } else if (cloud.kind === "storm") {
         damageLightningEntity(
@@ -5886,17 +5911,17 @@ const activateCompanionRangedSlot = (
       sourceId: companion.id,
     });
     if (slot.defId === "wand_frost") {
-      addStatus(targetEnemy.statuses, "chilled", 4, 1);
+      applyStatus(state, targetEnemy, "chilled", 4, 1, signals);
     } else if (slot.defId === "wand_fireblast") {
-      addStatus(targetEnemy.statuses, "burning", 4, 2);
+      applyStatus(state, targetEnemy, "burning", 4, 2, signals);
     } else if (slot.defId === "wand_corrosion") {
-      addStatus(targetEnemy.statuses, "corroded", 5, 2);
+      applyStatus(state, targetEnemy, "corroded", 5, 2, signals);
     } else if (slot.defId === "wand_corruption") {
-      addStatus(targetEnemy.statuses, "corrupted", 7, 1);
+      applyStatus(state, targetEnemy, "corrupted", 7, 1, signals);
     } else if (slot.defId === "wand_prismatic_light") {
-      addStatus(targetEnemy.statuses, "blinded", 5, 1);
+      applyStatus(state, targetEnemy, "blinded", 5, 1, signals);
     } else if (slot.defId === "wand_regrowth") {
-      addStatus(targetEnemy.statuses, "rooted", 4, 1);
+      applyStatus(state, targetEnemy, "rooted", 4, 1, signals);
     }
   } else if (targetEnemy) {
     effects.push({
@@ -6392,7 +6417,7 @@ const companionMeleeAttack = (
     const damage = Math.max(
       1,
       getCompanionAttack(companion) -
-        target.defense +
+        effectiveDefense(target.defense, companion) +
         randomInt(state, -1, 1),
     );
     const resolvedDamage = resolveDirectEnemyDamage(
@@ -6960,7 +6985,7 @@ export function runEnemyTurn(
         if (combatHit(next, enemy.accuracy, allyTarget.evasion, false)) {
           const amount = Math.max(
             1,
-            enemy.attack - allyTarget.defense + randomInt(next, -1, 1),
+            enemy.attack - effectiveDefense(allyTarget.defense, enemy) + randomInt(next, -1, 1),
           );
           const resolvedDamage = resolveDirectEnemyDamage(
             next,
@@ -7084,7 +7109,7 @@ export function runEnemyTurn(
           next.player,
           Math.max(
             1,
-            enemy.attack - getPlayerDefense(next.player) + randomInt(next, -1, 1),
+            enemy.attack - effectiveDefense(getPlayerDefense(next.player), enemy) + randomInt(next, -1, 1),
           ),
         );
         const resolvedDamage = resolveDirectPartyDamage(
@@ -7173,7 +7198,7 @@ export function runEnemyTurn(
           Math.max(
             1,
             enemy.attack -
-              getCompanionDefense(adjacentCompanion) +
+              effectiveDefense(getCompanionDefense(adjacentCompanion), enemy) +
               randomInt(next, -1, 1),
           ),
         );
@@ -7620,7 +7645,7 @@ export function useItem(state: GameState, defId: string): ActionResult {
   const effect = definition.effect;
   const power = definition.power ?? definition.heal ?? 6;
   const addPlayerStatus = (id: StatusEffectId, turns: number, value = 1) =>
-    addStatus(next.player.statuses, id, turns, value);
+    applyStatus(next, next.player, id, turns, value, effects);
   const addVisibleEnemyStatus = (
     id: StatusEffectId,
     turns: number,
@@ -7629,7 +7654,7 @@ export function useItem(state: GameState, defId: string): ActionResult {
     next.enemies.forEach((enemy) => {
       if (next.tiles[enemy.y][enemy.x].visible) {
         enemy.sleeping = false;
-        addStatus(enemy.statuses, id, turns, value);
+        applyStatus(next, enemy, id, turns, value, effects);
       }
     });
   };
@@ -7668,7 +7693,7 @@ export function useItem(state: GameState, defId: string): ActionResult {
     const created = createCloud(next, "fire", next.player, 6, 2, 4, 4);
     next.enemies
       .filter((enemy) => distance(enemy, next.player) <= 2)
-      .forEach((enemy) => addStatus(enemy.statuses, "burning", 4, 2));
+      .forEach((enemy) => applyStatus(next, enemy, "burning", 4, 2, effects));
     pushLog(
       next,
       created
@@ -7679,7 +7704,7 @@ export function useItem(state: GameState, defId: string): ActionResult {
     createCloud(next, "frost", next.player, 5, 1, 4, 4);
     next.enemies
       .filter((enemy) => distance(enemy, next.player) <= 3)
-      .forEach((enemy) => addStatus(enemy.statuses, "frozen", 2, 1));
+      .forEach((enemy) => applyStatus(next, enemy, "frozen", 2, 1, effects));
     pushLog(next, "순간적인 혹한이 주변을 얼려붙게 만듭니다.");
   } else if (defId === "potion_storm_clouds") {
     createCloud(next, "storm", next.player, 7, 2, 5, 3);
@@ -7713,7 +7738,7 @@ export function useItem(state: GameState, defId: string): ActionResult {
     addPlayerStatus("burning", 1, 0);
     next.enemies
       .filter((enemy) => distance(enemy, next.player) <= 4)
-      .forEach((enemy) => addStatus(enemy.statuses, "burning", 5, 3));
+      .forEach((enemy) => applyStatus(next, enemy, "burning", 5, 3, effects));
     pushLog(next, "용의 숨결이 시야 앞을 불태웁니다.");
   } else if (defId === "potion_purity" || defId === "potion_cleansing") {
     next.player.statuses = next.player.statuses.filter((status) =>
@@ -9259,16 +9284,16 @@ export function zapWand(
     hit(primary, 6, "#d6b6ff");
   } else if (defId === "wand_frost" && primary) {
     hit(primary, 5, "#8ee9ff");
-    addStatus(primary.statuses, "chilled", 4, 1);
+    applyStatus(next, primary, "chilled", 4, 1, effects);
     if (next.tiles[primary.y][primary.x].terrain === "water") {
-      addStatus(primary.statuses, "frozen", 2, 1);
+      applyStatus(next, primary, "frozen", 2, 1, effects);
     }
   } else if (defId === "wand_fireblast") {
     next.enemies
       .filter((enemy) => distance(enemy, landing) <= 2)
       .forEach((enemy) => {
         hit(enemy, 7, "#ff8a45");
-        addStatus(enemy.statuses, "burning", 4, 2);
+        applyStatus(next, enemy, "burning", 4, 2, effects);
       });
     for (let y = Math.max(0, landing.y - 2); y <= Math.min(next.height - 1, landing.y + 2); y += 1) {
       for (let x = Math.max(0, landing.x - 2); x <= Math.min(next.width - 1, landing.x + 2); x += 1) {
@@ -9315,7 +9340,7 @@ export function zapWand(
     });
   } else if (defId === "wand_prismatic_light" && primary) {
     hit(primary, 5, "#fff6b0");
-    addStatus(primary.statuses, "blinded", 5, 1);
+    applyStatus(next, primary, "blinded", 5, 1, effects);
     updatePlayerFieldOfView(next);
   } else if (defId === "wand_corrosion") {
     createCloud(
@@ -9346,7 +9371,7 @@ export function zapWand(
     primary.sleeping = false;
     primary.alerted = false;
     primary.lastSeenPlayer = null;
-    addStatus(primary.statuses, "corrupted", 7, 1);
+    applyStatus(next, primary, "corrupted", 7, 1, effects);
     effects.push({
       x: primary.x,
       y: primary.y,
@@ -9357,19 +9382,19 @@ export function zapWand(
   } else if (defId === "wand_living_earth" && primary) {
     hit(primary, 5, "#c1ad78");
     next.player.shield += 5;
-    addStatus(next.player.statuses, "earthenArmor", 8, 1);
+    applyStatus(next, next.player, "earthenArmor", 8, 1, effects);
   } else if (defId === "wand_regrowth") {
     for (let y = Math.max(1, landing.y - 1); y <= Math.min(next.height - 2, landing.y + 1); y += 1) {
       for (let x = Math.max(1, landing.x - 1); x <= Math.min(next.width - 2, landing.x + 1); x += 1) {
         if (next.tiles[y][x].terrain === "floor") next.tiles[y][x].terrain = "highGrass";
       }
     }
-    if (primary) addStatus(primary.statuses, "rooted", 4, 1);
+    if (primary) applyStatus(next, primary, "rooted", 4, 1, effects);
   } else if (defId === "wand_transfusion" && primary) {
     hit(primary, 4, "#ff8eb8");
     next.player.hp = Math.min(next.player.maxHp, next.player.hp + 4);
     next.player.shield += 3;
-    addStatus(primary.statuses, "charmed", 4, 1);
+    applyStatus(next, primary, "charmed", 4, 1, effects);
   } else if (defId === "wand_warding") {
     next.wards.push({
       id: `ward-${next.turn}-${next.rng}`,
@@ -9554,7 +9579,10 @@ export function throwItem(
   const damage = thrownItemDamage(defId, resolved.instance);
   const dealtDamage = Boolean(enemy && damage > 0);
   if (enemy && damage > 0) {
-    const amount = Math.max(1, damage - Math.floor(enemy.defense / 2));
+    const amount = Math.max(
+      1,
+      damage - Math.floor(effectiveDefense(enemy.defense, next.player) / 2),
+    );
     const resolvedDamage = resolveDirectEnemyDamage(
       next,
       next.player,
@@ -9842,6 +9870,7 @@ export function developerSpawnEnemy(
     defense: stats.defense,
     accuracy: stats.accuracy,
     evasion: stats.evasion,
+    ...normalizeCombatStats(enemyDefinition(kind).baseStats),
     xp: stats.xp,
     alerted: true,
     sawPlayerLastTurn: true,

@@ -10,9 +10,12 @@ import { hasLineOfSight, isWalkable, mapPointKey } from "./map";
 import { random, randomInt } from "./random";
 import {
   applyLifeSteal,
+  effectiveCooldown,
+  effectiveDefense,
   normalizeCombatStats,
   resolveCriticalDamage,
 } from "./combat-stats";
+import { tryApplyStatus } from "./status-effects";
 import {
   applyBossMeleeIdentity,
   syncBossPhaseInPlace,
@@ -32,12 +35,25 @@ type SkillTurnOutput = {
 };
 
 const distance = (a: Point, b: Point) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
-const addStatus = (statuses: StatusEffect[], id: StatusEffect["id"], turns: number, power = 1) => {
-  const current = statuses.find((status) => status.id === id);
-  if (current) {
-    current.turns = Math.max(current.turns, turns);
-    current.power = Math.max(current.power, power);
-  } else statuses.push({ id, turns, power });
+const applyStatus = (
+  state: GameState,
+  target: PartyTarget | Enemy,
+  id: StatusEffect["id"],
+  turns: number,
+  power = 1,
+  output?: SkillTurnOutput,
+) => {
+  const result = tryApplyStatus(state, target, id, turns, power);
+  if (result.resisted) {
+    output?.signals.push({
+      x: target.x,
+      y: target.y,
+      text: "저항!",
+      color: "#8ce7ff",
+      sourceId: "companionId" in target ? "player" : target.id,
+    });
+  }
+  return result;
 };
 const partyTargets = (state: GameState) => [state.player, ...(state.companions ?? []).filter((ally) => ally.hp > 0)];
 const targetId = (state: GameState, target: PartyTarget) =>
@@ -170,7 +186,9 @@ const damageTarget = (
   const wasAlive = target.hp > 0;
   const normalDamage = Math.max(
     1,
-    Math.round(amount - Math.max(0, target.baseDefense ?? 0) * 0.35),
+    Math.round(
+      amount - effectiveDefense(target.baseDefense ?? 0, enemy) * 0.35,
+    ),
   );
   const criticalResult = direct
     ? resolveCriticalDamage(normalDamage, enemy, random(state))
@@ -223,23 +241,29 @@ const damageTarget = (
   }
 };
 
-const applySkillStatus = (enemy: Enemy, target: PartyTarget, skillId: EnemySkillId) => {
-  if (skillId === "chainPull" || skillId === "cripplingShot") addStatus(target.statuses, "crippled", skillId === "chainPull" ? 4 : 3);
-  if (skillId === "acidicShot" || skillId === "corrosiveVent") addStatus(target.statuses, "corroded", 4, 1);
-  if (skillId === "darkBolt") addStatus(target.statuses, "degraded", 5);
-  if (skillId === "poisonWeb") { addStatus(target.statuses, "rooted", 2); addStatus(target.statuses, "poisoned", 5, 1); }
-  if (skillId === "charm") addStatus(target.statuses, "charmed", 4);
+const applySkillStatus = (
+  state: GameState,
+  enemy: Enemy,
+  target: PartyTarget,
+  skillId: EnemySkillId,
+  output: SkillTurnOutput,
+) => {
+  if (skillId === "chainPull" || skillId === "cripplingShot") applyStatus(state, target, "crippled", skillId === "chainPull" ? 4 : 3, 1, output);
+  if (skillId === "acidicShot" || skillId === "corrosiveVent") applyStatus(state, target, "corroded", 4, 1, output);
+  if (skillId === "darkBolt") applyStatus(state, target, "degraded", 5, 1, output);
+  if (skillId === "poisonWeb") { applyStatus(state, target, "rooted", 2, 1, output); applyStatus(state, target, "poisoned", 5, 1, output); }
+  if (skillId === "charm") applyStatus(state, target, "charmed", 4, 1, output);
   if (skillId === "shamanBolt") {
-    addStatus(target.statuses, enemy.kind === "shaman_red" ? "weakened" : enemy.kind === "shaman_blue" ? "vulnerable" : "hexed", 4);
+    applyStatus(state, target, enemy.kind === "shaman_red" ? "weakened" : enemy.kind === "shaman_blue" ? "vulnerable" : "hexed", 4, 1, output);
   }
   if (skillId === "elementalBolt") {
-    if (enemy.kind === "elemental_fire") addStatus(target.statuses, "burning", 6, 1);
-    if (enemy.kind === "elemental_frost") addStatus(target.statuses, "chilled", 4, 1);
-    if (enemy.kind === "elemental_shock") addStatus(target.statuses, "blinded", 3, 1);
-    if (enemy.kind === "elemental_chaos") addStatus(target.statuses, "hexed", 3, 1);
+    if (enemy.kind === "elemental_fire") applyStatus(state, target, "burning", 6, 1, output);
+    if (enemy.kind === "elemental_frost") applyStatus(state, target, "chilled", 4, 1, output);
+    if (enemy.kind === "elemental_shock") applyStatus(state, target, "blinded", 3, 1, output);
+    if (enemy.kind === "elemental_chaos") applyStatus(state, target, "hexed", 3, 1, output);
   }
   if (skillId === "shockLeap" && enemy.kind === "ripper_demon") {
-    addStatus(target.statuses, "bleeding", 5, 1);
+    applyStatus(state, target, "bleeding", 5, 1, output);
   }
 };
 
@@ -335,7 +359,7 @@ const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, tar
       const from = { x: directTarget.x, y: directTarget.y };
       directTarget.x = landing.x; directTarget.y = landing.y;
       output.motions.push({ id: targetId(state, directTarget), from, to: landing, kind:"move", travelStyle:"charge" });
-      applySkillStatus(enemy, directTarget, skillId);
+      applySkillStatus(state, enemy, directTarget, skillId, output);
     }
     return;
   }
@@ -349,7 +373,9 @@ const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, tar
       output.motions.push({ id:enemy.id, from, to:destination, kind:"move", travelStyle:"teleport" });
       emitSkillVisual(state, enemy, skillId, from, destination, [destination], output);
     }
-    if (directTarget && skillId === "charm") applySkillStatus(enemy, directTarget, skillId);
+    if (directTarget && skillId === "charm") {
+      applySkillStatus(state, enemy, directTarget, skillId, output);
+    }
     return;
   }
   let impactTiles = [...affectedTiles];
@@ -395,12 +421,16 @@ const executeSkill = (state: GameState, enemy: Enemy, skillId: EnemySkillId, tar
   for (const target of victims) {
     const power = blueprint.scalars.power ?? 1;
     damageTarget(state, enemy, target, enemy.attack * power + randomInt(state, -2, 2), output);
-    applySkillStatus(enemy, target, skillId);
+    applySkillStatus(state, enemy, target, skillId, output);
   }
 };
 
 const cooldownReady = (enemy: Enemy, ruleValue: EnemySkillUseRule) => (enemy.skillCooldowns?.[ruleValue.skillId] ?? 0) <= 0;
 const usesReady = (enemy: Enemy, ruleValue: EnemySkillUseRule) => ruleValue.maxUses === undefined || (enemy.skillUses?.[ruleValue.skillId] ?? 0) < ruleValue.maxUses;
+const baseCooldownForEnemySkill = (enemy: Enemy, skillId: EnemySkillId) =>
+  enemyDefinition(enemy.kind).skillRules.find(
+    (ruleValue) => ruleValue.skillId === skillId,
+  )?.cooldown ?? enemySkill(skillId)?.cooldown ?? 1;
 const usableRule = (state: GameState, enemy: Enemy, ruleValue: EnemySkillUseRule) => {
   if (!cooldownReady(enemy, ruleValue) || !usesReady(enemy, ruleValue)) return null;
   if (ruleValue.hpThreshold !== undefined && enemy.hp / Math.max(1, enemy.maxHp) > ruleValue.hpThreshold) return null;
@@ -459,7 +489,10 @@ export const runEnemySkillTurn = (state: GameState, enemy: Enemy, output: SkillT
       return true;
     }
     executeSkill(state, enemy, pending.skillId, pending.targetId, pending.targetPoint, pending.affectedTiles, output);
-    enemy.skillCooldowns[pending.skillId] = enemySkill(pending.skillId)?.cooldown ?? 1;
+    enemy.skillCooldowns[pending.skillId] = effectiveCooldown(
+      baseCooldownForEnemySkill(enemy, pending.skillId),
+      enemy,
+    );
     enemy.skillUses = { ...(enemy.skillUses ?? {}), [pending.skillId]: (enemy.skillUses?.[pending.skillId] ?? 0) + 1 };
     enemy.pendingSkill = null;
     return true;
@@ -514,7 +547,10 @@ export const runEnemySkillTurn = (state: GameState, enemy: Enemy, output: SkillT
     return true;
   }
   executeSkill(state, enemy, chosen.rule.skillId, targetId(state, chosen.target), chosenPoint, affectedTiles, output);
-  enemy.skillCooldowns[chosen.rule.skillId] = chosen.rule.cooldown ?? blueprint.cooldown;
+  enemy.skillCooldowns[chosen.rule.skillId] = effectiveCooldown(
+    chosen.rule.cooldown ?? blueprint.cooldown,
+    enemy,
+  );
   enemy.skillUses = { ...(enemy.skillUses ?? {}), [chosen.rule.skillId]: (enemy.skillUses?.[chosen.rule.skillId] ?? 0) + 1 };
   return true;
 };
@@ -522,12 +558,12 @@ export const runEnemySkillTurn = (state: GameState, enemy: Enemy, output: SkillT
 export const applyEnemyMeleeIdentity = (state: GameState, enemy: Enemy, target: PartyTarget, damage: number) => {
   applyBossMeleeIdentity(state, enemy, target);
   if (enemy.kind === "bat") enemy.hp = Math.min(enemy.maxHp, enemy.hp + Math.max(0, damage - 4));
-  if (enemy.kind === "albino" && random(state) < 0.5) addStatus(target.statuses, "bleeding", 4, 1);
-  if (enemy.kind === "caustic_slime" && random(state) < 0.5) addStatus(target.statuses, "corroded", 4, 1);
-  if (enemy.kind === "spinner" && random(state) < 0.5) addStatus(target.statuses, "poisoned", 7, 1);
-  if (enemy.kind === "succubus" && random(state) < 1 / 3) addStatus(target.statuses, "charmed", 4);
+  if (enemy.kind === "albino" && random(state) < 0.5) applyStatus(state, target, "bleeding", 4, 1);
+  if (enemy.kind === "caustic_slime" && random(state) < 0.5) applyStatus(state, target, "corroded", 4, 1);
+  if (enemy.kind === "spinner" && random(state) < 0.5) applyStatus(state, target, "poisoned", 7, 1);
+  if (enemy.kind === "succubus" && random(state) < 1 / 3) applyStatus(state, target, "charmed", 4);
   if (enemy.kind === "bandit") {
-    addStatus(target.statuses, "blinded", 3); addStatus(target.statuses, "poisoned", 5); addStatus(target.statuses, "crippled", 3);
+    applyStatus(state, target, "blinded", 3); applyStatus(state, target, "poisoned", 5); applyStatus(state, target, "crippled", 3);
   }
   if (enemy.kind === "thief" || enemy.kind === "bandit") {
     const stolen = Math.min(state.goldCollected, randomInt(state, 8, 20));
@@ -597,12 +633,12 @@ export const resolveEnemyDeathMechanics = (
     enemy.hp = Math.max(1, Math.round(enemy.maxHp / 2));
     enemy.attack = Math.round(enemy.attack * 1.45);
     enemy.behaviorState = { ...(enemy.behaviorState ?? {}), raged:true };
-    addStatus(enemy.statuses, "shielded", enemy.kind === "armored_brute" ? 10 : 5, Math.round(enemy.maxHp / 2));
+    applyStatus(state, enemy, "shielded", enemy.kind === "armored_brute" ? 10 : 5, Math.round(enemy.maxHp / 2));
     return true;
   }
   if (enemy.kind === "ghoul" && state.enemies.some((candidate) => candidate.id !== enemy.id && candidate.kind === "ghoul" && candidate.hp > 0)) {
     enemy.hp = Math.max(1, Math.round(enemy.maxHp * 0.1));
-    addStatus(enemy.statuses, "paralyzed", 5);
+    applyStatus(state, enemy, "paralyzed", 5);
     return true;
   }
   if (enemy.kind === "skeleton" || enemy.kind === "necro_skeleton") {
