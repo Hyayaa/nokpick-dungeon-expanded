@@ -26,7 +26,14 @@ import {
   companionArmorTier,
   companionFrameIndex,
 } from "./companion-visuals";
-import type { EffectTrajectory } from "./effects";
+import {
+  CRITICAL_DAMAGE_TEXT_DURATION_MS,
+  CRITICAL_DAMAGE_TEXT_FILL,
+  CRITICAL_DAMAGE_TEXT_STROKE,
+  NORMAL_DAMAGE_TEXT_DURATION_MS,
+  combatEffectMotionAt,
+  type EffectTrajectory,
+} from "./effects";
 import {
   FOG_PIXELS_PER_TILE,
   type PixelFogRuntime,
@@ -1772,27 +1779,38 @@ export function startDungeonRenderer({
       context.globalAlpha = 1;
 
       retainInPlace(effectsRef.current, (effect) => {
-        const progress = (now - effect.startedAt) / 900;
+        const duration = effect.critical
+          ? CRITICAL_DAMAGE_TEXT_DURATION_MS
+          : NORMAL_DAMAGE_TEXT_DURATION_MS;
+        const progress = (now - effect.startedAt) / duration;
         if (progress < 0) return true;
         if (progress >= 1) return false;
-        const fade =
-          progress < 0.58 ? 1 : Math.max(0, (1 - progress) / 0.42);
-        const travelX =
-          effect.originOffsetX + effect.velocityX * progress;
-        const travelY =
-          effect.originOffsetY +
-          effect.velocityY * progress +
-          0.5 * effect.gravity * progress * progress;
+        const { fade, travelX, travelY } = combatEffectMotionAt(
+          effect,
+          progress,
+        );
         context.globalAlpha = fade;
-        context.fillStyle = effect.color;
+        context.fillStyle = effect.critical
+          ? CRITICAL_DAMAGE_TEXT_FILL
+          : effect.color;
         context.font = `${Math.round(14 * zoom)}px MonaGame, monospace`;
         context.textAlign = "center";
         context.shadowColor = "#000";
         context.shadowBlur = Math.max(1, 2 * zoom);
+        const textX =
+          screenX(effect.x * TILE_SIZE + TILE_SIZE / 2) + travelX * zoom;
+        const textY =
+          screenY(effect.y * TILE_SIZE + 5) + travelY * zoom;
+        if (effect.critical) {
+          context.strokeStyle = CRITICAL_DAMAGE_TEXT_STROKE;
+          context.lineWidth = Math.max(2, 2.25 * zoom);
+          context.lineJoin = "round";
+          context.strokeText(effect.text, textX, textY);
+        }
         context.fillText(
           effect.text,
-          screenX(effect.x * TILE_SIZE + TILE_SIZE / 2) + travelX * zoom,
-          screenY(effect.y * TILE_SIZE + 5) + travelY * zoom,
+          textX,
+          textY,
         );
         context.shadowBlur = 0;
         return true;

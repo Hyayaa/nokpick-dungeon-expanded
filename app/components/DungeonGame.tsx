@@ -2621,6 +2621,20 @@ function EntityInspector({
           <small>{text("경험치", "Experience")}</small>
           <strong>{enemy.xp}</strong>
         </span>
+        <span>
+          <small>{text("치명타 확률", "Critical Chance")}</small>
+          <strong>{Math.round(enemy.criticalChance * 100)}%</strong>
+        </span>
+        <span>
+          <small>{text("치명타 피해", "Critical Damage")}</small>
+          <strong>
+            +{Math.round(enemy.criticalDamageBonus * 100)}% ({text("총", "Total")} {Math.round((1 + enemy.criticalDamageBonus) * 100)}%)
+          </strong>
+        </span>
+        <span>
+          <small>{text("피해 흡혈", "Life Steal")}</small>
+          <strong>{Math.round(enemy.lifeSteal * 100)}%</strong>
+        </span>
       </div>
       {(enemy.statuses ?? []).length > 0 && (
         <div className="inventory-detail__stats">
@@ -2736,6 +2750,9 @@ function PlayerInspector({
         <span><small>{text("공격 속도", "Attack Speed")}</small><strong>×{getPlayerAttackSpeed(player).toFixed(2)}</strong></span>
         <span><small>{text("시야", "Vision")}</small><strong>{getPlayerViewDistance(player)}</strong></span>
         <span><small>{text("턴 진행도", "Turn Progress")}</small><strong>{Math.round(player.actionProgress * 100)}%</strong></span>
+        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{Math.round(player.criticalChance * 100)}%</strong></span>
+        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{Math.round(player.criticalDamageBonus * 100)}% ({text("총", "Total")} {Math.round((1 + player.criticalDamageBonus) * 100)}%)</strong></span>
+        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{Math.round(player.lifeSteal * 100)}%</strong></span>
       </div>
       <div className="character-trait-list">
         <small>{text("고유 특성", "Traits")}</small>
@@ -2866,6 +2883,9 @@ function CompanionInspector({
         <span><small>{text("이동 속도", "Move Speed")}</small><strong>×{getCompanionMoveSpeed(companion).toFixed(2)}</strong></span>
         <span><small>{text("공격 속도", "Attack Speed")}</small><strong>×{getCompanionAttackSpeed(companion).toFixed(2)}</strong></span>
         <span><small>{text("시야", "Vision")}</small><strong>{getCompanionViewDistance(companion)}</strong></span>
+        <span><small>{text("치명타 확률", "Critical Chance")}</small><strong>{Math.round(companion.criticalChance * 100)}%</strong></span>
+        <span><small>{text("치명타 피해", "Critical Damage")}</small><strong>+{Math.round(companion.criticalDamageBonus * 100)}% ({text("총", "Total")} {Math.round((1 + companion.criticalDamageBonus) * 100)}%)</strong></span>
+        <span><small>{text("피해 흡혈", "Life Steal")}</small><strong>{Math.round(companion.lifeSteal * 100)}%</strong></span>
       </div>
       <div className="character-trait-list">
         <small>{text("고유 특성", "Traits")}</small>
@@ -7471,7 +7491,15 @@ function DungeonRun({
       effectsRef.current.push(
         ...effects.map((effect, index) => ({
           ...effect,
-          ...trajectories[index],
+          ...(effect.critical
+            ? {
+                velocityX: 0,
+                velocityY: 0,
+                gravity: 0,
+                originOffsetX: 0,
+                originOffsetY: 0,
+              }
+            : trajectories[index]),
           id: `${now}-${index}-${effect.text}`,
           startedAt: now + delay,
         })),
