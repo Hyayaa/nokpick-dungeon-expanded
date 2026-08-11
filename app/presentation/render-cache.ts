@@ -41,6 +41,25 @@ export type DungeonRenderCache = {
   tileCacheHits: number;
 };
 
+export type HeldVisibilitySnapshot = {
+  visibleMasks: Uint8Array;
+  revealAt: number;
+};
+
+export const captureVisibleMasks = (
+  state: Pick<GameState, "width" | "height" | "tiles">,
+) => {
+  const masks = new Uint8Array(state.width * state.height);
+  for (let y = 0; y < state.height; y += 1) {
+    for (let x = 0; x < state.width; x += 1) {
+      const tile = state.tiles[y][x];
+      masks[x + y * state.width] =
+        ((tile.visibleMask ?? 0) || (tile.visible ? 15 : 0)) & 15;
+    }
+  }
+  return masks;
+};
+
 export function createDungeonRenderCache(): DungeonRenderCache {
   return {
     state: null,
@@ -178,6 +197,71 @@ export function syncDungeonRenderCache(
     cache.fogRevision += 1;
   }
   return cache;
+}
+
+/**
+ * Keeps the pre-defeat field of view on screen until its causal visual has
+ * landed. The game state and discovered masks remain the authoritative final
+ * values; only the renderer's current visibility is temporarily extended.
+ */
+export function syncHeldVisibilitySnapshots(
+  cache: DungeonRenderCache,
+  state: GameState,
+  snapshots: readonly HeldVisibilitySnapshot[],
+  now: number,
+) {
+  const size = state.width * state.height;
+  const activeSnapshots = snapshots.filter(
+    (snapshot) => snapshot.revealAt > now,
+  );
+  let visibilityChanged = false;
+  for (let y = 0; y < state.height; y += 1) {
+    for (let x = 0; x < state.width; x += 1) {
+      const index = x + y * state.width;
+      const terrainFrame = frameAt(cache.terrainFrames, cache, x, y);
+      const overlayFrame = frameAt(cache.overlayFrames, cache, x, y);
+      const fogFrame = terrainFrame ?? overlayFrame;
+      const baseVisibleMask = fogMasksForTile(
+        state.tiles[y][x],
+        fogFrame,
+      ).visibleMask;
+      let heldVisibleMask = 0;
+      activeSnapshots.forEach((snapshot) => {
+        if (snapshot.visibleMasks.length === size) {
+          heldVisibleMask |= snapshot.visibleMasks[index];
+        }
+      });
+      const presentationVisibleMask = heldVisibleMask
+        ? fogMasksForTile(
+            {
+              ...state.tiles[y][x],
+              visible: true,
+              visibleMask: heldVisibleMask,
+            },
+            fogFrame,
+          ).visibleMask
+        : 0;
+      const nextVisibleMask = baseVisibleMask | presentationVisibleMask;
+      if (cache.visibleMasks[index] !== nextVisibleMask) {
+        cache.visibleMasks[index] = nextVisibleMask;
+        visibilityChanged = true;
+      }
+    }
+  }
+  if (visibilityChanged) {
+    cache.visibilityRebuilds += 1;
+    cache.fogRevision += 1;
+  }
+  return cache;
+}
+
+export function tileVisibleInRenderCache(
+  cache: DungeonRenderCache,
+  x: number,
+  y: number,
+) {
+  if (x < 0 || y < 0 || x >= cache.width || y >= cache.height) return false;
+  return cache.visibleMasks[x + y * cache.width] !== 0;
 }
 
 function frameAt(

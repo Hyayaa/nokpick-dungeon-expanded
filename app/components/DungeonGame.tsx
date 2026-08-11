@@ -262,7 +262,10 @@ import {
   createPixelFogRuntime,
   resetPixelFogRuntime,
 } from "../presentation/fog-frontier";
-import { createDungeonRenderCache } from "../presentation/render-cache";
+import {
+  captureVisibleMasks,
+  createDungeonRenderCache,
+} from "../presentation/render-cache";
 import type { TargetingOverlay } from "../presentation/targeting-overlay";
 import { resolveItemGrade } from "../game/item-grade";
 import { itemSpriteOffset } from "../presentation/item-visuals";
@@ -6755,6 +6758,8 @@ function DungeonRun({
   const [game, setGame] = useState<GameState>(() =>
     cloneGameWithoutTiles(initialGame),
   );
+  const [gameOverPresentationReady, setGameOverPresentationReady] =
+    useState(initialGame.gameOver);
   const [busy, setBusy] = useState(false);
   const [autoExploring, setAutoExploring] = useState(false);
   const [stopAutoExploreOnFullBag] = useState(true);
@@ -7716,6 +7721,12 @@ function DungeonRun({
       recordRunProgress(visualStateBefore, resolvedState, pickups);
       const playerDefeatPending =
         visualStateBefore.player.hp > 0 && resolvedState.player.hp <= 0;
+      if (playerDefeatPending) {
+        // Rule state and the durable save remain synchronous. Only the
+        // expedition-end presentation waits for the lethal visual impact.
+        setGameOverPresentationReady(false);
+        commitGame(withoutPendingAugmentModal(resolvedState));
+      }
 
       const allMotions = [
         ...result.motions,
@@ -8017,6 +8028,7 @@ function DungeonRun({
                 equipmentInstances: { ...companion.equipmentInstances },
                 autoSlots: [...companion.autoSlots],
               },
+              visibleMasks: captureVisibleMasks(before),
               revealAt: defeatVisualStartedAt + Math.max(0, revealDelay),
             });
             deathSoundDelays.add(Math.max(0, Math.round(revealDelay)));
@@ -8232,7 +8244,11 @@ function DungeonRun({
         if (deferResolution || playerDefeatPending) {
           await wait(resolutionDelay);
           if (actionTokenRef.current !== token) return;
-          commitGame(withoutPendingAugmentModal(resolvedState));
+          if (playerDefeatPending) {
+            setGameOverPresentationReady(true);
+          } else {
+            commitGame(withoutPendingAugmentModal(resolvedState));
+          }
           await wait(Math.max(0, totalDuration - resolutionDelay));
         } else {
           await wait(totalDuration);
@@ -11102,7 +11118,7 @@ function DungeonRun({
                   : text("턴이 이어지는 중", "Resolving turn")}
               </div>
             )}
-            {game.gameOver && (
+            {game.gameOver && gameOverPresentationReady && (
               <div className="game-over">
                 <h2>{text("탐사가 끝났습니다", "The Expedition Ends")}</h2>
                 <span>

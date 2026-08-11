@@ -22,6 +22,13 @@ import {
   presentationOffsetForCombatEffect,
   worldRevealOffsetForDefeat,
 } from "../app/presentation/timing";
+import {
+  captureVisibleMasks,
+  createDungeonRenderCache,
+  syncDungeonRenderCache,
+  syncHeldVisibilitySnapshots,
+  tileVisibleInRenderCache,
+} from "../app/presentation/render-cache";
 
 const loneEnemyState = (kind: EnemyKind, seed: number) => {
   const state = developerSpawnEnemy(createNewGame(seed), kind);
@@ -41,6 +48,16 @@ const effectAt = (
   y: number,
   kind: CombatEffect["kind"],
 ) => effects.find((effect) => effect.x === x && effect.y === y && effect.kind === kind)!;
+
+const beforeVisibleTile = (state: ReturnType<typeof createNewGame>) => {
+  for (let y = 0; y < state.height; y += 1) {
+    for (let x = 0; x < state.width; x += 1) {
+      const tile = state.tiles[y][x];
+      if (tile.visible || tile.visibleMask) return { tile, x, y };
+    }
+  }
+  throw new Error("expected the generated floor to contain a visible tile");
+};
 
 {
   const { state, enemy } = loneEnemyState("skeleton", 0xd34d0001);
@@ -155,6 +172,34 @@ const effectAt = (
       presentationOffsetForCombatEffect(defeat),
     attack.delay + impactDelayForMotion(attack.motion) + DEATH_EVENT_DELAY,
   );
+
+  const visionTile = beforeVisibleTile(state);
+  const visibleMasks = captureVisibleMasks(state);
+  visionTile.tile.visible = false;
+  visionTile.tile.visibleMask = 0;
+  const cache = syncDungeonRenderCache(createDungeonRenderCache(), state);
+  const finalDiscoveredMask = cache.discoveredMasks[
+    visionTile.x + visionTile.y * state.width
+  ];
+  const revealAt = 1_000 + DEATH_EVENT_DELAY;
+  syncHeldVisibilitySnapshots(
+    cache,
+    state,
+    [{ visibleMasks, revealAt }],
+    revealAt - 1,
+  );
+  assert.equal(tileVisibleInRenderCache(cache, visionTile.x, visionTile.y), true);
+  assert.equal(
+    cache.discoveredMasks[visionTile.x + visionTile.y * state.width],
+    finalDiscoveredMask,
+  );
+  syncHeldVisibilitySnapshots(
+    cache,
+    state,
+    [{ visibleMasks, revealAt }],
+    revealAt,
+  );
+  assert.equal(tileVisibleInRenderCache(cache, visionTile.x, visionTile.y), false);
 }
 
 {
@@ -274,5 +319,5 @@ const lethalRangedTarget = (kind: "throw" | "magic") => {
 }
 
 console.log(
-  "death event timing smoke passed (melee, skeleton chain, companion/player defeat, projectile, magic, AoE, boss key)",
+  "death event timing smoke passed (melee, skeleton chain, companion FOV, player defeat, projectile, magic, AoE, boss key)",
 );

@@ -55,10 +55,13 @@ import {
 } from "./player-animation";
 import {
   type DungeonRenderCache,
+  type HeldVisibilitySnapshot,
   fogMaskBitAt,
   overlayFrameAt,
   syncDungeonRenderCache,
+  syncHeldVisibilitySnapshots,
   terrainFrameAt,
+  tileVisibleInRenderCache,
 } from "./render-cache";
 import {
   TILE_SIZE,
@@ -112,7 +115,7 @@ export type DefeatedEnemyVisual = { enemy: Enemy; removeAt: number };
 export type DefeatedCompanionVisual = {
   companion: Companion;
   revealAt: number;
-};
+} & HeldVisibilitySnapshot;
 
 export type GameAssets = {
   tiles: HTMLImageElement;
@@ -378,9 +381,14 @@ export function startDungeonRenderer({
       lastDrawAt = now;
 
       const state = gameRef.current;
-      const renderCache = syncDungeonRenderCache(
-        renderCacheRef.current!,
+      const renderCache = syncHeldVisibilitySnapshots(
+        syncDungeonRenderCache(
+          renderCacheRef.current!,
+          state,
+        ),
         state,
+        defeatedCompanionVisualRef.current,
+        now,
       );
       const revealAll = developerModeRef.current;
       context.imageSmoothingEnabled = false;
@@ -627,7 +635,10 @@ export function startDungeonRenderer({
         const hiddenUntil = hiddenGroundItemUntilRef.current.get(item.id);
         if (hiddenUntil !== undefined && now < hiddenUntil) return;
         if (!inViewport(item.x, item.y)) return;
-        if (!revealAll && !state.tiles[item.y][item.x].visible) return;
+        if (
+          !revealAll &&
+          !tileVisibleInRenderCache(renderCache, item.x, item.y)
+        ) return;
         const definition = ITEM_DEFS[item.defId];
         const offset = itemSpriteOffset(item.defId);
         const bob = Math.sin(now / 270 + item.x) * zoom;
@@ -693,7 +704,8 @@ export function startDungeonRenderer({
         if (
           !inViewport(object.x, object.y) ||
           object.looted ||
-          (!revealAll && !state.tiles[object.y][object.x].visible)
+          (!revealAll &&
+            !tileVisibleInRenderCache(renderCache, object.x, object.y))
         ) return;
         const definition = OBJECT_SPRITES[object.kind];
         const bob = Math.sin(now / 420 + object.x * 0.7) * 0.5 * zoom;
@@ -712,7 +724,10 @@ export function startDungeonRenderer({
 
       (state.questNpcs ?? []).forEach((npc) => {
         if (!inViewport(npc.x, npc.y)) return;
-        if (!revealAll && !state.tiles[npc.y]?.[npc.x]?.visible) return;
+        if (
+          !revealAll &&
+          !tileVisibleInRenderCache(renderCache, npc.x, npc.y)
+        ) return;
         const definition = COMPANION_PRESENTATIONS[npc.classId];
         const frameWithinTier =
           COMPANION_IDLE_FRAMES[Math.floor(now / 210) % COMPANION_IDLE_FRAMES.length];
@@ -762,7 +777,7 @@ export function startDungeonRenderer({
           if (
             !inViewport(cloudTile.x, cloudTile.y) ||
             !revealAll &&
-            !state.tiles[cloudTile.y]?.[cloudTile.x]?.visible
+            !tileVisibleInRenderCache(renderCache, cloudTile.x, cloudTile.y)
           ) continue;
           const drawX = screenX(cloudTile.x * TILE_SIZE);
           const drawY = screenY(cloudTile.y * TILE_SIZE);
@@ -796,7 +811,10 @@ export function startDungeonRenderer({
       }
       for (const ward of state.wards ?? []) {
         if (!inViewport(ward.x, ward.y)) continue;
-        if (!revealAll && !state.tiles[ward.y]?.[ward.x]?.visible) continue;
+        if (
+          !revealAll &&
+          !tileVisibleInRenderCache(renderCache, ward.x, ward.y)
+        ) continue;
         const centerX = screenX(ward.x * TILE_SIZE + TILE_SIZE / 2);
         const centerY = screenY(ward.y * TILE_SIZE + TILE_SIZE / 2);
         context.save();
@@ -959,7 +977,10 @@ export function startDungeonRenderer({
 
       const drawEnemy = (enemy: Enemy) => {
         if (!inViewport(enemy.x, enemy.y)) return;
-        if (!revealAll && !state.tiles[enemy.y][enemy.x].visible) return;
+        if (
+          !revealAll &&
+          !tileVisibleInRenderCache(renderCache, enemy.x, enemy.y)
+        ) return;
         const sprite = ENEMY_SPRITES[enemy.kind];
         const visual = interpolate(enemy.id, enemy, now);
         let frames = sprite.idle;
@@ -1093,7 +1114,10 @@ export function startDungeonRenderer({
         if (!pending || !state.tiles[enemy.y]?.[enemy.x]?.discovered) continue;
         const pulse = 0.24 + (Math.sin(now / 170) + 1) * 0.08;
         for (const point of pending.affectedTiles) {
-          if (!state.tiles[point.y]?.[point.x]?.visible || !inViewport(point.x, point.y)) continue;
+          if (
+            !tileVisibleInRenderCache(renderCache, point.x, point.y) ||
+            !inViewport(point.x, point.y)
+          ) continue;
           context.fillStyle = `rgba(255, 48, 48, ${pulse})`;
           context.fillRect(
             screenX(point.x * TILE_SIZE),
@@ -1122,7 +1146,7 @@ export function startDungeonRenderer({
         if (!inViewport(companion.x, companion.y)) return;
         if (
           !revealAll &&
-          !state.tiles[companion.y]?.[companion.x]?.visible
+          !tileVisibleInRenderCache(renderCache, companion.x, companion.y)
         ) {
           return;
         }
@@ -1666,7 +1690,7 @@ export function startDungeonRenderer({
           if (releaseProgress >= 1) return false;
           if (
             !revealAll &&
-            !state.tiles[signal.y]?.[signal.x]?.visible
+            !tileVisibleInRenderCache(renderCache, signal.x, signal.y)
           ) {
             return true;
           }
@@ -1686,7 +1710,7 @@ export function startDungeonRenderer({
         if (progress >= 1) return false;
         if (
           !revealAll &&
-          !state.tiles[signal.y]?.[signal.x]?.visible
+          !tileVisibleInRenderCache(renderCache, signal.x, signal.y)
         ) return true;
         const rise = Math.sin(progress * Math.PI) * 8 * zoom;
         const fade =
