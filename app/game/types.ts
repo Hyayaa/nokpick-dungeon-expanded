@@ -873,6 +873,10 @@ export type CombatEffect = Point & {
   color: string;
   kind?: CombatEffectKind;
   sourceId?: string;
+  /** Visual action whose impact starts this effect's presentation timeline. */
+  timingSourceId?: string;
+  /** Number of on-death links between the visual action and this effect. */
+  deathChainDepth?: number;
 };
 
 export type StatusSignal = Point & {

@@ -25,6 +25,7 @@
     "test:enemy-combat": "node --import tsx scripts/enemy-combat-smoke.ts",
     "test:boss": "node --import tsx scripts/boss-encounter-smoke.ts",
     "test:dungeon-progression": "node --import tsx scripts/dungeon-progression-smoke.ts",
+    "test:death-timing": "node --import tsx scripts/death-event-timing-smoke.ts",
     "test:companion-skills": "node --import tsx scripts/companion-skill-regression-smoke.ts",
     "test:materials": "node --import tsx scripts/material-currency-regression-smoke.ts",
     "test:perf": "node --import tsx scripts/performance-smoke.ts",

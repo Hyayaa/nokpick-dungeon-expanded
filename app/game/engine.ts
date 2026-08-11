@@ -2119,19 +2119,36 @@ const removeDefeatedEnemies = (
       enemy.hp = enemy.maxHp;
     }
   });
-  state.enemies.forEach((enemy) => resolveEnemyDeathMechanics(state, enemy, effects));
+  const killingEffectFor = (enemy: Enemy) =>
+    [...effects]
+      .reverse()
+      .find(
+        (effect) =>
+          effect.x === enemy.x &&
+          effect.y === enemy.y &&
+          (effect.kind === "damage" || effect.kind === "blocked"),
+      );
+  const resolvedDeathMechanics = new Set<string>();
+  while (true) {
+    const enemy = state.enemies.find(
+      (candidate) =>
+        candidate.hp <= 0 && !resolvedDeathMechanics.has(candidate.id),
+    );
+    if (!enemy) break;
+    const killingEffect = killingEffectFor(enemy);
+    resolveEnemyDeathMechanics(state, enemy, effects, {
+      timingSourceId:
+        killingEffect?.timingSourceId ?? killingEffect?.sourceId ?? sourceId,
+      deathChainDepth: killingEffect?.deathChainDepth ?? 0,
+    });
+    if (enemy.hp <= 0) resolvedDeathMechanics.add(enemy.id);
+  }
   const defeated = state.enemies.filter((enemy) => enemy.hp <= 0);
   defeated.forEach((enemy) => {
-    const resolvedSourceId =
-      sourceId ??
-      [...effects]
-        .reverse()
-        .find(
-          (effect) =>
-            effect.x === enemy.x &&
-            effect.y === enemy.y &&
-            (effect.kind === "damage" || effect.kind === "blocked"),
-        )?.sourceId;
+    const killingEffect = killingEffectFor(enemy);
+    const resolvedSourceId = killingEffect?.sourceId ?? sourceId;
+    const timingSourceId =
+      killingEffect?.timingSourceId ?? resolvedSourceId;
     gainXp(state, enemy.xp);
     const momentumHealing = Math.min(
       augmentRank(state.player, "lethalMomentum"),
@@ -2153,6 +2170,8 @@ const removeDefeatedEnemies = (
       color: "#ffd56a",
       kind: "defeat",
       sourceId: resolvedSourceId,
+      timingSourceId,
+      deathChainDepth: killingEffect?.deathChainDepth ?? 0,
     });
     if ((enemy.goldDrop ?? 0) > 0) {
       state.groundItems.push({
@@ -9037,6 +9056,7 @@ export function zapWand(
       : defId.includes("regrowth") ? "#6fd06a"
       : "#c3a5ff",
     secondaryColor: "#ffffff",
+    sourceId: `wand-${defId}`,
   }];
 
   if (defId === "wand_magic_missile" && primary) {
