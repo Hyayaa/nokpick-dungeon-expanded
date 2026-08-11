@@ -6335,11 +6335,11 @@ kbd {
   overflow-y: auto;
 }
 
-.prep-companion-portrait-button[draggable="true"] {
+.preparation-owner-card[draggable="true"] {
   cursor: grab;
 }
 
-.prep-companion-portrait-button[draggable="true"]:active {
+.preparation-owner-card[draggable="true"]:active {
   cursor: grabbing;
 }
 

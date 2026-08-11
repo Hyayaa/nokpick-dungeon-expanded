@@ -502,7 +502,6 @@ type PendingItemSlotDrag = {
 };
 
 const ITEM_DRAG_MOVE_THRESHOLD = 5;
-const ITEM_DRAG_LONG_PRESS_MS = 280;
 const TOUCH_ITEM_DRAG_LONG_PRESS_MS = 200;
 
 const upgradeTargetVisualKey = (target: UpgradeTarget) => {
@@ -1095,6 +1094,105 @@ function useItemSlotDrag(
     }
   }, []);
 
+  const trackPointer = useCallback((
+    pointerId: number,
+    clientX: number,
+    clientY: number,
+    preventDefault: () => void,
+  ) => {
+    const pending = pendingRef.current;
+    if (pending?.pointerId === pointerId) {
+      pending.clientX = clientX;
+      pending.clientY = clientY;
+      if (
+        pending.pointerType !== "touch" &&
+        Math.hypot(
+          clientX - pending.startClientX,
+          clientY - pending.startClientY,
+        ) >= ITEM_DRAG_MOVE_THRESHOLD
+      ) {
+        activatePendingDrag(pending);
+      }
+    }
+    if (heldRef.current?.pointerId !== pointerId) return;
+    const next = {
+      ...heldRef.current,
+      clientX,
+      clientY,
+    };
+    heldRef.current = next;
+    setHeld(next);
+    preventDefault();
+  }, [activatePendingDrag]);
+
+  const finishPointer = useCallback((
+    pointerId: number,
+    clientX: number,
+    clientY: number,
+    preventDefault: () => void,
+  ) => {
+    const pending = pendingRef.current;
+    if (pending?.pointerId === pointerId) {
+      window.clearTimeout(pending.timer);
+      pendingRef.current = null;
+    }
+    const active = heldRef.current;
+    if (!active || active.pointerId !== pointerId) return;
+    const targetElement = document
+      .elementFromPoint(clientX, clientY)
+      ?.closest<HTMLElement>("[data-item-slot-address]");
+    const target = parseItemSlotAddress(
+      targetElement?.dataset.itemSlotAddress,
+    );
+    suppressClickRef.current = true;
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+    clearDrag();
+    if (
+      target &&
+      itemSlotAddressKey(target) !== itemSlotAddressKey(active.source)
+    ) {
+      void onDrop(active, target);
+    }
+    preventDefault();
+  }, [clearDrag, onDrop]);
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      trackPointer(
+        event.pointerId,
+        event.clientX,
+        event.clientY,
+        () => event.preventDefault(),
+      );
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      finishPointer(
+        event.pointerId,
+        event.clientX,
+        event.clientY,
+        () => event.preventDefault(),
+      );
+    };
+    const onPointerCancel = (event: PointerEvent) => {
+      if (
+        pendingRef.current?.pointerId === event.pointerId ||
+        heldRef.current?.pointerId === event.pointerId
+      ) {
+        clearDrag();
+      }
+    };
+    window.addEventListener("pointermove", onPointerMove, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerCancel, true);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerCancel, true);
+    };
+  }, [clearDrag, finishPointer, trackPointer]);
+
   const containerProps = {
     onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
       if (event.button !== 0 || pendingRef.current || heldRef.current) return;
@@ -1118,71 +1216,13 @@ function useItemSlotDrag(
         timer: 0,
         container,
       };
-      pending.timer = window.setTimeout(() => {
-        activatePendingDrag(pending);
-      }, event.pointerType === "touch"
-        ? TOUCH_ITEM_DRAG_LONG_PRESS_MS
-        : ITEM_DRAG_LONG_PRESS_MS);
+      if (event.pointerType === "touch") {
+        pending.timer = window.setTimeout(() => {
+          activatePendingDrag(pending);
+        }, TOUCH_ITEM_DRAG_LONG_PRESS_MS);
+      }
       pendingRef.current = pending;
     },
-    onPointerMove: (event: ReactPointerEvent<HTMLElement>) => {
-      const pending = pendingRef.current;
-      if (pending?.pointerId === event.pointerId) {
-        pending.clientX = event.clientX;
-        pending.clientY = event.clientY;
-        if (
-          pending.pointerType !== "touch" &&
-          Math.hypot(
-            event.clientX - pending.startClientX,
-            event.clientY - pending.startClientY,
-          ) >= ITEM_DRAG_MOVE_THRESHOLD
-        ) {
-          activatePendingDrag(pending);
-        }
-      }
-      if (heldRef.current?.pointerId !== event.pointerId) return;
-      const next = {
-        ...heldRef.current,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      };
-      heldRef.current = next;
-      setHeld(next);
-      event.preventDefault();
-    },
-    onPointerUp: (event: ReactPointerEvent<HTMLElement>) => {
-      const pending = pendingRef.current;
-      if (pending?.pointerId === event.pointerId) {
-        window.clearTimeout(pending.timer);
-        pendingRef.current = null;
-      }
-      const active = heldRef.current;
-      if (!active || active.pointerId !== event.pointerId) return;
-      const targetElement = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest<HTMLElement>("[data-item-slot-address]");
-      const target = parseItemSlotAddress(
-        targetElement?.dataset.itemSlotAddress,
-      );
-      suppressClickRef.current = true;
-      window.setTimeout(() => {
-        suppressClickRef.current = false;
-      }, 0);
-      clearDrag();
-      if (
-        target &&
-        itemSlotAddressKey(target) !== itemSlotAddressKey(active.source)
-      ) {
-        void onDrop(active, target);
-      }
-      try {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      } catch {
-        // Capture may already have been released by the browser.
-      }
-      event.preventDefault();
-    },
-    onPointerCancel: () => clearDrag(),
     onLostPointerCapture: () => {
       if (heldRef.current) clearDrag();
     },
@@ -1504,7 +1544,7 @@ const setCompanionDragData = (
   event.dataTransfer.setData(COMPANION_DRAG_TYPE, companionId);
   event.dataTransfer.effectAllowed = effectAllowed;
   const dragImage = event.currentTarget.querySelector<HTMLElement>(
-    ".pixel-sprite-frame",
+    ".pixel-sprite-frame > i",
   );
   if (!dragImage) return;
   const bounds = dragImage.getBoundingClientRect();
@@ -1604,6 +1644,10 @@ function CampaignCompanionEquipmentRoster({
                 COMPANION_IDLE_FRAMES[0],
               )
             : PLAYER_IDLE_FRAMES[0];
+          const companionDragEffect = onTrainingSelect ? "copy" : "move";
+          const canDragCompanion = Boolean(
+            onCompanionToggle || onTrainingSelect,
+          );
           return (
             <article
               className={[
@@ -1614,6 +1658,43 @@ function CampaignCompanionEquipmentRoster({
                 placement === "training" ? "is-training" : "",
               ].filter(Boolean).join(" ")}
               key={`${placement}-${companion.id}`}
+              draggable={canDragCompanion}
+              onPointerDownCapture={(event) => {
+                if (
+                  (event.target as HTMLElement).closest(
+                    "[data-item-slot-address]",
+                  )
+                ) {
+                  event.currentTarget.dataset.companionDragBlocked = "true";
+                } else {
+                  delete event.currentTarget.dataset.companionDragBlocked;
+                }
+              }}
+              onPointerUpCapture={(event) => {
+                delete event.currentTarget.dataset.companionDragBlocked;
+              }}
+              onPointerCancelCapture={(event) => {
+                delete event.currentTarget.dataset.companionDragBlocked;
+              }}
+              onDragStart={(event) => {
+                if (
+                  event.currentTarget.dataset.companionDragBlocked === "true" ||
+                  (event.target as HTMLElement).closest(
+                    "[data-item-slot-address]",
+                  )
+                ) {
+                  delete event.currentTarget.dataset.companionDragBlocked;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                delete event.currentTarget.dataset.companionDragBlocked;
+                setCompanionDragData(
+                  event,
+                  companion.id,
+                  companionDragEffect,
+                );
+              }}
               onDoubleClick={() => {
                 if (placement === "training") onTrainingSelect?.(companion.id);
               }}
@@ -1622,18 +1703,6 @@ function CampaignCompanionEquipmentRoster({
                 <button
                   type="button"
                   className="prep-companion-portrait-button"
-                  draggable={
-                    placement === "party" ||
-                    placement === "reserve" ||
-                    placement === "training"
-                  }
-                  onDragStart={(event) =>
-                    setCompanionDragData(
-                      event,
-                      companion.id,
-                      placement === "training" ? "copy" : "move",
-                    )
-                  }
                   onClick={(event) =>
                     setCompanionPreview({
                       companion,

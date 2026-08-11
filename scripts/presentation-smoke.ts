@@ -214,7 +214,7 @@ assert.doesNotMatch(
 );
 assert.match(
   dungeonGameSource,
-  /document[\s\S]*\.elementFromPoint\(event\.clientX, event\.clientY\)/,
+  /document[\s\S]*\.elementFromPoint\(clientX, clientY\)/,
   "drop targeting must continue to use viewport pointer coordinates",
 );
 assert.match(
@@ -227,6 +227,11 @@ assert.match(
   /const ITEM_DRAG_MOVE_THRESHOLD = 5;[\s\S]*const TOUCH_ITEM_DRAG_LONG_PRESS_MS = 200;/,
   "mouse movement must activate item dragging at five pixels while touch keeps a short long press",
 );
+assert.doesNotMatch(
+  dungeonGameSource,
+  /\bITEM_DRAG_LONG_PRESS_MS\b/,
+  "mouse and pen item dragging must never use a long-press fallback",
+);
 assert.match(
   dungeonGameSource,
   /const activatePendingDrag[\s\S]*clientX: pending\.clientX,[\s\S]*clientY: pending\.clientY,[\s\S]*setPointerCapture/,
@@ -234,8 +239,18 @@ assert.match(
 );
 assert.match(
   dungeonGameSource,
-  /onPointerMove:[\s\S]*pending\.clientX = event\.clientX;[\s\S]*pending\.pointerType !== "touch"[\s\S]*Math\.hypot\([\s\S]*ITEM_DRAG_MOVE_THRESHOLD[\s\S]*activatePendingDrag\(pending\)/,
-  "mouse and pen movement beyond the threshold must activate dragging immediately",
+  /const trackPointer[\s\S]*pending\.clientX = clientX;[\s\S]*pending\.pointerType !== "touch"[\s\S]*Math\.hypot\([\s\S]*ITEM_DRAG_MOVE_THRESHOLD[\s\S]*activatePendingDrag\(pending\)/,
+  "mouse and pen movement beyond the threshold must activate dragging immediately at the latest coordinates",
+);
+assert.match(
+  dungeonGameSource,
+  /window\.addEventListener\("pointermove", onPointerMove, true\);[\s\S]*window\.addEventListener\("pointerup", onPointerUp, true\);[\s\S]*window\.addEventListener\("pointercancel", onPointerCancel, true\);/,
+  "Preparation, Dungeon, Shop, and Blacksmith must share capture-level pointer tracking",
+);
+assert.match(
+  dungeonGameSource,
+  /if \(event\.pointerType === "touch"\) \{[\s\S]*TOUCH_ITEM_DRAG_LONG_PRESS_MS/,
+  "only touch item dragging may schedule long-press activation",
 );
 assert.equal(
   (dungeonGameSource.match(/new GameAudioRuntime\(\)/g) ?? []).length,
@@ -271,18 +286,28 @@ assert.match(
 );
 assert.match(
   dungeonGameSource,
-  /const setCompanionDragData[\s\S]*setData\(COMPANION_DRAG_TYPE[\s\S]*querySelector<HTMLElement>\([\s\S]*\.pixel-sprite-frame[\s\S]*setDragImage\(dragImage, bounds\.width \/ 2, bounds\.height \/ 2\)/,
+  /const setCompanionDragData[\s\S]*setData\(COMPANION_DRAG_TYPE[\s\S]*querySelector<HTMLElement>\([\s\S]*\.pixel-sprite-frame > i[\s\S]*setDragImage\(dragImage, bounds\.width \/ 2, bounds\.height \/ 2\)/,
   "Training and Preparation companion drags must share a centered sprite-only drag image",
 );
-assert.doesNotMatch(
+assert.match(
   companionOwnerOpeningTag,
-  /draggable=/,
-  "the companion equipment card must not own companion dragging",
+  /draggable=\{canDragCompanion\}/,
+  "the full companion card must own companion dragging when the roster enables it",
 );
 assert.match(
   companionRosterSource,
-  /className="prep-companion-portrait-button"[\s\S]*draggable=\{[\s\S]*placement === "party"[\s\S]*placement === "reserve"[\s\S]*placement === "training"[\s\S]*setCompanionDragData/,
-  "only the companion portrait must be draggable in Training and Preparation",
+  /const canDragCompanion = Boolean\([\s\S]*onCompanionToggle \|\| onTrainingSelect[\s\S]*onPointerDownCapture[\s\S]*\[data-item-slot-address\][\s\S]*companionDragBlocked[\s\S]*onDragStart=\{\(event\)[\s\S]*companionDragBlocked === "true"[\s\S]*event\.preventDefault\(\);[\s\S]*setCompanionDragData/,
+  "Training and Preparation cards must drag from all non-item areas while equipment slots keep item priority",
+);
+assert.doesNotMatch(
+  companionRosterSource,
+  /className="prep-companion-portrait-button"[\s\S]{0,160}draggable=/,
+  "the portrait button must not be a separate native drag source",
+);
+assert.match(
+  dungeonCssSource,
+  /\.preparation-owner-card\[draggable="true"\][\s\S]*cursor:\s*grab;[\s\S]*\.preparation-owner-card\[draggable="true"\]:active[\s\S]*cursor:\s*grabbing;/,
+  "the full companion drag surface must expose grab feedback",
 );
 assert.match(
   companionRosterSource,
