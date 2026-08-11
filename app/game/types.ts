@@ -280,7 +280,13 @@ export type EquipmentTraitId =
   | "swift"
   | "focused"
   | "charged"
-  | "balanced";
+  | "balanced"
+  | "lethal"
+  | "devastating"
+  | "vampiric"
+  | "piercing"
+  | "quickened"
+  | "resistant";
 
 export type EquipmentTrait = {
   id: EquipmentTraitId;
