@@ -107,6 +107,7 @@ export type ItemEffect =
   | "mapping"
   | "teleport"
   | "upgrade"
+  | "enchant"
   | "rage"
   | "experience"
   | "cleanse"
@@ -277,7 +278,6 @@ export type ItemDefinition = {
 export type EquipmentTraitId =
   | "keen"
   | "guarded"
-  | "swift"
   | "focused"
   | "charged"
   | "balanced"

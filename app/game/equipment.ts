@@ -88,13 +88,6 @@ export const EQUIPMENT_TRAITS: Record<
     description: "등급에 따라 방어력이 증가합니다",
     accent: "#78b8da",
   },
-  swift: {
-    id: "swift",
-    name: "신속",
-    nameEn: "Swift",
-    description: "등급에 따라 이동·공격 속도가 증가합니다",
-    accent: "#91d6a1",
-  },
   focused: {
     id: "focused",
     name: "집중",
@@ -166,7 +159,7 @@ export const COMBAT_STAT_ENCHANTMENT_VALUES: Record<
 > = {
   lethal: { F: 0.02, E: 0.04, D: 0.06, C: 0.09, B: 0.12, A: 0.18, S: 0.25 },
   devastating: { F: 0.01, E: 0.02, D: 0.04, C: 0.08, B: 0.16, A: 0.32, S: 0.64 },
-  vampiric: { B: 0.08, A: 0.16, S: 0.32 },
+  vampiric: { B: 0.06, A: 0.09, S: 0.12 },
   piercing: { F: 0.01, E: 0.02, D: 0.04, C: 0.08, B: 0.16, A: 0.32, S: 0.64 },
   quickened: { F: 0.005, E: 0.01, D: 0.02, C: 0.04, B: 0.08, A: 0.16, S: 0.32 },
   resistant: { F: 0.01, E: 0.02, D: 0.04, C: 0.08, B: 0.16, A: 0.32, S: 0.64 },
@@ -200,6 +193,16 @@ export const UPGRADEABLE_ITEM_CATEGORIES = new Set<ItemCategory>([
   "artifact",
   "ring",
 ]);
+
+export const MAX_EQUIPMENT_ENCHANTMENTS = 3;
+export const UPGRADE_SCROLL_ENCHANTMENT_CHANCE = 0.2;
+
+export type EquipmentConsumableId = "scroll_upgrade" | "scroll_identify";
+
+export const isEquipmentConsumableId = (
+  value: string,
+): value is EquipmentConsumableId =>
+  value === "scroll_upgrade" || value === "scroll_identify";
 
 export const isUpgradeableEquipment = (
   definition: ItemDefinition | undefined,
@@ -333,13 +336,12 @@ export function equipmentStatProfile(
   const guarded = traitPower(instance, "guarded");
   const focused = traitPower(instance, "focused");
   const balanced = traitPower(instance, "balanced");
-  const swift = traitPower(instance, "swift");
   const combatStats = equipmentCombatStatProfile(instance);
   const baseMoveSpeed = 1 + ((definition.moveSpeed ?? 1) - 1) * gradeMultiplier;
   const baseAttackSpeed = 1 +
     ((definition.attackSpeed ?? 1) - 1) * gradeMultiplier;
-  const moveSpeed = Math.max(0.25, baseMoveSpeed * (1 + swift * 0.05));
-  const attackSpeed = Math.max(0.25, baseAttackSpeed * (1 + swift * 0.05));
+  const moveSpeed = Math.max(0.25, baseMoveSpeed);
+  const attackSpeed = Math.max(0.25, baseAttackSpeed);
   return {
     attack: Math.max(
       0,
@@ -397,22 +399,22 @@ export const availableEquipmentTraits = (
   const candidates: EquipmentTraitId[] = (() => {
     switch (definition.category) {
     case "weapon":
-      return ["keen", "balanced", "swift", "lethal", "devastating", "vampiric", "piercing"];
+      return ["keen", "balanced", "lethal", "devastating", "vampiric", "piercing"];
     case "missile":
-      return ["keen", "swift", "lethal", "devastating", "vampiric", "piercing"];
+      return ["keen", "lethal", "devastating", "vampiric", "piercing"];
     case "armor":
-      return ["guarded", "balanced", "swift", "quickened", "resistant"];
+      return ["guarded", "balanced", "quickened", "resistant"];
     case "wand":
-      return ["focused", "charged", "swift", "lethal", "devastating", "vampiric", "piercing", "quickened"];
+      return ["focused", "charged", "lethal", "devastating", "vampiric", "piercing", "quickened"];
     case "artifact":
-      return ["focused", "guarded", "swift", "vampiric", "quickened", "resistant"];
+      return ["focused", "guarded", "vampiric", "quickened", "resistant"];
     case "ring":
       return [
-        "balanced", "keen", "guarded", "focused", "swift",
+        "balanced", "keen", "guarded", "focused",
         "lethal", "devastating", "vampiric", "piercing", "quickened", "resistant",
       ];
     default:
-      return ["swift"];
+      return [];
     }
   })();
   return vampiricAllowedAt(grade)
@@ -421,7 +423,7 @@ export const availableEquipmentTraits = (
 };
 
 const defaultTrait = (definition: ItemDefinition, grade: ItemGrade) =>
-  availableEquipmentTraits(definition, grade)[0];
+  availableEquipmentTraits(definition, grade)[0] ?? "balanced";
 
 const emptyStatRoll = (): EquipmentStatRoll => ({
   attack: 0,
@@ -484,6 +486,13 @@ export function rollEnchantmentGrade(
   return "S";
 }
 
+export function rollInitialEnchantmentCount(random: () => number) {
+  const roll = Math.max(0, Math.min(0.999999999, random()));
+  if (roll < 0.6) return 1;
+  if (roll < 0.9) return 2;
+  return 3;
+}
+
 const chargedBonus = (grade: ItemGrade) =>
   enchantmentGradePower(grade);
 
@@ -500,8 +509,8 @@ const applyChargedTrait = (
   );
 };
 
-type LegacyEquipmentTrait = Partial<EquipmentTrait> & {
-  id?: EquipmentTraitId;
+type LegacyEquipmentTrait = Partial<Omit<EquipmentTrait, "id">> & {
+  id?: EquipmentTraitId | "swift";
   rank?: number;
 };
 
@@ -523,6 +532,7 @@ export function normalizeEquipmentInstance(
     : [];
   const normalizedTraits = (legacy.traits ?? []).flatMap((trait, index) => {
     if (!trait.id) return [];
+    if (trait.id === "swift") return [];
     const traitGradeValue = index === 0
       ? grade
       : isItemGrade(trait.grade)
@@ -535,7 +545,7 @@ export function normalizeEquipmentInstance(
     }
     if (allCandidates.length && !allCandidates.includes(trait.id)) return [];
     return [{ id: trait.id, grade: traitGradeValue } satisfies EquipmentTrait];
-  });
+  }).slice(0, MAX_EQUIPMENT_ENCHANTMENTS);
   if (definition && isUpgradeableEquipment(definition) && !normalizedTraits.length) {
     normalizedTraits.push({ id: defaultTrait(definition, grade), grade });
   }
@@ -610,6 +620,10 @@ export function createEquipmentInstance(
   if (traitId === "charged") {
     applyChargedTrait(instance, definition, instance.grade!);
   }
+  const enchantmentCount = rollInitialEnchantmentCount(random);
+  while ((instance.traits?.length ?? 0) < enchantmentCount) {
+    if (!enchantEquipmentInstance(instance, definition, random)) break;
+  }
   return instance;
 }
 
@@ -643,6 +657,7 @@ export function enchantEquipmentInstance(
   const normalized = normalizeEquipmentInstance(instance, definition);
   Object.assign(instance, normalized);
   const traits = instance.traits ?? (instance.traits = []);
+  if (traits.length >= MAX_EQUIPMENT_ENCHANTMENTS) return null;
   const grade = traits.length === 0
     ? normalizeItemGrade(instance.grade)
     : rollEnchantmentGrade(normalizeItemGrade(instance.grade), random);
@@ -662,6 +677,76 @@ export function upgradeEquipmentInstance(
   const grade = normalizeItemGrade(instance.grade);
   instance.upgradeLevel = Math.max(0, (instance.upgradeLevel ?? 0) + amount);
   instance.grade = grade;
+}
+
+export const canApplyEquipmentConsumable = (
+  consumableId: EquipmentConsumableId,
+  definition: ItemDefinition | undefined,
+  instance: InventoryInstance | null | undefined,
+) => Boolean(
+  instance &&
+  isUpgradeableEquipment(definition) &&
+  (consumableId === "scroll_upgrade" ||
+    (instance.traits?.length ?? 0) < MAX_EQUIPMENT_ENCHANTMENTS),
+);
+
+export type EquipmentConsumableApplication = {
+  changed: boolean;
+  upgraded: boolean;
+  traitId: EquipmentTraitId | null;
+  reason: "ok" | "invalid-target" | "maximum-enchantments";
+};
+
+export function applyEquipmentConsumableToInstance(
+  instance: InventoryInstance,
+  definition: ItemDefinition,
+  consumableId: EquipmentConsumableId,
+  random: () => number,
+): EquipmentConsumableApplication {
+  if (!isUpgradeableEquipment(definition)) {
+    return {
+      changed: false,
+      upgraded: false,
+      traitId: null,
+      reason: "invalid-target",
+    };
+  }
+  if (
+    consumableId === "scroll_identify" &&
+    (instance.traits?.length ?? 0) >= MAX_EQUIPMENT_ENCHANTMENTS
+  ) {
+    return {
+      changed: false,
+      upgraded: false,
+      traitId: null,
+      reason: "maximum-enchantments",
+    };
+  }
+
+  if (consumableId === "scroll_identify") {
+    const traitId = enchantEquipmentInstance(instance, definition, random);
+    return traitId
+      ? { changed: true, upgraded: false, traitId, reason: "ok" }
+      : {
+          changed: false,
+          upgraded: false,
+          traitId: null,
+          reason: "maximum-enchantments",
+        };
+  }
+
+  upgradeEquipmentInstance(instance);
+  const traitId =
+    (instance.traits?.length ?? 0) < MAX_EQUIPMENT_ENCHANTMENTS &&
+      random() < UPGRADE_SCROLL_ENCHANTMENT_CHANCE
+      ? enchantEquipmentInstance(instance, definition, random)
+      : null;
+  return {
+    changed: true,
+    upgraded: true,
+    traitId,
+    reason: "ok",
+  };
 }
 
 const formatPower = (value: number) =>
@@ -687,7 +772,6 @@ const traitDescriptions = (id: EquipmentTraitId, grade: ItemGrade) => {
   }
   const power = enchantmentGradePower(grade);
   const value = formatPower(power);
-  const speed = formatPower(power * 5);
   const charges = chargedBonus(grade);
   switch (id) {
     case "keen":
@@ -700,11 +784,6 @@ const traitDescriptions = (id: EquipmentTraitId, grade: ItemGrade) => {
       return {
         ko: `공격력·방어력 +${value}`,
         en: `Attack and defense +${value}`,
-      };
-    case "swift":
-      return {
-        ko: `이동·공격 속도 +${speed}%`,
-        en: `Move and attack speed +${speed}%`,
       };
     case "charged":
       return {

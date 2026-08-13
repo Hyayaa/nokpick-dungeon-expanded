@@ -94,10 +94,12 @@ import {
 } from "./enemy-combat";
 import {
   EQUIPMENT_TRAITS,
+  applyEquipmentConsumableToInstance,
   createEquipmentInstance,
   createPlainEquipmentInstance,
   enchantEquipmentInstance,
   equipmentStatProfile,
+  isEquipmentConsumableId,
   isUpgradeableEquipment,
   upgradeEquipmentInstance,
 } from "./equipment";
@@ -2169,7 +2171,7 @@ export function chooseAugment(state: GameState, id: AugmentId): GameState {
       enchantEquippedDirect(
         next,
         target,
-        random(next) < 0.5 ? "focused" : "swift",
+        random(next) < 0.5 ? "focused" : "quickened",
       );
     }
   } else if (id === "runicTemper") {
@@ -7631,9 +7633,14 @@ export function useItem(state: GameState, defId: string): ActionResult {
   }
   const incapacitated = consumeIncapacitatedPlayerTurn(state);
   if (incapacitated) return incapacitated;
-  if (defId === "scroll_upgrade") {
+  if (isEquipmentConsumableId(defId)) {
     const next = cloneGameWithoutTiles(state);
-    pushLog(next, "강화의 주문서를 적용할 장비를 선택하세요.");
+    pushLog(
+      next,
+      defId === "scroll_upgrade"
+        ? "강화의 주문서를 적용할 장비를 선택하세요."
+        : "인챈트 주문서를 적용할 장비를 선택하세요.",
+    );
     return { state: next, motions: [], effects: [], consumedTurn: false };
   }
 
@@ -7767,9 +7774,6 @@ export function useItem(state: GameState, defId: string): ActionResult {
     const gained = Math.max(8, Math.ceil(next.player.nextXp * 0.8));
     gainXp(next, gained);
     pushLog(next, "신성한 영감이 원정대에 풍부한 경험을 전해 줍니다.");
-  } else if (defId === "scroll_identify") {
-    updatePlayerFieldOfView(next, true);
-    pushLog(next, "보유한 물품의 성질과 현재 층의 지형을 완전히 파악했습니다.");
   } else if (defId === "scroll_transmutation") {
     const candidates = Object.keys(next.player.inventory).filter(
       (itemId) =>
@@ -7895,7 +7899,8 @@ export function useItem(state: GameState, defId: string): ActionResult {
           `${result.definition.name}에 ${EQUIPMENT_TRAITS[result.traitId].name} 특성이 새겨졌습니다.`,
         );
       } else {
-        pushLog(next, "마법을 부여할 장착 무기가 없습니다.");
+        pushLog(next, "이 장비에는 더 이상 인챈트를 추가할 수 없습니다.");
+        return { state: next, motions, effects, consumedTurn: false };
       }
     } else {
       pushLog(next, "마법을 부여할 장착 무기가 없습니다.");
@@ -8729,7 +8734,7 @@ const enchantingMaterial = (player: Player) =>
 export const hasEnchantingMaterial = (player: Player) =>
   enchantingMaterial(player) !== null;
 
-export function upgradeItemWithScroll(
+export function applyEquipmentConsumable(
   state: GameState,
   scrollItemRef: string,
   target: UpgradeTarget,
@@ -8737,8 +8742,8 @@ export function upgradeItemWithScroll(
   const scroll = resolveInventoryItem(state.player, scrollItemRef);
   if (
     state.gameOver ||
-    scroll.defId !== "scroll_upgrade" ||
-    (state.player.inventory.scroll_upgrade ?? 0) <= 0
+    !isEquipmentConsumableId(scroll.defId) ||
+    (state.player.inventory[scroll.defId] ?? 0) <= 0
   ) {
     return { state, motions: [], effects: [], consumedTurn: false };
   }
@@ -8808,12 +8813,34 @@ export function upgradeItemWithScroll(
     return { state: next, motions: [], effects: [], consumedTurn: false };
   }
 
-  upgradeEquipmentInstance(instance);
-  removeInventoryItem(next, scrollItemRef);
-  pushLog(
-    next,
-    `${definition.name}이(가) +${instance.upgradeLevel ?? 0} 장비로 강화되었습니다.`,
+  const application = applyEquipmentConsumableToInstance(
+    instance,
+    definition,
+    scroll.defId,
+    () => random(next),
   );
+  if (!application.changed) {
+    pushLog(
+      next,
+      application.reason === "maximum-enchantments"
+        ? "이 장비에는 더 이상 인챈트를 추가할 수 없습니다."
+        : "주문서를 적용할 수 있는 장비를 선택해야 합니다.",
+    );
+    return { state: next, motions: [], effects: [], consumedTurn: false };
+  }
+  removeInventoryItem(next, scrollItemRef);
+  if (application.upgraded) {
+    pushLog(
+      next,
+      `${definition.name}이(가) +${instance.upgradeLevel ?? 0} 장비로 강화되었습니다.`,
+    );
+  }
+  if (application.traitId) {
+    pushLog(
+      next,
+      `새로운 ${EQUIPMENT_TRAITS[application.traitId].name} 인챈트가 깃들었습니다.`,
+    );
+  }
   const elapsedTurns = spendPlayerTime(next, 1);
   return {
     state: next,
@@ -8826,6 +8853,14 @@ export function upgradeItemWithScroll(
     enchanted: true,
     soundCues: [{ id: "read", atResolution: true }],
   };
+}
+
+export function upgradeItemWithScroll(
+  state: GameState,
+  scrollItemRef: string,
+  target: UpgradeTarget,
+): ActionResult {
+  return applyEquipmentConsumable(state, scrollItemRef, target);
 }
 
 const enchantActionResult = (

@@ -23,15 +23,20 @@ import {
   resolveCriticalDamage,
 } from "../app/game/combat-stats";
 import {
+  EQUIPMENT_TRAITS,
+  MAX_EQUIPMENT_ENCHANTMENTS,
+  applyEquipmentConsumableToInstance,
   availableEquipmentTraits,
   combatStatEnchantmentBonus,
   createEquipmentInstance,
+  createPlainEquipmentInstance,
   enchantEquipmentInstance,
   enchantmentGradeChances,
   enchantmentGradePower,
   equipmentStatProfile,
   equipmentTraitSummary,
   normalizeEquipmentInstance,
+  rollInitialEnchantmentCount,
 } from "../app/game/equipment";
 import { ITEM_DEFS } from "../app/game/data";
 import { ITEM_GRADES } from "../app/game/item-grade";
@@ -179,9 +184,9 @@ assert.equal(combatStatEnchantmentBonus("vampiric", "F"), 0);
 assert.equal(combatStatEnchantmentBonus("vampiric", "E"), 0);
 assert.equal(combatStatEnchantmentBonus("vampiric", "D"), 0);
 assert.equal(combatStatEnchantmentBonus("vampiric", "C"), 0);
-assert.equal(combatStatEnchantmentBonus("vampiric", "B"), 0.08);
-assert.equal(combatStatEnchantmentBonus("vampiric", "A"), 0.16);
-assert.equal(combatStatEnchantmentBonus("vampiric", "S"), 0.32);
+assert.equal(combatStatEnchantmentBonus("vampiric", "B"), 0.06);
+assert.equal(combatStatEnchantmentBonus("vampiric", "A"), 0.09);
+assert.equal(combatStatEnchantmentBonus("vampiric", "S"), 0.12);
 assert.equal(combatStatEnchantmentBonus("quickened", "F"), 0.005);
 assert.equal(formatCombatPercent(0.005), "0.5%");
 assert.equal(formatCombatPercent(0.125), "12.5%");
@@ -189,6 +194,30 @@ assert.equal(formatCombatPercent(0.125), "12.5%");
 const weaponDefinition = ITEM_DEFS.shortsword;
 assert.equal(availableEquipmentTraits(weaponDefinition, "C").includes("vampiric"), false);
 assert.equal(availableEquipmentTraits(weaponDefinition, "B").includes("vampiric"), true);
+assert.equal(Object.hasOwn(EQUIPMENT_TRAITS, "swift"), false);
+assert.equal(
+  availableEquipmentTraits(weaponDefinition, "S").some((id) => String(id) === "swift"),
+  false,
+);
+
+const initialEnchantCount = (countRoll: number) => {
+  const values = [countRoll, 0, 0, 0, 0];
+  let index = 0;
+  return createEquipmentInstance(
+    weaponDefinition,
+    `initial-count-${countRoll}`,
+    () => values[Math.min(index++, values.length - 1)],
+    { grade: "C", allowCurse: false, preferredFirstTrait: "lethal" },
+  ).traits?.length;
+};
+assert.equal(rollInitialEnchantmentCount(() => 0), 1);
+assert.equal(rollInitialEnchantmentCount(() => 0.599999), 1);
+assert.equal(rollInitialEnchantmentCount(() => 0.6), 2);
+assert.equal(rollInitialEnchantmentCount(() => 0.899999), 2);
+assert.equal(rollInitialEnchantmentCount(() => 0.9), 3);
+assert.equal(initialEnchantCount(0.599999), 1);
+assert.equal(initialEnchantCount(0.6), 2);
+assert.equal(initialEnchantCount(0.9), 3);
 const lowPreferredVampiric = createEquipmentInstance(
   weaponDefinition,
   "low-preferred-vampiric",
@@ -218,6 +247,27 @@ assert.equal(
   invalidLoadedVampiric.traits?.some((trait) => trait.id === "vampiric"),
   false,
 );
+const migratedSwiftPair = normalizeEquipmentInstance(
+  {
+    ...equipmentInstance("legacy-swift-pair", weaponDefinition.id, "C", [
+      { id: "keen", grade: "C" },
+    ]),
+    traits: [
+      { id: "keen", grade: "C" },
+      { id: "swift", grade: "D" },
+    ],
+  } as unknown as InventoryInstance,
+  weaponDefinition,
+);
+assert.deepEqual(migratedSwiftPair.traits, [{ id: "keen", grade: "C" }]);
+const migratedSwiftOnly = normalizeEquipmentInstance(
+  {
+    ...equipmentInstance("legacy-swift-only", weaponDefinition.id, "C", []),
+    traits: [{ id: "swift", grade: "C" }],
+  } as unknown as InventoryInstance,
+  weaponDefinition,
+);
+assert.deepEqual(migratedSwiftOnly.traits, [{ id: "keen", grade: "C" }]);
 
 const rollInsideGrade = (itemGrade: ItemGrade, target: ItemGrade) => {
   const chances = enchantmentGradeChances(itemGrade);
@@ -262,6 +312,69 @@ enchantEquipmentInstance(
 );
 assert.deepEqual(bFollowup.traits?.[1], { id: "vampiric", grade: "B" });
 assert.equal(bFollowupRolls, 1, "valid preferred vampiric must not reroll its grade");
+const maximumTraits = equipmentInstance(
+  "maximum-traits",
+  weaponDefinition.id,
+  "C",
+  [
+    { id: "keen", grade: "C" },
+    { id: "lethal", grade: "D" },
+    { id: "piercing", grade: "E" },
+  ],
+);
+let maximumRolls = 0;
+assert.equal(
+  enchantEquipmentInstance(maximumTraits, weaponDefinition, () => {
+    maximumRolls += 1;
+    return 0;
+  }),
+  null,
+);
+assert.equal(maximumTraits.traits?.length, MAX_EQUIPMENT_ENCHANTMENTS);
+assert.equal(maximumRolls, 0);
+const upgradeProcTarget = equipmentInstance(
+  "upgrade-proc",
+  weaponDefinition.id,
+  "C",
+  [{ id: "keen", grade: "C" }],
+);
+const upgradeProcValues = [0.199999, 0, 0];
+let upgradeProcIndex = 0;
+const upgradeProc = applyEquipmentConsumableToInstance(
+  upgradeProcTarget,
+  weaponDefinition,
+  "scroll_upgrade",
+  () => upgradeProcValues[Math.min(upgradeProcIndex++, upgradeProcValues.length - 1)],
+);
+assert.equal(upgradeProc.upgraded, true);
+assert.equal(upgradeProcTarget.upgradeLevel, 1);
+assert.equal(upgradeProcTarget.traits?.length, 2);
+const fullUpgradeRollsBefore = maximumRolls;
+const fullUpgrade = applyEquipmentConsumableToInstance(
+  maximumTraits,
+  weaponDefinition,
+  "scroll_upgrade",
+  () => {
+    maximumRolls += 1;
+    return 0;
+  },
+);
+assert.equal(fullUpgrade.upgraded, true);
+assert.equal(maximumTraits.upgradeLevel, 1);
+assert.equal(maximumTraits.traits?.length, MAX_EQUIPMENT_ENCHANTMENTS);
+assert.equal(maximumRolls, fullUpgradeRollsBefore);
+const fullEnchant = applyEquipmentConsumableToInstance(
+  maximumTraits,
+  weaponDefinition,
+  "scroll_identify",
+  () => {
+    maximumRolls += 1;
+    return 0;
+  },
+);
+assert.equal(fullEnchant.changed, false);
+assert.equal(fullEnchant.reason, "maximum-enchantments");
+assert.equal(maximumRolls, fullUpgradeRollsBefore);
 assert.equal(enchantmentGradeChances("F").S, 0.002);
 assert.equal(enchantmentGradeChances("S").S, 0.1);
 assert.equal(enchantmentGradePower("F"), 1);
@@ -281,6 +394,20 @@ assert.equal(chargedWand.maxCharges, 3 + enchantmentGradePower("D"));
 assert.equal(
   equipmentTraitSummary(chargedWand)[0].description,
   `지팡이 최대 충전 +${enchantmentGradePower("D")}`,
+);
+assert.equal(
+  equipmentStatProfile(
+    ITEM_DEFS.ring_haste,
+    createPlainEquipmentInstance(ITEM_DEFS.ring_haste, "intrinsic-haste-ring", "F"),
+  ).moveSpeed,
+  1.25,
+);
+assert.equal(
+  equipmentStatProfile(
+    ITEM_DEFS.ring_furor,
+    createPlainEquipmentInstance(ITEM_DEFS.ring_furor, "intrinsic-furor-ring", "F"),
+  ).attackSpeed,
+  1.25,
 );
 const lethalSummary = equipmentTraitSummary(
   equipmentInstance("c-lethal-summary", weaponDefinition.id, "C", [

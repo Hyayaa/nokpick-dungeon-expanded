@@ -150,7 +150,7 @@ const ESSENTIAL_ITEM_DEFS: Record<string, ItemDefinition> = {
     id: "scroll_upgrade",
     name: "강화의 주문서",
     category: "scroll",
-    description: "장착 중인 무기의 힘을 영구히 높입니다.",
+    description: "장비를 +1 강화하고 20% 확률로 새로운 인챈트를 부여합니다.",
     sprite: 304,
     effect: "upgrade",
     accent: "#72dc77",
