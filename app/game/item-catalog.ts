@@ -183,7 +183,10 @@ const CATALOG: CatalogEntry[] = [
     description: "인챈트가 2줄 이하인 장비에 새로운 인챈트 한 줄을 추가합니다.",
   }],
   ["scroll_lullaby", "자장가의 주문서", "scroll", 310, { effect: "cleanse" }],
-  ["scroll_mirror_image", "거울상의 주문서", "scroll", 307, { effect: "blast", power: 4 }],
+  ["scroll_mirror_image", "인챈트 고정 주문서", "scroll", 307, {
+    effect: "enchantLock",
+    description: "대장간에서 인챈트를 변경할 때 원하는 인챈트를 고정합니다. 고정하는 인챈트 한 줄당 주문서 1개가 필요합니다.",
+  }],
   ["scroll_recharging", "충전의 주문서", "scroll", 308, { effect: "haste" }],
   ["scroll_remove_curse", "저주 해제의 주문서", "scroll", 306, { effect: "cleanse" }],
   ["scroll_retribution", "징벌의 주문서", "scroll", 313, { effect: "rage", power: 7 }],

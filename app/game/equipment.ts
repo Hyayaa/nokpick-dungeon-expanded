@@ -670,6 +670,74 @@ export function enchantEquipmentInstance(
   return traitId;
 }
 
+export type EquipmentEnchantmentRerollResult = {
+  changed: boolean;
+  before: EquipmentTrait[];
+  after: EquipmentTrait[];
+};
+
+const chargedTraitContribution = (
+  definition: ItemDefinition,
+  traits: readonly EquipmentTrait[],
+) => definition.category === "wand"
+  ? traits.reduce(
+      (total, trait) => total + (
+        trait.id === "charged" ? chargedBonus(trait.grade) : 0
+      ),
+      0,
+    )
+  : 0;
+
+const applyChargedContributionChange = (
+  instance: InventoryInstance,
+  definition: ItemDefinition,
+  before: readonly EquipmentTrait[],
+  after: readonly EquipmentTrait[],
+) => {
+  if (definition.category !== "wand") return;
+  const chargeDelta =
+    chargedTraitContribution(definition, after) -
+    chargedTraitContribution(definition, before);
+  if (chargeDelta === 0) return;
+  const maxCharges = Math.max(0, (instance.maxCharges ?? 3) + chargeDelta);
+  instance.maxCharges = maxCharges;
+  instance.charges = Math.min(
+    maxCharges,
+    Math.max(0, (instance.charges ?? 0) + chargeDelta),
+  );
+};
+
+export function rerollEquipmentEnchantments(
+  instance: InventoryInstance,
+  definition: ItemDefinition,
+  lockedIndexes: readonly number[] | ReadonlySet<number>,
+  random: () => number,
+): EquipmentEnchantmentRerollResult {
+  const before = (instance.traits ?? []).map((trait) => ({ ...trait }));
+  if (!isUpgradeableEquipment(definition) || before.length === 0) {
+    return { changed: false, before, after: before.map((trait) => ({ ...trait })) };
+  }
+  const locked = new Set<number>(lockedIndexes);
+  const after = before.map((trait, index) => {
+    if (locked.has(index)) return { ...trait };
+    const candidates = availableEquipmentTraits(definition, trait.grade);
+    const alternatives = candidates.length > 1
+      ? candidates.filter((candidate) => candidate !== trait.id)
+      : candidates;
+    const pool = alternatives.length ? alternatives : candidates;
+    const roll = Math.max(0, Math.min(0.999999999, random()));
+    const id = pool[Math.floor(roll * pool.length)] ?? trait.id;
+    return { id, grade: trait.grade };
+  });
+  const changed = after.some((trait, index) => trait.id !== before[index].id);
+  if (!changed) {
+    return { changed: false, before, after };
+  }
+  instance.traits = after;
+  applyChargedContributionChange(instance, definition, before, after);
+  return { changed: true, before, after: after.map((trait) => ({ ...trait })) };
+}
+
 export function upgradeEquipmentInstance(
   instance: InventoryInstance,
   amount = 1,

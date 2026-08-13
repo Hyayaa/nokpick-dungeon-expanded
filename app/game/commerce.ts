@@ -6,6 +6,7 @@ import {
   enchantmentGradePower,
   isUpgradeableEquipment,
   normalizeEquipmentInstance,
+  rerollEquipmentEnchantments,
 } from "./equipment";
 import {
   ITEM_GRADES,
@@ -20,6 +21,7 @@ import {
   storageInventoryRefs,
 } from "./inventory-slots";
 import type {
+  EquipmentTrait,
   InventoryInstance,
   ItemCategory,
   ItemDefinition,
@@ -662,6 +664,204 @@ const resolveSmithyCandidate = (
     (candidate) =>
       JSON.stringify(candidate.target) === JSON.stringify(target),
   ) ?? null;
+
+export const smithyEnchantRerollRunestoneCost = (grade: ItemGrade) =>
+  itemGradeIndex(normalizeItemGrade(grade)) + 1;
+
+export type SmithyEnchantRerollFailureReason =
+  | "missing-item"
+  | "invalid-item"
+  | "not-enough-runestones"
+  | "not-enough-lock-scrolls"
+  | "nothing-to-reroll";
+
+export type SmithyEnchantRerollResult = {
+  campaign: CampaignSave;
+  changed: boolean;
+  reason: "ok" | SmithyEnchantRerollFailureReason;
+  itemId: string | null;
+  lockedCount: number;
+  runestoneCost: number;
+  before: EquipmentTrait[];
+  after: EquipmentTrait[];
+};
+
+const smithyEnchantRerollFailure = (
+  campaign: CampaignSave,
+  reason: SmithyEnchantRerollFailureReason,
+  details: Partial<Pick<
+    SmithyEnchantRerollResult,
+    "itemId" | "lockedCount" | "runestoneCost" | "before" | "after"
+  >> = {},
+): SmithyEnchantRerollResult => ({
+  campaign,
+  changed: false,
+  reason,
+  itemId: details.itemId ?? null,
+  lockedCount: details.lockedCount ?? 0,
+  runestoneCost: details.runestoneCost ?? 0,
+  before: details.before ?? [],
+  after: details.after ?? [],
+});
+
+const stableSmithyEnchantRerollSeed = (
+  campaign: CampaignSave,
+  candidate: SmithyCandidate,
+  lockedIndexes: readonly number[],
+) => {
+  const source = [
+    campaign.offerSeed >>> 0,
+    candidate.instance.id,
+    candidate.itemId,
+    normalizeItemGrade(candidate.instance.grade),
+    (candidate.instance.traits ?? [])
+      .map((trait) => `${trait.id}:${trait.grade}`)
+      .join(","),
+    campaign.materials.runestone,
+    campaign.warehouse.stacks.scroll_mirror_image ?? 0,
+    lockedIndexes.join(","),
+  ].join("|");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+};
+
+export function rerollCampaignEquipmentEnchantments(
+  campaign: CampaignSave,
+  target: SmithyTarget,
+  requestedLockedIndexes: readonly number[],
+): SmithyEnchantRerollResult {
+  const candidate = resolveSmithyCandidate(campaign, target);
+  if (!candidate) {
+    return smithyEnchantRerollFailure(campaign, "missing-item");
+  }
+  const definition = ITEM_DEFS[candidate.itemId];
+  const traits = candidate.instance.traits ?? [];
+  if (!isUpgradeableEquipment(definition) || traits.length === 0) {
+    return smithyEnchantRerollFailure(campaign, "invalid-item", {
+      itemId: candidate.itemId,
+    });
+  }
+  const lockedIndexes = [...new Set(requestedLockedIndexes)]
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < traits.length)
+    .sort((a, b) => a - b);
+  const lockedCount = lockedIndexes.length;
+  const grade = normalizeItemGrade(candidate.instance.grade);
+  const runestoneCost = smithyEnchantRerollRunestoneCost(grade);
+  const before = traits.map((trait) => ({ ...trait }));
+  const failureDetails = {
+    itemId: candidate.itemId,
+    lockedCount,
+    runestoneCost,
+    before,
+    after: before.map((trait) => ({ ...trait })),
+  };
+  if (lockedCount >= traits.length) {
+    return smithyEnchantRerollFailure(
+      campaign,
+      "nothing-to-reroll",
+      failureDetails,
+    );
+  }
+  if (campaign.materials.runestone < runestoneCost) {
+    return smithyEnchantRerollFailure(
+      campaign,
+      "not-enough-runestones",
+      failureDetails,
+    );
+  }
+  const lockScrolls = campaign.warehouse.stacks.scroll_mirror_image ?? 0;
+  if (lockScrolls < lockedCount) {
+    return smithyEnchantRerollFailure(
+      campaign,
+      "not-enough-lock-scrolls",
+      failureDetails,
+    );
+  }
+
+  const warehouse = cloneWarehouse(campaign.warehouse);
+  let companions = campaign.companions;
+  let rerollTarget: InventoryInstance | null = null;
+  if (target.kind === "warehouse") {
+    rerollTarget = warehouse.instances.find(
+      (instance) => instance.id === target.instanceId,
+    ) ?? null;
+  } else {
+    companions = campaign.companions.map((companion) => {
+      if (companion.id !== target.companionId) return companion;
+      if (target.kind === "companionEquipment") {
+        const equipmentKey =
+          target.equipmentKey as keyof typeof companion.equipmentInstances;
+        const instance = companion.equipmentInstances[equipmentKey];
+        if (!instance) return companion;
+        rerollTarget = cloneInstance(instance);
+        return {
+          ...companion,
+          equipmentInstances: {
+            ...companion.equipmentInstances,
+            [equipmentKey]: rerollTarget,
+          },
+        };
+      }
+      const autoSlots = companion.autoSlots.map((autoItem, index) => {
+        if (index !== target.index || !autoItem?.instance) return autoItem;
+        rerollTarget = cloneInstance(autoItem.instance);
+        return { ...autoItem, instance: rerollTarget };
+      }) as typeof companion.autoSlots;
+      return { ...companion, autoSlots };
+    });
+  }
+  if (!rerollTarget) {
+    return smithyEnchantRerollFailure(
+      campaign,
+      "missing-item",
+      failureDetails,
+    );
+  }
+
+  const random = seededRandom(
+    stableSmithyEnchantRerollSeed(campaign, candidate, lockedIndexes) ||
+      0x9e3779b9,
+  );
+  const reroll = rerollEquipmentEnchantments(
+    rerollTarget,
+    definition,
+    lockedIndexes,
+    random,
+  );
+  if (!reroll.changed) {
+    return smithyEnchantRerollFailure(campaign, "nothing-to-reroll", {
+      ...failureDetails,
+      after: reroll.after,
+    });
+  }
+
+  if (lockedCount > 0) {
+    const remainingLockScrolls = lockScrolls - lockedCount;
+    if (remainingLockScrolls > 0) {
+      warehouse.stacks.scroll_mirror_image = remainingLockScrolls;
+    } else {
+      delete warehouse.stacks.scroll_mirror_image;
+    }
+    warehouse.slots = normalizeStorageSlots(warehouse, WAREHOUSE_SLOT_COUNT);
+  }
+  const materials = payMaterials(campaign.materials, {
+    runestone: runestoneCost,
+  })!;
+  return {
+    campaign: { ...campaign, warehouse, companions, materials },
+    changed: true,
+    reason: "ok",
+    itemId: candidate.itemId,
+    lockedCount,
+    runestoneCost,
+    before: reroll.before,
+    after: reroll.after,
+  };
+}
 
 const applySmithyGrade = (
   instance: InventoryInstance,

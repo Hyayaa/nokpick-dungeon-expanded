@@ -7631,6 +7631,11 @@ export function useItem(state: GameState, defId: string): ActionResult {
   ) {
     return { state, motions: [], effects: [], consumedTurn: false };
   }
+  if (definition.effect === "enchantLock") {
+    const next = cloneGameWithoutTiles(state);
+    pushLog(next, "인챈트 고정 주문서는 대장간에서 사용하는 재료입니다.");
+    return { state: next, motions: [], effects: [], consumedTurn: false };
+  }
   const incapacitated = consumeIncapacitatedPlayerTurn(state);
   if (incapacitated) return incapacitated;
   if (isEquipmentConsumableId(defId)) {
@@ -7841,8 +7846,8 @@ export function useItem(state: GameState, defId: string): ActionResult {
       }
     });
     pushLog(next, "결투의 문장이 적들을 끌어당기고 방어를 강화합니다.");
-  } else if (defId === "scroll_mirror_image" || defId === "scroll_prismatic_image") {
-    next.player.shield += defId === "scroll_prismatic_image" ? 14 : 8;
+  } else if (defId === "scroll_prismatic_image") {
+    next.player.shield += 14;
     addPlayerStatus("shielded", 10, 1);
     pushLog(next, "환영이 공격을 대신 받아낼 준비를 합니다.");
   } else if (defId === "scroll_remove_curse") {

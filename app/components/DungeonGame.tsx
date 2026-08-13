@@ -184,11 +184,14 @@ import {
   createShopState,
   listSmithyCandidates,
   normalizeShopState,
+  rerollCampaignEquipmentEnchantments,
   sellWarehouseItem,
+  smithyEnchantRerollRunestoneCost,
   smithyNextGrade,
   smithyUpgradeRequirements,
   upgradeCampaignEquipmentGrade,
   type ShopListingSource,
+  type SmithyCandidate,
   type SmithyTarget,
 } from "../game/commerce";
 import {
@@ -355,6 +358,7 @@ import {
   GameState,
   GameSoundId,
   ItemCategory,
+  ItemDefinition,
   ItemGrade,
   InventoryInstance,
   ItemPickup,
@@ -689,6 +693,9 @@ const USABLE_ITEM_CATEGORIES = new Set<ItemCategory>([
   "stone",
   "wand",
 ]);
+const isDirectlyUsableItem = (definition: ItemDefinition) =>
+  USABLE_ITEM_CATEGORIES.has(definition.category) &&
+  definition.effect !== "enchantLock";
 const BENEFICIAL_STATUS_IDS = new Set<StatusEffectId>([
   "haste",
   "levitating",
@@ -794,6 +801,8 @@ const localizedItemName = (
     ? ITEM_DEFS[itemId]?.name ?? itemId
     : itemId === "scroll_identify"
       ? "Scroll of Enchantment"
+      : itemId === "scroll_mirror_image"
+        ? "Enchantment Lock Scroll"
       : humanizeId(itemId);
 
 const localizedItemDescription = (
@@ -807,6 +816,9 @@ const localizedItemDescription = (
   if (!definition) return humanizeId(itemId);
   if (itemId === "scroll_identify") {
     return "Adds one new enchantment to equipment with no more than two enchantments.";
+  }
+  if (itemId === "scroll_mirror_image") {
+    return "Locks one chosen enchantment per scroll when rerolling equipment at the Blacksmith.";
   }
   const category = ITEM_CATEGORY_NAMES_EN[definition.category].toLowerCase();
   return `A ${category} from the dungeon. Its exact effects and equipment statistics are shown in this detail panel.`;
@@ -1610,6 +1622,7 @@ function CampaignWarehouseInventory({
   emptyTitle = "보관된 아이템이 없습니다.",
   emptyDescription = "원정을 마치고 전리품을 회수하면 이곳에 표시됩니다.",
   isItemHighlighted,
+  isItemFlashing,
   isItemSelectable,
   onItemSelect,
 }: {
@@ -1621,6 +1634,7 @@ function CampaignWarehouseInventory({
   emptyTitle?: string;
   emptyDescription?: string;
   isItemHighlighted?: (entry: ResolvedWarehouseItem, index: number) => boolean;
+  isItemFlashing?: (entry: ResolvedWarehouseItem, index: number) => boolean;
   isItemSelectable?: (entry: ResolvedWarehouseItem, index: number) => boolean;
   onItemSelect?: (
     entry: ResolvedWarehouseItem,
@@ -1667,11 +1681,14 @@ function CampaignWarehouseInventory({
             ? eligibleConsumableTarget
             : isItemHighlighted?.(entry, index) ?? false;
           const isUpgradeFlashing = Boolean(
-            entry.instance &&
-            interaction?.upgradeFlashKey === upgradeTargetVisualKey({
-              kind: "warehouse",
-              instanceId: entry.instance.id,
-            }),
+            isItemFlashing?.(entry, index) ||
+            (
+              entry.instance &&
+              interaction?.upgradeFlashKey === upgradeTargetVisualKey({
+                kind: "warehouse",
+                instanceId: entry.instance.id,
+              })
+            ),
           );
           return (
             <button
@@ -1785,6 +1802,7 @@ function CampaignCompanionEquipmentRoster({
   isCompanionToggleDisabled,
   itemSelectionKey,
   isItemHighlighted,
+  isItemFlashing,
   onItemSelect,
   onTrainingSelect,
 }: {
@@ -1803,6 +1821,11 @@ function CampaignCompanionEquipmentRoster({
     entry: ResolvedCompanionEquipment,
   ) => string | null;
   isItemHighlighted?: (
+    companion: Companion,
+    target: LoadoutTarget,
+    entry: ResolvedCompanionEquipment,
+  ) => boolean;
+  isItemFlashing?: (
     companion: Companion,
     target: LoadoutTarget,
     entry: ResolvedCompanionEquipment,
@@ -1999,6 +2022,9 @@ function CampaignCompanionEquipmentRoster({
                           "preparation-equipment-slot",
                           itemId ? "is-filled" : "is-empty",
                           highlighted ? "is-upgradeable-choice" : "",
+                          isItemFlashing?.(companion, target, entry)
+                            ? "is-upgrade-flashing"
+                            : "",
                           selectionKey && selectionKey === selectedItemKey
                             ? "is-selected"
                             : "",
@@ -3521,7 +3547,7 @@ function ItemDetailModal({
         : game?.player.inventory[selected.itemId] ?? 0;
   if (!definition || (!preview && quantity <= 0)) return null;
 
-  const usable = USABLE_ITEM_CATEGORIES.has(definition.category);
+  const usable = isDirectlyUsableItem(definition);
   const directLoadoutEquip = Boolean(
     definition.slot || definition.category === "missile",
   );
@@ -4159,7 +4185,7 @@ function PersistentInventory({
                     maxCharges,
                     anchor: descriptionAnchorFromElement(event.currentTarget),
                   },
-                  isWand(itemId) || USABLE_ITEM_CATEGORIES.has(definition.category)
+                  isWand(itemId) || isDirectlyUsableItem(definition)
                     ? "use"
                     : definition.slot || definition.category === "missile"
                       ? "equip"
@@ -6207,26 +6233,45 @@ function CommerceModal({
 
 const smithyTargetKey = (target: SmithyTarget) => JSON.stringify(target);
 
+type BlacksmithTab = "grade" | "enchant";
+
 function BlacksmithModal({
   campaign,
   selectedTarget,
+  selectionRevision,
   notice,
   onTargetSelect,
   onUpgrade,
+  onRerollEnchantments,
   onClose,
 }: {
   campaign: CampaignSave;
   selectedTarget: SmithyTarget | null;
+  selectionRevision: number;
   notice: string | null;
   onTargetSelect: (target: SmithyTarget) => void;
-  onUpgrade: (target: SmithyTarget) => void;
+  onUpgrade: (target: SmithyTarget) => boolean;
+  onRerollEnchantments: (
+    target: SmithyTarget,
+    lockedIndexes: readonly number[],
+  ) => boolean;
   onClose: () => void;
 }) {
   const slotDrag = useActiveItemSlotDrag();
+  const [activeTab, setActiveTab] = useState<BlacksmithTab>("grade");
+  const [lockSelection, setLockSelection] = useState<{
+    revision: number;
+    indexes: Set<number>;
+  }>(() => ({ revision: selectionRevision, indexes: new Set() }));
+  const [lockNotice, setLockNotice] = useState<string | null>(null);
+  const { upgradeFlashKey, flashUpgradeKey } = useUpgradeFlashFeedback();
   const candidates = listSmithyCandidates(campaign);
   const selectedKey = selectedTarget
     ? smithyTargetKey(selectedTarget)
     : null;
+  const lockedIndexes = lockSelection.revision === selectionRevision
+    ? lockSelection.indexes
+    : new Set<number>();
   const selected = candidates.find(
     (candidate) => smithyTargetKey(candidate.target) === selectedKey,
   ) ?? null;
@@ -6234,6 +6279,19 @@ function BlacksmithModal({
     ? resolveItemGrade(ITEM_DEFS[selected.itemId], selected.instance)
     : null;
   const nextGrade = currentGrade ? smithyNextGrade(currentGrade) : null;
+  const enchantments = selected
+    ? equipmentTraitSummary(selected.instance)
+    : [];
+  const lockScrolls = campaign.warehouse.stacks.scroll_mirror_image ?? 0;
+  const rerollRunestoneCost = currentGrade
+    ? smithyEnchantRerollRunestoneCost(currentGrade)
+    : 0;
+  const rerollRequirementsMet = Boolean(
+    selected &&
+    enchantments.length > lockedIndexes.size &&
+    campaign.materials.runestone >= rerollRunestoneCost &&
+    lockScrolls >= lockedIndexes.size,
+  );
   const requirements = currentGrade
     ? smithyUpgradeRequirements(campaign, currentGrade)
     : [];
@@ -6252,11 +6310,14 @@ function BlacksmithModal({
     instance
       ? candidates.find((candidate) => candidate.instance.id === instance.id) ?? null
       : null;
-  const upgradeableCandidateForInstance = (
+  const selectableCandidateForInstance = (
     instance: InventoryInstance | null,
   ) => {
     const candidate = candidateForInstance(instance);
     if (!candidate) return null;
+    if (activeTab === "enchant") {
+      return (candidate.instance.traits?.length ?? 0) > 0 ? candidate : null;
+    }
     const grade = resolveItemGrade(
       ITEM_DEFS[candidate.itemId],
       candidate.instance,
@@ -6271,6 +6332,39 @@ function BlacksmithModal({
   const selectedTargetKey = selected
     ? smithyTargetKey(selected.target)
     : null;
+  const selectCandidate = (candidate: SmithyCandidate) => {
+    setLockSelection({ revision: selectionRevision, indexes: new Set() });
+    setLockNotice(null);
+    onTargetSelect(candidate.target);
+  };
+  const switchTab = (tab: BlacksmithTab) => {
+    setActiveTab(tab);
+    setLockSelection({ revision: selectionRevision, indexes: new Set() });
+    setLockNotice(null);
+  };
+  const toggleLock = (index: number) => {
+    setLockSelection((current) => {
+      const currentIndexes = current.revision === selectionRevision
+        ? current.indexes
+        : new Set<number>();
+      const next = new Set(currentIndexes);
+      if (next.has(index)) {
+        next.delete(index);
+        setLockNotice(null);
+        return { revision: selectionRevision, indexes: next };
+      }
+      if (next.size >= lockScrolls) {
+        setLockNotice("인챈트 고정 주문서가 부족합니다.");
+        return { revision: selectionRevision, indexes: currentIndexes };
+      }
+      next.add(index);
+      setLockNotice(null);
+      return { revision: selectionRevision, indexes: next };
+    });
+  };
+  const flashSelected = () => {
+    if (selected) flashUpgradeKey(smithyTargetKey(selected.target));
+  };
 
   return (
     <div className="modal-backdrop blacksmith-backdrop">
@@ -6283,8 +6377,20 @@ function BlacksmithModal({
           </div>
           <button type="button" onClick={onClose} aria-label="대장간 닫기">×</button>
         </header>
-        <p className="blacksmith-lead">골드를 지불해 장비의 기본 등급을 한 단계 올립니다. 강화 수치와 추가 인챈트는 유지되며, 첫 고유 인챈트는 장비 등급과 함께 상승합니다.</p>
-        {notice && <p className="commerce-notice" role="status">{notice}</p>}
+        <nav className="blacksmith-tabs" aria-label="대장간 작업 선택">
+          <button type="button" className={activeTab === "grade" ? "is-active" : ""} onClick={() => switchTab("grade")}>등급 승급</button>
+          <button type="button" className={activeTab === "enchant" ? "is-active" : ""} onClick={() => switchTab("enchant")}>인챈트 변경</button>
+        </nav>
+        <p className="blacksmith-lead">
+          {activeTab === "grade"
+            ? "장비의 기본 등급을 한 단계 상승시킵니다."
+            : "룬석을 사용해 장비의 인챈트를 무작위로 변경합니다. 인챈트 고정 주문서가 있다면 원하는 인챈트를 보호할 수 있습니다."}
+        </p>
+        {((lockSelection.revision === selectionRevision ? lockNotice : null) ?? notice) && (
+          <p className="commerce-notice" role="status">
+            {(lockSelection.revision === selectionRevision ? lockNotice : null) ?? notice}
+          </p>
+        )}
         <div className="blacksmith-layout">
           <div className="blacksmith-source-panels">
             <section className="blacksmith-source-panel" aria-labelledby="blacksmith-warehouse-title">
@@ -6292,21 +6398,28 @@ function BlacksmithModal({
                 <div><p className="eyebrow">WAREHOUSE</p><h3 id="blacksmith-warehouse-title">창고</h3></div>
                 <span>{warehouseItemCount(campaign.warehouse)}개</span>
               </header>
-              <p>모든 보유 아이템을 표시합니다. 빛나는 장비만 강화 대상으로 선택할 수 있습니다.</p>
+              <p>모든 보유 아이템을 표시합니다. 빛나는 장비를 현재 대장간 작업 대상으로 선택할 수 있습니다.</p>
               <CampaignWarehouseInventory
                 warehouse={campaign.warehouse}
                 className="preparation-storage-grid blacksmith-warehouse-grid"
                 selectedIndex={selectedWarehouseIndex}
                 contextLabel="대장간 창고"
                 isItemHighlighted={(entry) =>
-                  Boolean(upgradeableCandidateForInstance(entry.instance))
+                  Boolean(selectableCandidateForInstance(entry.instance))
                 }
+                isItemFlashing={(entry) => {
+                  const candidate = candidateForInstance(entry.instance);
+                  return Boolean(
+                    candidate &&
+                    upgradeFlashKey === smithyTargetKey(candidate.target),
+                  );
+                }}
                 isItemSelectable={(entry) =>
-                  Boolean(upgradeableCandidateForInstance(entry.instance))
+                  Boolean(selectableCandidateForInstance(entry.instance))
                 }
                 onItemSelect={(entry) => {
-                  const candidate = upgradeableCandidateForInstance(entry.instance);
-                  if (candidate) onTargetSelect(candidate.target);
+                  const candidate = selectableCandidateForInstance(entry.instance);
+                  if (candidate) selectCandidate(candidate);
                 }}
               />
             </section>
@@ -6322,15 +6435,22 @@ function BlacksmithModal({
                 selectedItemKey={selectedTargetKey}
                 emptyMessage="등록된 동료가 없습니다."
                 itemSelectionKey={(_companion, _target, entry) => {
-                  const candidate = upgradeableCandidateForInstance(entry.instance);
+                  const candidate = selectableCandidateForInstance(entry.instance);
                   return candidate ? smithyTargetKey(candidate.target) : null;
                 }}
                 isItemHighlighted={(_companion, _target, entry) =>
-                  Boolean(upgradeableCandidateForInstance(entry.instance))
+                  Boolean(selectableCandidateForInstance(entry.instance))
                 }
+                isItemFlashing={(_companion, _target, entry) => {
+                  const candidate = candidateForInstance(entry.instance);
+                  return Boolean(
+                    candidate &&
+                    upgradeFlashKey === smithyTargetKey(candidate.target),
+                  );
+                }}
                 onItemSelect={(_companion, _target, entry) => {
-                  const candidate = upgradeableCandidateForInstance(entry.instance);
-                  if (candidate) onTargetSelect(candidate.target);
+                  const candidate = selectableCandidateForInstance(entry.instance);
+                  if (candidate) selectCandidate(candidate);
                 }}
               />
             </section>
@@ -6340,17 +6460,25 @@ function BlacksmithModal({
               <>
                 <div className="blacksmith-selected-item">
                   <span
-                    className="blacksmith-item-icon is-large blacksmith-target-slot"
+                    className={[
+                      "blacksmith-item-icon",
+                      "is-large",
+                      "blacksmith-target-slot",
+                      upgradeFlashKey === smithyTargetKey(selected.target)
+                        ? "is-upgrade-flashing"
+                        : "",
+                    ].filter(Boolean).join(" ")}
                     {...(slotDrag?.addressAttributes({ zone: "smithyTarget" }, null) ?? {})}
                   ><ItemSlotContents itemId={selected.itemId} size={52} instance={selected.instance} quantity={1} /></span>
                   <div><small>{selected.ownerLabel}</small><h3>{ITEM_DEFS[selected.itemId]?.name}</h3><span>{ITEM_CATEGORY_NAMES[ITEM_DEFS[selected.itemId].category]}</span></div>
                 </div>
-                <div className="blacksmith-grade-step">
-                  <span data-item-grade={currentGrade}><small>현재</small><b>{currentGrade}</b></span>
-                  <i aria-hidden="true">→</i>
-                  <span data-item-grade={nextGrade ?? currentGrade}><small>{nextGrade ? "강화 후" : "최고 등급"}</small><b>{nextGrade ?? currentGrade}</b></span>
-                </div>
-                {nextGrade && requirements.length > 0 ? (
+                {activeTab === "grade" ? <>
+                  <div className="blacksmith-grade-step">
+                    <span data-item-grade={currentGrade}><small>현재</small><b>{currentGrade}</b></span>
+                    <i aria-hidden="true">→</i>
+                    <span data-item-grade={nextGrade ?? currentGrade}><small>{nextGrade ? "승급 후" : "최고 등급"}</small><b>{nextGrade ?? currentGrade}</b></span>
+                  </div>
+                  {nextGrade && requirements.length > 0 ? (
                   <>
                     <dl className="blacksmith-requirement-list">
                       {requirements.map((requirement) => (
@@ -6370,7 +6498,9 @@ function BlacksmithModal({
                         </div>
                       ))}
                     </dl>
-                    <button type="button" className="blacksmith-upgrade-button" disabled={!requirementsMet} onClick={() => onUpgrade(selected.target)}>
+                    <button type="button" className="blacksmith-upgrade-button" disabled={!requirementsMet} onClick={() => {
+                      if (onUpgrade(selected.target)) flashSelected();
+                    }}>
                       {requirementsMet
                         ? `${currentGrade} → ${nextGrade} 등급 강화`
                         : unmetRequirement?.resourceId === "gold"
@@ -6380,7 +6510,64 @@ function BlacksmithModal({
                   </>
                 ) : (
                   <p className="blacksmith-max-grade">최대 등급입니다.</p>
-                )}
+                  )}
+                </> : <>
+                  <section className="blacksmith-enchantment-panel" aria-label="현재 인챈트">
+                    <header><strong>현재 인챈트</strong><span>{enchantments.length}줄 · 고정 {lockedIndexes.size}줄</span></header>
+                    <div>
+                      {enchantments.map((trait, index) => {
+                        const locked = lockedIndexes.has(index);
+                        return (
+                          <button
+                            type="button"
+                            className={locked ? "is-locked" : ""}
+                            data-enchantment-grade={trait.grade}
+                            key={`${trait.id}-${trait.grade}-${index}`}
+                            onClick={() => toggleLock(index)}
+                          >
+                            <em>{trait.grade}</em>
+                            <span><strong>{trait.name}</strong><small>{trait.description}</small></span>
+                            <b>{locked ? "🔒 고정" : "고정"}</b>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                  <dl className="blacksmith-requirement-list">
+                    <div className={campaign.materials.runestone >= rerollRunestoneCost ? "is-satisfied" : "is-missing"}>
+                      <dt><small>재료</small><strong>룬석</strong></dt>
+                      <dd><span>보유 {campaign.materials.runestone}개</span><span>필요 {rerollRunestoneCost}개</span><b>{campaign.materials.runestone >= rerollRunestoneCost ? "충족" : "부족"}</b></dd>
+                    </div>
+                    <div className={lockScrolls >= lockedIndexes.size ? "is-satisfied" : "is-missing"}>
+                      <dt><small>재료</small><strong>인챈트 고정 주문서</strong></dt>
+                      <dd><span>보유 {lockScrolls}개</span><span>필요 {lockedIndexes.size}개</span><b>{lockScrolls >= lockedIndexes.size ? "충족" : "부족"}</b></dd>
+                    </div>
+                  </dl>
+                  <button
+                    type="button"
+                    className="blacksmith-upgrade-button"
+                    disabled={!rerollRequirementsMet}
+                    onClick={() => {
+                      if (onRerollEnchantments(
+                        selected.target,
+                        [...lockedIndexes].sort((a, b) => a - b),
+                      )) {
+                        flashSelected();
+                        setLockSelection({
+                          revision: selectionRevision,
+                          indexes: new Set(),
+                        });
+                        setLockNotice(null);
+                      }
+                    }}
+                  >
+                    {enchantments.length === lockedIndexes.size
+                      ? "변경할 인챈트가 없습니다."
+                      : campaign.materials.runestone < rerollRunestoneCost
+                        ? `룬석 ${rerollRunestoneCost - campaign.materials.runestone}개 부족`
+                        : "인챈트 변경"}
+                  </button>
+                </>}
               </>
             ) : (
               <div
@@ -6388,7 +6575,7 @@ function BlacksmithModal({
                 {...(slotDrag?.addressAttributes({ zone: "smithyTarget" }, null) ?? {})}
               >
                 <span className="blacksmith-item-icon is-large"><i aria-hidden="true">+</i></span>
-                <p>강화할 아이템을 선택하세요.</p>
+                <p>{activeTab === "grade" ? "승급할 아이템을 선택하세요." : "인챈트를 변경할 아이템을 선택하세요."}</p>
               </div>
             )}
           </aside>
@@ -11876,6 +12063,7 @@ export default function DungeonGame() {
   const [blacksmithOpen, setBlacksmithOpen] = useState(false);
   const [trainingGroundOpen, setTrainingGroundOpen] = useState(false);
   const [blacksmithTarget, setBlacksmithTarget] = useState<SmithyTarget | null>(null);
+  const [blacksmithSelectionRevision, setBlacksmithSelectionRevision] = useState(0);
   const [facilityNotice, setFacilityNotice] = useState<string | null>(null);
   const [hubHelpOpen, setHubHelpOpen] = useState(false);
   const [hubSettingsOpen, setHubSettingsOpen] = useState(false);
@@ -12098,8 +12286,11 @@ export default function DungeonGame() {
     const result = upgradeCampaignEquipmentGrade(campaign, target);
     if (result.changed) {
       setCampaign(result.campaign);
-      setFacilityNotice(`${ITEM_DEFS[result.itemId]?.name ?? result.itemId}: ${result.fromGrade} → ${result.toGrade} 등급 강화 완료 · ${formatGold(result.cost)} G 사용`);
-      return;
+      const itemName = result.itemId
+        ? ITEM_DEFS[result.itemId]?.name ?? result.itemId
+        : "장비";
+      setFacilityNotice(`${itemName}: ${result.fromGrade} → ${result.toGrade} 등급 강화 완료 · ${formatGold(result.cost)} G 사용`);
+      return true;
     }
     const message = result.reason === "not-enough-gold"
       ? `등급 강화에 필요한 골드가 ${formatGold(result.cost - campaign.gold)} G 부족합니다.`
@@ -12109,6 +12300,39 @@ export default function DungeonGame() {
         ? "이미 최고 등급인 S급 장비입니다."
         : "강화할 장비를 찾지 못했습니다.";
     setFacilityNotice(message);
+    return false;
+  }, [campaign]);
+
+  const handleBlacksmithEnchantReroll = useCallback((
+    target: SmithyTarget,
+    lockedIndexes: readonly number[],
+  ) => {
+    const result = rerollCampaignEquipmentEnchantments(
+      campaign,
+      target,
+      lockedIndexes,
+    );
+    if (result.changed) {
+      setCampaign(result.campaign);
+      const itemName = result.itemId
+        ? ITEM_DEFS[result.itemId]?.name ?? result.itemId
+        : "장비";
+      setFacilityNotice(
+        `${itemName}: 인챈트 변경 완료 · 룬석 ${result.runestoneCost}개${result.lockedCount > 0 ? ` · 고정 주문서 ${result.lockedCount}개` : ""} 사용`,
+      );
+      return true;
+    }
+    const message = result.reason === "not-enough-runestones"
+      ? `인챈트 변경에 필요한 룬석이 ${Math.max(0, result.runestoneCost - campaign.materials.runestone)}개 부족합니다.`
+      : result.reason === "not-enough-lock-scrolls"
+        ? "인챈트 고정 주문서가 부족합니다."
+        : result.reason === "nothing-to-reroll"
+          ? "변경할 인챈트가 없습니다."
+          : result.reason === "invalid-item"
+            ? "인챈트를 변경할 수 없는 장비입니다."
+            : "인챈트를 변경할 장비를 찾지 못했습니다.";
+    setFacilityNotice(message);
+    return false;
   }, [campaign]);
 
   const handleCampaignSlotDrop = useCallback(
@@ -12124,6 +12348,7 @@ export default function DungeonGame() {
           : null;
         if (candidate && grade && smithyNextGrade(grade)) {
           setBlacksmithTarget(candidate.target);
+          setBlacksmithSelectionRevision((revision) => revision + 1);
           setFacilityNotice(null);
         }
         return;
@@ -12294,13 +12519,16 @@ export default function DungeonGame() {
             <BlacksmithModal
               campaign={campaign}
               selectedTarget={blacksmithTarget}
+              selectionRevision={blacksmithSelectionRevision}
               notice={facilityNotice}
               onTargetSelect={(target) => {
                 warehouseInteraction.cancelPending();
                 setBlacksmithTarget(target);
+                setBlacksmithSelectionRevision((revision) => revision + 1);
                 setFacilityNotice(null);
               }}
               onUpgrade={handleBlacksmithUpgrade}
+              onRerollEnchantments={handleBlacksmithEnchantReroll}
               onClose={() => {
                 warehouseInteraction.reset();
                 setBlacksmithOpen(false);
