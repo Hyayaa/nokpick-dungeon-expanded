@@ -369,6 +369,26 @@ assert.match(
 );
 assert.match(
   dungeonGameSource,
+  /CampaignWarehouseInteractionContext\.Provider value=\{warehouseInteraction\}[\s\S]*warehouseInteraction\.itemPreview[\s\S]*<ItemDetailModal[\s\S]*warehouseInteraction\.beginPreviewUse/,
+  "every campaign warehouse surface must share one item-detail and consumable controller",
+);
+assert.match(
+  dungeonGameSource,
+  /const \{ upgradeFlashKey, flashUpgradeKey \} = useUpgradeFlashFeedback\(\)[\s\S]*flashUpgradeTarget[\s\S]*flashUpgradeKey\(upgradeTargetVisualKey\(target\)\)/,
+  "dungeon upgrades must consume the same flash feedback hook as warehouse upgrades",
+);
+assert.doesNotMatch(
+  dungeonGameSource,
+  /pendingConsumableId|장비에 사용|commerce-selection-bar/,
+  "warehouse scroll use must not retain a commerce-only selection bar",
+);
+assert.doesNotMatch(
+  dungeonCssSource,
+  /\.commerce-selection-bar/,
+  "warehouse scroll targeting must not retain dedicated selection-bar styling",
+);
+assert.match(
+  dungeonGameSource,
   /training-equipped-slots[\s\S]*\(\[0, 1\] as const\)\.map/,
   "the Training Ground must render exactly two equipped skill slots",
 );

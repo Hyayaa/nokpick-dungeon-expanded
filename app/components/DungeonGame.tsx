@@ -185,7 +185,6 @@ import {
   listSmithyCandidates,
   normalizeShopState,
   sellWarehouseItem,
-  shopSalePrice,
   smithyNextGrade,
   smithyUpgradeRequirements,
   upgradeCampaignEquipmentGrade,
@@ -515,7 +514,12 @@ type PendingItemSlotDrag = {
 const ITEM_DRAG_MOVE_THRESHOLD = 5;
 const TOUCH_ITEM_DRAG_LONG_PRESS_MS = 200;
 
-const upgradeTargetVisualKey = (target: UpgradeTarget) => {
+type UpgradeVisualTarget =
+  | UpgradeTarget
+  | { kind: "warehouse"; instanceId: string };
+
+const upgradeTargetVisualKey = (target: UpgradeVisualTarget) => {
+  if (target.kind === "warehouse") return `warehouse:${target.instanceId}`;
   if (target.kind === "inventory") return `inventory:${target.itemRef}`;
   if (target.kind === "equipment") {
     return target.slot === "ring"
@@ -533,6 +537,43 @@ type PendingEquipmentConsumable = {
   itemRef: string;
   itemId: EquipmentConsumableId;
 };
+
+const UPGRADE_FLASH_DURATION_MS = 920;
+
+function useUpgradeFlashFeedback() {
+  const [upgradeFlashKey, setUpgradeFlashKey] = useState<string | null>(null);
+  const upgradeFlashTimerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (upgradeFlashTimerRef.current !== null) {
+        window.clearTimeout(upgradeFlashTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const flashUpgradeKey = useCallback((key: string) => {
+    if (upgradeFlashTimerRef.current !== null) {
+      window.clearTimeout(upgradeFlashTimerRef.current);
+    }
+    setUpgradeFlashKey(key);
+    upgradeFlashTimerRef.current = window.setTimeout(() => {
+      setUpgradeFlashKey(null);
+      upgradeFlashTimerRef.current = null;
+    }, UPGRADE_FLASH_DURATION_MS);
+  }, []);
+
+  const clearUpgradeFlash = useCallback(() => {
+    if (upgradeFlashTimerRef.current !== null) {
+      window.clearTimeout(upgradeFlashTimerRef.current);
+      upgradeFlashTimerRef.current = null;
+    }
+    setUpgradeFlashKey(null);
+  }, []);
+
+  return { upgradeFlashKey, flashUpgradeKey, clearUpgradeFlash };
+}
 
 const randomDungeonSeed = () => {
   const seed =
@@ -1381,6 +1422,185 @@ const resolveWarehouseItemRef = (
   return { itemRef, itemId, instance, quantity };
 };
 
+type CampaignWarehouseInteractionContextValue = {
+  pendingEquipmentConsumable: PendingEquipmentConsumable | null;
+  upgradeFlashKey: string | null;
+  inspectItem: (
+    entry: ResolvedWarehouseItem,
+    contextLabel: string,
+    anchor: DescriptionAnchor,
+  ) => void;
+  canTargetItem: (entry: ResolvedWarehouseItem) => boolean;
+  applyToTarget: (entry: ResolvedWarehouseItem) => boolean;
+};
+
+type CampaignWarehouseInteractionController =
+  CampaignWarehouseInteractionContextValue & {
+    itemPreview: ItemDetailPreview | null;
+    beginPreviewUse: () => void;
+    closePreview: () => void;
+    cancelPending: () => void;
+    reset: () => void;
+  };
+
+const CampaignWarehouseInteractionContext =
+  createContext<CampaignWarehouseInteractionContextValue | null>(null);
+
+function useCampaignWarehouseInteraction({
+  campaign,
+  onCampaignChange,
+  onNotice,
+  onBeginTargetMode,
+}: {
+  campaign: CampaignSave;
+  onCampaignChange: (campaign: CampaignSave) => void;
+  onNotice: (notice: string | null) => void;
+  onBeginTargetMode: () => void;
+}): CampaignWarehouseInteractionController {
+  const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
+  const [pendingEquipmentConsumable, setPendingEquipmentConsumable] =
+    useState<PendingEquipmentConsumable | null>(null);
+  const { upgradeFlashKey, flashUpgradeKey, clearUpgradeFlash } =
+    useUpgradeFlashFeedback();
+
+  const inspectItem = useCallback((
+    entry: ResolvedWarehouseItem,
+    contextLabel: string,
+    anchor: DescriptionAnchor,
+  ) => {
+    setItemPreview({
+      itemId: entry.itemId,
+      itemRef: entry.itemRef,
+      instance: entry.instance,
+      quantity: entry.quantity,
+      contextLabel,
+      anchor,
+    });
+  }, []);
+
+  const closePreview = useCallback(() => setItemPreview(null), []);
+  const cancelPending = useCallback(() => {
+    setPendingEquipmentConsumable(null);
+    onNotice(null);
+  }, [onNotice]);
+  const reset = useCallback(() => {
+    setItemPreview(null);
+    setPendingEquipmentConsumable(null);
+    clearUpgradeFlash();
+  }, [clearUpgradeFlash]);
+
+  const beginPreviewUse = useCallback(() => {
+    if (!itemPreview || !isEquipmentConsumableId(itemPreview.itemId)) return;
+    setItemPreview(null);
+    onBeginTargetMode();
+    onNotice(
+      itemPreview.itemId === "scroll_upgrade"
+        ? "강화할 장비를 선택하세요. Esc로 취소할 수 있습니다."
+        : "인챈트를 추가할 장비를 선택하세요. Esc로 취소할 수 있습니다.",
+    );
+    setPendingEquipmentConsumable({
+      itemRef: itemPreview.itemRef,
+      itemId: itemPreview.itemId,
+    });
+  }, [itemPreview, onBeginTargetMode, onNotice]);
+
+  const canTargetItem = useCallback((entry: ResolvedWarehouseItem) => Boolean(
+    pendingEquipmentConsumable &&
+    entry.instance &&
+    canApplyEquipmentConsumable(
+      pendingEquipmentConsumable.itemId,
+      ITEM_DEFS[entry.itemId],
+      entry.instance,
+    )
+  ), [pendingEquipmentConsumable]);
+
+  const applyToTarget = useCallback((entry: ResolvedWarehouseItem) => {
+    const pending = pendingEquipmentConsumable;
+    if (!pending || !entry.instance || !canApplyEquipmentConsumable(
+      pending.itemId,
+      ITEM_DEFS[entry.itemId],
+      entry.instance,
+    )) {
+      return false;
+    }
+    const result = applyWarehouseEquipmentConsumable(
+      campaign,
+      pending.itemId,
+      entry.instance.id,
+    );
+    if (!result.changed) {
+      onNotice(
+        result.reason === "maximum-enchantments"
+          ? "이 장비에는 더 이상 인챈트를 추가할 수 없습니다."
+          : result.reason === "missing-scroll"
+            ? "창고에 사용할 주문서가 없습니다."
+            : "주문서를 적용할 수 있는 장비를 선택해야 합니다.",
+      );
+      return false;
+    }
+
+    onCampaignChange(result.campaign);
+    setPendingEquipmentConsumable(null);
+    flashUpgradeKey(upgradeTargetVisualKey({
+      kind: "warehouse",
+      instanceId: entry.instance.id,
+    }));
+    const itemName = result.itemId
+      ? ITEM_DEFS[result.itemId]?.name ?? result.itemId
+      : "장비";
+    const traitName = result.traitId
+      ? EQUIPMENT_TRAITS[result.traitId].name
+      : null;
+    onNotice(
+      pending.itemId === "scroll_upgrade"
+        ? `${itemName}이(가) +${result.upgradeLevel ?? 0} 장비로 강화되었습니다.${traitName ? ` 새로운 ${traitName} 인챈트가 깃들었습니다.` : ""}`
+        : `${itemName}에 ${traitName ?? "새로운"} 인챈트가 추가되었습니다.`,
+    );
+    return true;
+  }, [
+    campaign,
+    flashUpgradeKey,
+    onCampaignChange,
+    onNotice,
+    pendingEquipmentConsumable,
+  ]);
+
+  useEffect(() => {
+    if (!pendingEquipmentConsumable) return;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancelPending();
+    };
+    window.addEventListener("keydown", cancelOnEscape);
+    return () => window.removeEventListener("keydown", cancelOnEscape);
+  }, [cancelPending, pendingEquipmentConsumable]);
+
+  return useMemo(() => ({
+      itemPreview,
+      pendingEquipmentConsumable,
+      upgradeFlashKey,
+      inspectItem,
+      canTargetItem,
+      applyToTarget,
+      beginPreviewUse,
+      closePreview,
+      cancelPending,
+      reset,
+    }), [
+      applyToTarget,
+      beginPreviewUse,
+      canTargetItem,
+      cancelPending,
+      closePreview,
+      inspectItem,
+      itemPreview,
+      pendingEquipmentConsumable,
+      reset,
+      upgradeFlashKey,
+    ]);
+}
+
 function CampaignWarehouseInventory({
   warehouse,
   className,
@@ -1409,7 +1629,7 @@ function CampaignWarehouseInventory({
   ) => void;
 }) {
   const slotDrag = useActiveItemSlotDrag();
-  const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
+  const interaction = useContext(CampaignWarehouseInteractionContext);
   const slots = normalizeStorageSlots(warehouse, WAREHOUSE_SLOT_COUNT);
   const instancesById = new Map(
     warehouse.instances.map((instance) => [instance.id, instance]),
@@ -1419,21 +1639,7 @@ function CampaignWarehouseInventory({
       ? resolveWarehouseItemRef(warehouse, itemRef, instancesById)
       : null,
   );
-  const inspectItem = (
-    entry: ResolvedWarehouseItem,
-    anchor: DescriptionAnchor,
-  ) =>
-    setItemPreview({
-      itemId: entry.itemId,
-      itemRef: entry.itemRef,
-      instance: entry.instance,
-      quantity: entry.quantity,
-      contextLabel,
-      anchor,
-    });
-
   return (
-    <>
       <div className={`fixed-item-grid ${className}`}>
         {visibleEntries.map((entry, index) => {
           const address: ItemSlotAddress = { zone: "warehouse", index };
@@ -1446,10 +1652,27 @@ function CampaignWarehouseInventory({
               />
             );
           }
-          const selectable = Boolean(
-            onItemSelect && (isItemSelectable?.(entry, index) ?? true),
+          const pendingTargetMode = Boolean(
+            interaction?.pendingEquipmentConsumable,
           );
-          const highlighted = isItemHighlighted?.(entry, index) ?? false;
+          const eligibleConsumableTarget = Boolean(
+            pendingTargetMode && interaction?.canTargetItem(entry),
+          );
+          const selectable = pendingTargetMode
+            ? eligibleConsumableTarget
+            : Boolean(
+                onItemSelect && (isItemSelectable?.(entry, index) ?? true),
+              );
+          const highlighted = pendingTargetMode
+            ? eligibleConsumableTarget
+            : isItemHighlighted?.(entry, index) ?? false;
+          const isUpgradeFlashing = Boolean(
+            entry.instance &&
+            interaction?.upgradeFlashKey === upgradeTargetVisualKey({
+              kind: "warehouse",
+              instanceId: entry.instance.id,
+            }),
+          );
           return (
             <button
               type="button"
@@ -1459,6 +1682,7 @@ function CampaignWarehouseInventory({
                 selectedIndex === index ? "is-selected" : "",
                 highlighted ? "is-upgradeable-choice" : "",
                 selectable ? "is-selectable-choice" : "",
+                isUpgradeFlashing ? "is-upgrade-flashing" : "",
                 slotDrag?.heldAddressKey === itemSlotAddressKey(address)
                   ? "is-drag-source"
                   : "",
@@ -1467,24 +1691,30 @@ function CampaignWarehouseInventory({
               title={`${ITEM_DEFS[entry.itemId]?.name ?? entry.itemId} ×${entry.quantity}`}
               onClick={(event) => {
                 const anchor = descriptionAnchorFromElement(event.currentTarget);
-                if (selectable) onItemSelect?.(entry, index, anchor);
-                else inspectItem(entry, anchor);
+                if (pendingTargetMode) {
+                  if (eligibleConsumableTarget) {
+                    interaction?.applyToTarget(entry);
+                  }
+                  return;
+                }
+                if (selectable) {
+                  onItemSelect?.(entry, index, anchor);
+                  return;
+                }
+                interaction?.inspectItem(entry, contextLabel, anchor);
               }}
-              onDoubleClick={(event) =>
-                inspectItem(
-                  entry,
-                  descriptionAnchorFromElement(event.currentTarget),
-                )
-              }
-              {...(slotDrag?.addressAttributes(address, {
-                itemRef: entry.itemRef,
-                itemId: entry.itemId,
-                quantity: entry.quantity,
-                grade: entry.instance?.grade,
-                upgradeLevel: entry.instance?.upgradeLevel,
-                charges: entry.instance?.charges,
-                maxCharges: entry.instance?.maxCharges,
-              }) ?? {})}
+              aria-disabled={pendingTargetMode && !eligibleConsumableTarget}
+              {...(!pendingTargetMode
+                ? slotDrag?.addressAttributes(address, {
+                    itemRef: entry.itemRef,
+                    itemId: entry.itemId,
+                    quantity: entry.quantity,
+                    grade: entry.instance?.grade,
+                    upgradeLevel: entry.instance?.upgradeLevel,
+                    charges: entry.instance?.charges,
+                    maxCharges: entry.instance?.maxCharges,
+                  }) ?? {}
+                : {})}
             >
               <ItemSlotContents
                 itemId={entry.itemId}
@@ -1504,19 +1734,6 @@ function CampaignWarehouseInventory({
           </div>
         )}
       </div>
-      {itemPreview && (
-        <ItemDetailModal
-          game={null}
-          selected={{
-            itemId: itemPreview.itemId,
-            itemRef: itemPreview.itemRef,
-          }}
-          preview={itemPreview}
-          readOnly
-          onClose={() => setItemPreview(null)}
-        />
-      )}
-    </>
   );
 }
 
@@ -3568,6 +3785,15 @@ function ItemDetailModal({
                 {instance?.cursed
                   ? text("저주로 해제 불가", "Locked by Curse")
                   : text("장비 해제", "Unequip")}
+              </button>
+            ) : readOnly && usable && onUse ? (
+              <button
+                type="button"
+                className="item-action is-primary"
+                disabled={busy}
+                onClick={() => onUse(selected.itemRef)}
+              >
+                {text("사용", "Use")}
               </button>
             ) : !readOnly ? (
               <>
@@ -5824,38 +6050,21 @@ function CommerceModal({
   campaign,
   view,
   notice,
-  onSell,
   onBuy,
-  onUseConsumable,
   onClose,
 }: {
   campaign: CampaignSave;
   view: CommerceView;
   notice: string | null;
-  onSell: (slotIndex: number) => boolean;
   onBuy: (source: ShopListingSource, listingId: string) => boolean;
-  onUseConsumable: (
-    consumableId: EquipmentConsumableId,
-    targetInstanceId: string,
-  ) => boolean;
   onClose: () => void;
 }) {
   const slotDrag = useActiveItemSlotDrag();
-  const [selectedWarehouseIndex, setSelectedWarehouseIndex] = useState<number | null>(null);
-  const [pendingConsumableId, setPendingConsumableId] =
-    useState<EquipmentConsumableId | null>(null);
   const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
   const warehouse = campaign.warehouse;
   const stackEntries = Object.entries(warehouse.stacks)
     .filter(([, quantity]) => quantity > 0)
     .sort(([a], [b]) => (ITEM_DEFS[a]?.name ?? a).localeCompare(ITEM_DEFS[b]?.name ?? b));
-  const slots = normalizeStorageSlots(warehouse, WAREHOUSE_SLOT_COUNT);
-  const selectedRef = selectedWarehouseIndex === null
-    ? null
-    : slots[selectedWarehouseIndex] ?? null;
-  const selectedEntry = selectedRef
-    ? resolveWarehouseItemRef(warehouse, selectedRef)
-    : null;
   const listingSections = [
     {
       source: "stock" as const,
@@ -5897,85 +6106,15 @@ function CommerceModal({
             <div className="warehouse-summary">
               <span>총 보관 수량 <b>{warehouseItemCount(warehouse)}</b></span>
               <span>종류 <b>{stackEntries.length + warehouse.instances.length}</b></span>
-              <em>
-                {pendingConsumableId
-                  ? "강조된 장비를 선택하세요."
-                  : view === "warehouse"
-                    ? "주문서를 선택해 창고 장비에 바로 사용할 수 있습니다."
-                    : "상점 상품을 이 영역으로 옮기거나 구매 버튼을 누르세요."}
-              </em>
+              <em>{view === "warehouse"
+                ? "아이템을 클릭해 설명을 보고 장비 주문서를 사용할 수 있습니다."
+                : "상점 상품을 이 영역으로 옮기거나 구매 버튼을 누르세요."}</em>
             </div>
             <CampaignWarehouseInventory
               warehouse={warehouse}
               className="warehouse-fixed-grid"
-              selectedIndex={selectedWarehouseIndex}
               contextLabel={view === "warehouse" ? "원정대 창고" : "상점 왼쪽 창고"}
-              isItemHighlighted={(entry) => Boolean(
-                pendingConsumableId &&
-                entry.instance &&
-                canApplyEquipmentConsumable(
-                  pendingConsumableId,
-                  ITEM_DEFS[entry.itemId],
-                  entry.instance,
-                )
-              )}
-              isItemSelectable={(entry) => pendingConsumableId
-                ? Boolean(
-                    entry.instance &&
-                    canApplyEquipmentConsumable(
-                      pendingConsumableId,
-                      ITEM_DEFS[entry.itemId],
-                      entry.instance,
-                    )
-                  )
-                : true}
-              onItemSelect={(entry, index) => {
-                if (pendingConsumableId && entry.instance) {
-                  if (onUseConsumable(pendingConsumableId, entry.instance.id)) {
-                    setPendingConsumableId(null);
-                    setSelectedWarehouseIndex(null);
-                  }
-                  return;
-                }
-                setSelectedWarehouseIndex(index);
-              }}
             />
-            {pendingConsumableId && (
-              <aside className="commerce-selection-bar">
-                <div>
-                  <small>장비 대상 주문서</small>
-                  <strong>{ITEM_DEFS[pendingConsumableId].name}</strong>
-                </div>
-                <span>사용할 장비를 선택하세요.</span>
-                <button type="button" onClick={() => setPendingConsumableId(null)}>취소</button>
-              </aside>
-            )}
-            {selectedEntry && selectedWarehouseIndex !== null && (
-              <aside className="commerce-selection-bar">
-                <div>
-                  <small>{selectedEntry.instance ? "고유 장비 1개" : "스택 1개"}</small>
-                  <strong>{ITEM_DEFS[selectedEntry.itemId]?.name}</strong>
-                </div>
-                {view === "shop" && (
-                  <b>{formatGold(shopSalePrice(ITEM_DEFS[selectedEntry.itemId], selectedEntry.instance))} G</b>
-                )}
-                {view === "warehouse" && isEquipmentConsumableId(selectedEntry.itemId) ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPendingConsumableId(selectedEntry.itemId as EquipmentConsumableId);
-                      setSelectedWarehouseIndex(null);
-                    }}
-                  >
-                    장비에 사용
-                  </button>
-                ) : view === "shop" ? (
-                  <button type="button" onClick={() => onSell(selectedWarehouseIndex)}>
-                    {selectedEntry.instance ? "장비 판매" : "1개 판매"}
-                  </button>
-                ) : null}
-              </aside>
-            )}
           </section>
           {view === "shop" && <section
             className="commerce-shop-panel commerce-column"
@@ -6298,10 +6437,12 @@ const readTrainingSkillDragData = (
 
 function TrainingGroundModal({
   campaign,
+  warehouseNotice,
   onCampaignChange,
   onClose,
 }: {
   campaign: CampaignSave;
+  warehouseNotice: string | null;
   onCampaignChange: (campaign: CampaignSave) => void;
   onClose: () => void;
 }) {
@@ -6421,7 +6562,11 @@ function TrainingGroundModal({
           <button type="button" onClick={onClose} aria-label="훈련장 닫기">×</button>
         </header>
         <p className="blacksmith-lead">동료는 스킬을 제한 없이 배울 수 있지만, 원정에는 두 개만 장착할 수 있습니다.</p>
-        {notice && <p className="commerce-notice" role="status">{notice}</p>}
+        {(warehouseNotice ?? notice) && (
+          <p className="commerce-notice" role="status">
+            {warehouseNotice ?? notice}
+          </p>
+        )}
         <div className="blacksmith-layout training-ground-layout">
           <div className="blacksmith-source-panels">
             <section className="blacksmith-source-panel" aria-labelledby="training-warehouse-title">
@@ -7081,7 +7226,7 @@ function DungeonRun({
     useState<InspectedEffect | null>(null);
   const [activeLoadoutOwnerId, setActiveLoadoutOwnerId] =
     useState(PLAYER_ID);
-  const [upgradeFlashKey, setUpgradeFlashKey] = useState<string | null>(null);
+  const { upgradeFlashKey, flashUpgradeKey } = useUpgradeFlashFeedback();
   const [alchemyOpen, setAlchemyOpen] = useState(false);
   const [questPrompt, setQuestPrompt] = useState<{
     npcId: string;
@@ -7157,27 +7302,10 @@ function DungeonRun({
   const resumeAutoExploreAfterUiActionRef = useRef(false);
   const startAutoExploreRef = useRef<() => void>(() => undefined);
   const actionTokenRef = useRef(0);
-  const upgradeFlashTimerRef = useRef<number | null>(null);
-
-  useEffect(
-    () => () => {
-      if (upgradeFlashTimerRef.current !== null) {
-        window.clearTimeout(upgradeFlashTimerRef.current);
-      }
-    },
-    [],
-  );
 
   const flashUpgradeTarget = useCallback((target: UpgradeTarget) => {
-    if (upgradeFlashTimerRef.current !== null) {
-      window.clearTimeout(upgradeFlashTimerRef.current);
-    }
-    setUpgradeFlashKey(upgradeTargetVisualKey(target));
-    upgradeFlashTimerRef.current = window.setTimeout(() => {
-      setUpgradeFlashKey(null);
-      upgradeFlashTimerRef.current = null;
-    }, 920);
-  }, []);
+    flashUpgradeKey(upgradeTargetVisualKey(target));
+  }, [flashUpgradeKey]);
 
   const commitGame = useCallback((next: GameState) => {
     gameRef.current = next;
@@ -11771,6 +11899,15 @@ export default function DungeonGame() {
   const [expeditionResult, setExpeditionResult] =
     useState<ExpeditionResultView | null>(null);
   const uiAudioRuntimeRef = useRef<GameAudioRuntime | null>(null);
+  const beginWarehouseConsumableTargetMode = useCallback(() => {
+    setBlacksmithTarget(null);
+  }, []);
+  const warehouseInteraction = useCampaignWarehouseInteraction({
+    campaign,
+    onCampaignChange: setCampaign,
+    onNotice: setFacilityNotice,
+    onBeginTargetMode: beginWarehouseConsumableTargetMode,
+  });
   const dungeonOffers = useMemo(
     () => generateDungeonOffers(
       campaign.offerSeed,
@@ -11898,6 +12035,7 @@ export default function DungeonGame() {
 
   const openPreparation = useCallback(
     (dungeon: DungeonDefinition) => {
+      warehouseInteraction.reset();
       setSelectedDungeon(dungeon);
       setCommerceOpen(false);
       setBlacksmithOpen(false);
@@ -11916,7 +12054,7 @@ export default function DungeonGame() {
       );
       setScreen("preparation");
     },
-    [campaign.companions],
+    [campaign.companions, warehouseInteraction],
   );
 
   const togglePreparationCompanion = useCallback((companionId: string) => {
@@ -11956,40 +12094,6 @@ export default function DungeonGame() {
     return false;
   }, [campaign]);
 
-  const handleWarehouseEquipmentConsumable = useCallback((
-    consumableId: EquipmentConsumableId,
-    targetInstanceId: string,
-  ) => {
-    const result = applyWarehouseEquipmentConsumable(
-      campaign,
-      consumableId,
-      targetInstanceId,
-    );
-    if (result.changed) {
-      setCampaign(result.campaign);
-      const itemName = result.itemId
-        ? ITEM_DEFS[result.itemId]?.name ?? result.itemId
-        : "장비";
-      const enchantment = result.traitId
-        ? ` 새로운 ${EQUIPMENT_TRAITS[result.traitId].name} 인챈트가 깃들었습니다.`
-        : "";
-      setFacilityNotice(
-        consumableId === "scroll_upgrade"
-          ? `${itemName}이(가) +${result.upgradeLevel ?? 0} 장비로 강화되었습니다.${enchantment}`
-          : `${itemName}에${enchantment}`,
-      );
-      return true;
-    }
-    setFacilityNotice(
-      result.reason === "maximum-enchantments"
-        ? "이 장비에는 더 이상 인챈트를 추가할 수 없습니다."
-        : result.reason === "missing-scroll"
-          ? "창고에 사용할 주문서가 없습니다."
-          : "주문서를 적용할 수 있는 장비를 선택해야 합니다.",
-    );
-    return false;
-  }, [campaign]);
-
   const handleBlacksmithUpgrade = useCallback((target: SmithyTarget) => {
     const result = upgradeCampaignEquipmentGrade(campaign, target);
     if (result.changed) {
@@ -12011,6 +12115,7 @@ export default function DungeonGame() {
     (held: HeldSlotItem, target: ItemSlotAddress) => {
       const source = held.source;
       if (target.zone === "smithyTarget") {
+        warehouseInteraction.cancelPending();
         const candidate = listSmithyCandidates(campaign).find(
           (entry) => entry.instance.id === held.item.itemRef,
         );
@@ -12060,7 +12165,13 @@ export default function DungeonGame() {
       setCampaign(result.campaign);
       setPreparationLoadout(result.loadout);
     },
-    [campaign, handleShopBuy, handleShopSell, preparationLoadout],
+    [
+      campaign,
+      handleShopBuy,
+      handleShopSell,
+      preparationLoadout,
+      warehouseInteraction,
+    ],
   );
   const campaignSlotDrag = useItemSlotDrag(handleCampaignSlotDrop);
 
@@ -12143,7 +12254,8 @@ export default function DungeonGame() {
 
   const renderCampaignSurface = (content: ReactNode) => (
     <ItemSlotDragContext.Provider value={campaignSlotDrag}>
-      <UiLanguageContext.Provider value={language}>
+      <CampaignWarehouseInteractionContext.Provider value={warehouseInteraction}>
+        <UiLanguageContext.Provider value={language}>
         <div
           lang={language}
           data-language={language}
@@ -12170,10 +12282,9 @@ export default function DungeonGame() {
               campaign={campaign}
               view={commerceView}
               notice={facilityNotice}
-              onSell={handleShopSell}
               onBuy={handleShopBuy}
-              onUseConsumable={handleWarehouseEquipmentConsumable}
               onClose={() => {
+                warehouseInteraction.reset();
                 setCommerceOpen(false);
                 setFacilityNotice(null);
               }}
@@ -12185,11 +12296,13 @@ export default function DungeonGame() {
               selectedTarget={blacksmithTarget}
               notice={facilityNotice}
               onTargetSelect={(target) => {
+                warehouseInteraction.cancelPending();
                 setBlacksmithTarget(target);
                 setFacilityNotice(null);
               }}
               onUpgrade={handleBlacksmithUpgrade}
               onClose={() => {
+                warehouseInteraction.reset();
                 setBlacksmithOpen(false);
                 setBlacksmithTarget(null);
                 setFacilityNotice(null);
@@ -12199,8 +12312,10 @@ export default function DungeonGame() {
           {trainingGroundOpen && (
             <TrainingGroundModal
               campaign={campaign}
+              warehouseNotice={facilityNotice}
               onCampaignChange={setCampaign}
               onClose={() => {
+                warehouseInteraction.reset();
                 setTrainingGroundOpen(false);
                 setFacilityNotice(null);
               }}
@@ -12230,9 +12345,25 @@ export default function DungeonGame() {
               onClose={() => setHubCompendiumOpen(false)}
             />
           )}
+          {warehouseInteraction.itemPreview && (
+            <ItemDetailModal
+              game={null}
+              selected={{
+                itemId: warehouseInteraction.itemPreview.itemId,
+                itemRef: warehouseInteraction.itemPreview.itemRef,
+              }}
+              preview={warehouseInteraction.itemPreview}
+              readOnly
+              onUse={isEquipmentConsumableId(
+                warehouseInteraction.itemPreview.itemId,
+              ) ? warehouseInteraction.beginPreviewUse : undefined}
+              onClose={warehouseInteraction.closePreview}
+            />
+          )}
           <HeldItemCursor held={campaignSlotDrag.held} />
         </div>
-      </UiLanguageContext.Provider>
+        </UiLanguageContext.Provider>
+      </CampaignWarehouseInteractionContext.Provider>
     </ItemSlotDragContext.Provider>
   );
 
@@ -12435,6 +12566,7 @@ export default function DungeonGame() {
         selectedCompanionIds={selectedCompanionIds}
         onCompanionToggle={togglePreparationCompanion}
         onBack={() => {
+          warehouseInteraction.reset();
           setSelectedDungeon(null);
           setScreen("hub");
         }}
@@ -12450,6 +12582,7 @@ export default function DungeonGame() {
       developerMode={developerMode}
       onSelectDungeon={openPreparation}
       onOpenWarehouse={() => {
+        warehouseInteraction.reset();
         setCommerceView("warehouse");
         setCommerceOpen(true);
         setBlacksmithOpen(false);
@@ -12457,6 +12590,7 @@ export default function DungeonGame() {
         setFacilityNotice(null);
       }}
       onOpenShop={() => {
+        warehouseInteraction.reset();
         setCommerceView("shop");
         setCommerceOpen(true);
         setBlacksmithOpen(false);
@@ -12464,6 +12598,7 @@ export default function DungeonGame() {
         setFacilityNotice(null);
       }}
       onOpenBlacksmith={() => {
+        warehouseInteraction.reset();
         setBlacksmithOpen(true);
         setTrainingGroundOpen(false);
         setBlacksmithTarget(null);
@@ -12471,6 +12606,7 @@ export default function DungeonGame() {
         setFacilityNotice(null);
       }}
       onOpenTraining={() => {
+        warehouseInteraction.reset();
         setTrainingGroundOpen(true);
         setBlacksmithOpen(false);
         setCommerceOpen(false);

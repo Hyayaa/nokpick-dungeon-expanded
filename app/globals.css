@@ -5690,40 +5690,6 @@ kbd {
     0 0 10px rgba(216, 182, 107, 0.13);
 }
 
-.commerce-selection-bar {
-  display: grid;
-  min-height: 72px;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 13px;
-  padding: 9px 20px;
-  border-top: 1px solid #3b403a;
-  background: #0b100d;
-}
-
-.commerce-selection-bar > div {
-  display: grid;
-  gap: 2px;
-}
-
-.commerce-selection-bar small,
-.commerce-selection-bar span {
-  color: #707871;
-  font-size: 8px;
-}
-
-.commerce-selection-bar strong {
-  color: #dedfd2;
-  font-size: 11px;
-}
-
-.commerce-selection-bar > b {
-  color: #9ed5a8;
-  font-family: var(--pixel);
-  font-size: 12px;
-}
-
-.commerce-selection-bar > button,
 .shop-listing-card > button:last-child {
   min-height: 34px;
   padding: 0 12px;
@@ -8286,16 +8252,6 @@ body:has(.held-item-cursor) .game-page [data-item-slot-address]:hover {
 
   .commerce-warehouse-panel .warehouse-fixed-grid {
     max-height: min(315px, calc(100vh - 430px));
-  }
-
-  .commerce-selection-bar {
-    grid-template-columns: auto minmax(0, 1fr);
-    padding-inline: 10px;
-  }
-
-  .commerce-selection-bar > b,
-  .commerce-selection-bar > button {
-    grid-column: auto;
   }
 
   .shop-listing-grid {

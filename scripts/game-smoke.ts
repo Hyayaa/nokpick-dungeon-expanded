@@ -2250,8 +2250,33 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
-  /applyWarehouseEquipmentConsumable\([\s\S]*setCampaign\(result\.campaign\)/,
-  "warehouse equipment scrolls must use the campaign transaction helper",
+  /function useCampaignWarehouseInteraction\([\s\S]*applyWarehouseEquipmentConsumable\([\s\S]*onCampaignChange\(result\.campaign\)/,
+  "one campaign warehouse controller must own the shared scroll transaction",
+);
+assert.match(
+  dungeonUiSource,
+  /readOnly[\s\S]*onUse=\{isEquipmentConsumableId\([\s\S]*warehouseInteraction\.beginPreviewUse/,
+  "warehouse scroll clicks must open the shared item detail before use enters target mode",
+);
+assert.match(
+  dungeonUiSource,
+  /function CampaignWarehouseInventory\([\s\S]*pendingTargetMode[\s\S]*canTargetItem\(entry\)[\s\S]*applyToTarget\(entry\)/,
+  "the shared warehouse inventory must own target highlighting and application",
+);
+assert.match(
+  dungeonUiSource,
+  /type UpgradeVisualTarget[\s\S]*kind: "warehouse"[\s\S]*useUpgradeFlashFeedback[\s\S]*isUpgradeFlashing \? "is-upgrade-flashing"/,
+  "dungeon and warehouse equipment actions must share one flash key and timing implementation",
+);
+assert.doesNotMatch(
+  dungeonUiSource,
+  /pendingConsumableId|장비에 사용|commerce-selection-bar/,
+  "the commerce-only warehouse consumable flow must be removed",
+);
+assert.equal(
+  (dungeonUiSource.match(/<CampaignWarehouseInventory/g) ?? []).length,
+  4,
+  "main/shop, blacksmith, training, and preparation must reuse one warehouse inventory",
 );
 assert.ok(
   (dungeonUiSource.match(/<ItemSlotContents/g) ?? []).length >= 3,
