@@ -285,6 +285,16 @@ assert.doesNotMatch(
   "the Warehouse must no longer occupy a separate full-width strip",
 );
 assert.match(
+  dungeonGameSource,
+  /onOpenWarehouse=\{\(\) => \{[\s\S]*setCommerceView\("warehouse"\)[\s\S]*onOpenShop=\{\(\) => \{[\s\S]*setCommerceView\("shop"\)/,
+  "Hub Warehouse and Shop actions must preserve distinct initial commerce views",
+);
+assert.match(
+  dungeonCssSource,
+  /\.commerce-split-layout\.is-warehouse-view\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/,
+  "the dedicated Warehouse view must use the full commerce width",
+);
+assert.match(
   dungeonCssSource,
   /\.hub-facilities\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[\s\S]*grid-auto-rows:\s*1fr;/,
   "all four Hub facility cards must share the same grid sizing",

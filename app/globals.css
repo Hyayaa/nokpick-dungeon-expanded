@@ -5507,6 +5507,10 @@ kbd {
   overflow: hidden;
 }
 
+.commerce-split-layout.is-warehouse-view {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .commerce-column {
   display: flex;
   min-width: 0;

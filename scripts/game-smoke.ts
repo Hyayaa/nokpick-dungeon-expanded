@@ -8,6 +8,7 @@ import {
   advanceWandRecharge,
   advanceHungerAndRecovery,
   advanceExpeditionFloor,
+  applyEquipmentConsumable,
   acceptEquipmentOffer,
   activateCompanionQuickslot,
   activateCompanionSkill,
@@ -73,6 +74,7 @@ import {
   DUNGEON_DIFFICULTY_RULES,
   DUNGEON_GOLD_TARGETS,
   applyLoadoutToPlayer,
+  applyWarehouseEquipmentConsumable,
   cloneWarehouse,
   companionToPlayer,
   createInitialWarehouse,
@@ -85,6 +87,7 @@ import {
   selectMainLootEntries,
   selectedLoadoutSlotCount,
   takeLoadoutFromWarehouse,
+  type CampaignSave,
 } from "../app/game/campaign";
 import {
   BLACKSMITH_UPGRADE_COST,
@@ -149,6 +152,7 @@ import {
   equipmentStatProfile,
   equipmentTraitSummary,
   isUpgradeableEquipment,
+  MAX_EQUIPMENT_ENCHANTMENTS,
   normalizeEquipmentInstance,
   rollEnchantmentGrade,
   upgradeEquipmentInstance,
@@ -489,7 +493,7 @@ const createPreparationTransferFixture = () => {
       gold: 0,
       offerSeed: 1,
       shop: createShopState(1),
-    },
+    } as CampaignSave,
     loadout: {
       stacks: {},
       instanceIds: [],
@@ -820,7 +824,7 @@ const smithyFixture = createPreparationTransferFixture();
 smithyFixture.sword.grade = "F";
 smithyFixture.sword.traits = [
   { id: "keen", grade: "F" },
-  { id: "swift", grade: "C" },
+  { id: "lethal", grade: "C" },
 ];
 smithyFixture.campaign.gold = 2_000;
 const smithyCandidate = listSmithyCandidates(smithyFixture.campaign).find(
@@ -841,7 +845,7 @@ assert.deepEqual(
   smithyUpgradedSword?.traits,
   [
     { id: "keen", grade: "E" },
-    { id: "swift", grade: "C" },
+    { id: "lethal", grade: "C" },
   ],
   "raising equipment grade must raise its first trait while preserving later enchantment grades",
 );
@@ -850,6 +854,74 @@ assert.equal(
   "F",
   "smithy upgrades must not mutate the original campaign equipment",
 );
+
+const warehouseScrollFixture = createPreparationTransferFixture();
+warehouseScrollFixture.sword.traits = [{ id: "keen", grade: "F" }];
+warehouseScrollFixture.campaign.warehouse.stacks.scroll_upgrade = 1;
+warehouseScrollFixture.campaign.warehouse.stacks.scroll_identify = 1;
+warehouseScrollFixture.campaign.warehouse.slots = normalizeStorageSlots(
+  warehouseScrollFixture.campaign.warehouse,
+  WAREHOUSE_SLOT_COUNT,
+);
+const warehouseUpgradeA = applyWarehouseEquipmentConsumable(
+  warehouseScrollFixture.campaign,
+  "scroll_upgrade",
+  warehouseScrollFixture.sword.id,
+);
+const warehouseUpgradeB = applyWarehouseEquipmentConsumable(
+  warehouseScrollFixture.campaign,
+  "scroll_upgrade",
+  warehouseScrollFixture.sword.id,
+);
+assert.equal(warehouseUpgradeA.changed, true);
+assert.equal(warehouseUpgradeA.campaign.warehouse.stacks.scroll_upgrade ?? 0, 0);
+assert.equal(
+  warehouseUpgradeA.campaign.warehouse.instances.find(
+    (instance) => instance.id === warehouseScrollFixture.sword.id,
+  )?.upgradeLevel,
+  1,
+);
+assert.deepEqual(
+  warehouseUpgradeA.campaign.warehouse.instances.find(
+    (instance) => instance.id === warehouseScrollFixture.sword.id,
+  )?.traits,
+  warehouseUpgradeB.campaign.warehouse.instances.find(
+    (instance) => instance.id === warehouseScrollFixture.sword.id,
+  )?.traits,
+  "the same campaign action state must reproduce the same upgrade enchantment result",
+);
+const warehouseEnchant = applyWarehouseEquipmentConsumable(
+  warehouseScrollFixture.campaign,
+  "scroll_identify",
+  warehouseScrollFixture.sword.id,
+);
+assert.equal(warehouseEnchant.changed, true);
+assert.equal(warehouseEnchant.campaign.warehouse.stacks.scroll_identify ?? 0, 0);
+assert.equal(
+  warehouseEnchant.campaign.warehouse.instances.find(
+    (instance) => instance.id === warehouseScrollFixture.sword.id,
+  )?.traits?.length,
+  2,
+);
+const fullWarehouseScrollFixture = createPreparationTransferFixture();
+fullWarehouseScrollFixture.sword.traits = [
+  { id: "keen", grade: "F" },
+  { id: "lethal", grade: "C" },
+  { id: "piercing", grade: "D" },
+];
+fullWarehouseScrollFixture.campaign.warehouse.stacks.scroll_identify = 1;
+const blockedWarehouseEnchant = applyWarehouseEquipmentConsumable(
+  fullWarehouseScrollFixture.campaign,
+  "scroll_identify",
+  fullWarehouseScrollFixture.sword.id,
+);
+assert.equal(blockedWarehouseEnchant.changed, false);
+assert.equal(blockedWarehouseEnchant.reason, "maximum-enchantments");
+assert.equal(
+  blockedWarehouseEnchant.campaign.warehouse.stacks.scroll_identify,
+  1,
+);
+assert.equal(fullWarehouseScrollFixture.sword.traits.length, 3);
 
 const companionSmithyFixture = createPreparationTransferFixture();
 companionSmithyFixture.campaign.gold = 2_000;
@@ -929,10 +1001,10 @@ assert.match(
   /commerce-split-layout[\s\S]*CampaignWarehouseInventory[\s\S]*commerce-shop-panel/,
   "the shop must render the shared warehouse on the left and shop stock on the right",
 );
-assert.doesNotMatch(
+assert.match(
   dungeonUiSource,
-  /shopBuyback|BUYBACK|>되사기</,
-  "the shop must not render a separate buyback panel or listing",
+  /shopBuyback[\s\S]*BUYBACK[\s\S]*되사기/,
+  "the shop must preserve the buyback listing and drag target",
 );
 assert.match(
   dungeonUiSource,
@@ -2153,8 +2225,8 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
-  /itemId === "scroll_upgrade"[\s\S]*setPendingUpgradeScrollRef\(itemRef\)/,
-  "using an upgrade scroll must enter equipment-target selection",
+  /isEquipmentConsumableId\(itemId\)[\s\S]*setPendingEquipmentConsumable\(\{ itemRef, itemId \}\)/,
+  "using an upgrade or enchantment scroll must enter shared equipment-target selection",
 );
 assert.doesNotMatch(
   dungeonUiSource,
@@ -2163,8 +2235,23 @@ assert.doesNotMatch(
 );
 assert.match(
   dungeonUiSource,
-  /upgradeMode=\{Boolean\(pendingUpgradeScrollRef\)\}[\s\S]*onUpgradePlayer=\{upgradePlayerLoadout\}/,
-  "the existing player and companion loadout must become the upgrade target surface",
+  /upgradeMode=\{Boolean\(pendingEquipmentConsumable\)\}[\s\S]*onUpgradePlayer=\{applyConsumableToPlayerLoadout\}/,
+  "the existing player and companion loadout must become the equipment-consumable target surface",
+);
+assert.match(
+  dungeonUiSource,
+  /onOpenWarehouse=\{\(\) => \{[\s\S]*setCommerceView\("warehouse"\)[\s\S]*onOpenShop=\{\(\) => \{[\s\S]*setCommerceView\("shop"\)/,
+  "the hub warehouse and shop buttons must open distinct commerce views",
+);
+assert.match(
+  dungeonUiSource,
+  /view === "shop" && <section[\s\S]*className="commerce-shop-panel commerce-column"/,
+  "warehouse view must not render shop stock as its default panel",
+);
+assert.match(
+  dungeonUiSource,
+  /applyWarehouseEquipmentConsumable\([\s\S]*setCampaign\(result\.campaign\)/,
+  "warehouse equipment scrolls must use the campaign transaction helper",
 );
 assert.ok(
   (dungeonUiSource.match(/<ItemSlotContents/g) ?? []).length >= 3,
@@ -2996,14 +3083,14 @@ const sequenceRandom = (values: number[]) => {
 const weakSwordInstance = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "rolled-weak-sword",
-  sequenceRandom([0.99]),
-  { grade: "F", allowCurse: false, preferredFirstTrait: "swift" },
+  sequenceRandom([0.1]),
+  { grade: "F", allowCurse: false, preferredFirstTrait: "devastating" },
 );
 const strongSwordInstance = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "rolled-strong-sword",
-  sequenceRandom([0.99]),
-  { grade: "S", allowCurse: false, preferredFirstTrait: "swift" },
+  sequenceRandom([0.1]),
+  { grade: "S", allowCurse: false, preferredFirstTrait: "devastating" },
 );
 assert.equal(weakSwordInstance.grade, "F");
 assert.equal(strongSwordInstance.grade, "S");
@@ -3025,8 +3112,8 @@ for (const [index, grade] of ITEM_GRADES.entries()) {
   const current = createEquipmentInstance(
     ITEM_DEFS.shortsword,
     `grade-${grade}-sword`,
-    sequenceRandom([0.99]),
-    { grade, allowCurse: false, preferredFirstTrait: "swift" },
+    sequenceRandom([0.1]),
+    { grade, allowCurse: false, preferredFirstTrait: "devastating" },
   );
   assert.equal(
     current.traits?.[0]?.grade,
@@ -3037,11 +3124,11 @@ for (const [index, grade] of ITEM_GRADES.entries()) {
     const previous = createEquipmentInstance(
       ITEM_DEFS.shortsword,
       `grade-${ITEM_GRADES[index - 1]}-comparison`,
-      sequenceRandom([0.99]),
+      sequenceRandom([0.1]),
       {
         grade: ITEM_GRADES[index - 1],
         allowCurse: false,
-        preferredFirstTrait: "swift",
+        preferredFirstTrait: "devastating",
       },
     );
     const currentAttack = equipmentStatProfile(ITEM_DEFS.shortsword, current).attack;
@@ -3105,8 +3192,8 @@ assert.equal(
 const additionalEnchantInstance = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "additional-enchant-grade",
-  sequenceRandom([0.99]),
-  { grade: "F", allowCurse: false, preferredFirstTrait: "swift" },
+  sequenceRandom([0.1]),
+  { grade: "F", allowCurse: false, preferredFirstTrait: "devastating" },
 );
 enchantEquipmentInstance(
   additionalEnchantInstance,
@@ -3141,8 +3228,8 @@ assert.ok(
 const gradeStableUpgrade = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "grade-stable-upgrade",
-  sequenceRandom([0.99]),
-  { grade: "D", allowCurse: false, preferredFirstTrait: "swift" },
+  sequenceRandom([0.1]),
+  { grade: "D", allowCurse: false, preferredFirstTrait: "devastating" },
 );
 const beforeUpgradeAttack = equipmentStatProfile(
   ITEM_DEFS.shortsword,
@@ -3160,7 +3247,7 @@ const cursedSwordInstance = createEquipmentInstance(
   ITEM_DEFS.shortsword,
   "rolled-cursed-sword",
   sequenceRandom([0]),
-  { grade: "C", preferredFirstTrait: "swift" },
+  { grade: "C", preferredFirstTrait: "devastating" },
 );
 assert.equal(
   cursedSwordInstance.cursed,
@@ -4823,7 +4910,7 @@ const persistentProfile =
   )!;
 persistentProfile.upgradeLevel = 3;
 persistentProfile.traits = [{
-  id: "swift",
+  id: "keen",
   grade: persistentProfile.grade ?? "C",
 }];
 const persistentThrowTarget = {
@@ -4929,7 +5016,7 @@ assert.deepEqual(
   },
   {
     upgradeLevel: 3,
-    traits: [{ id: "swift", grade: persistentProfile.grade ?? "C" }],
+    traits: [{ id: "keen", grade: persistentProfile.grade ?? "C" }],
     charges: 1,
     maxCharges: 3,
     autoSlot: persistentProfile.id,
@@ -5028,6 +5115,69 @@ assert.equal(
   companionUpgrade.state.companions[0].autoSlots[3]?.instance?.upgradeLevel,
   1,
   "the shared loadout UI must be able to upgrade a companion-held item",
+);
+
+let enchantScrollGame = developerGrantItem(
+  createNewGame(0xe11ca17),
+  "wand_frost",
+);
+enchantScrollGame = developerGrantItem(enchantScrollGame, "scroll_identify");
+const enchantScrollWand = enchantScrollGame.player.inventoryInstances.find(
+  (instance) => instance.defId === "wand_frost",
+)!;
+enchantScrollWand.traits = [{ id: "focused", grade: enchantScrollWand.grade ?? "C" }];
+const pendingEnchantScroll = consumeItemAction(enchantScrollGame, "scroll_identify");
+assert.equal(pendingEnchantScroll.consumedTurn, false);
+assert.equal(
+  pendingEnchantScroll.state.player.inventory.scroll_identify,
+  1,
+  "the enchantment scroll must wait for an explicit equipment target",
+);
+const firstEnchantScroll = applyEquipmentConsumable(
+  enchantScrollGame,
+  "scroll_identify",
+  { kind: "inventory", itemRef: enchantScrollWand.id },
+);
+assert.equal(firstEnchantScroll.consumedTurn, true);
+assert.equal(
+  firstEnchantScroll.state.player.inventoryInstances.find(
+    (instance) => instance.id === enchantScrollWand.id,
+  )?.traits?.length,
+  2,
+);
+const secondEnchantGame = developerGrantItem(
+  firstEnchantScroll.state,
+  "scroll_identify",
+);
+const secondEnchantScroll = applyEquipmentConsumable(
+  secondEnchantGame,
+  "scroll_identify",
+  { kind: "inventory", itemRef: enchantScrollWand.id },
+);
+assert.equal(
+  secondEnchantScroll.state.player.inventoryInstances.find(
+    (instance) => instance.id === enchantScrollWand.id,
+  )?.traits?.length,
+  MAX_EQUIPMENT_ENCHANTMENTS,
+);
+const fullEnchantGame = developerGrantItem(
+  secondEnchantScroll.state,
+  "scroll_identify",
+);
+const fullEnchantRng = fullEnchantGame.rng;
+const blockedEnchantScroll = applyEquipmentConsumable(
+  fullEnchantGame,
+  "scroll_identify",
+  { kind: "inventory", itemRef: enchantScrollWand.id },
+);
+assert.equal(blockedEnchantScroll.consumedTurn, false);
+assert.equal(blockedEnchantScroll.state.rng, fullEnchantRng);
+assert.equal(blockedEnchantScroll.state.player.inventory.scroll_identify, 1);
+assert.equal(
+  blockedEnchantScroll.state.player.inventoryInstances.find(
+    (instance) => instance.id === enchantScrollWand.id,
+  )?.traits?.length,
+  MAX_EQUIPMENT_ENCHANTMENTS,
 );
 
 const thrownPotionGame = developerGrantItem(
@@ -8507,27 +8657,31 @@ for (let level = 2; level < 12; level += 1) {
     `level ${level + 1} must remain on the cumulative fifteen-percent XP curve`,
   );
 }
-const companionSpeedInstance = createEquipmentInstance(
-  ITEM_DEFS.shortsword,
-  "companion-speed-sword",
-  sequenceRandom([0.99]),
-  { grade: "S", allowCurse: false, preferredFirstTrait: "swift" },
+const companionHasteRing = createPlainEquipmentInstance(
+  ITEM_DEFS.ring_haste,
+  "companion-haste-ring",
+);
+const companionFurorRing = createPlainEquipmentInstance(
+  ITEM_DEFS.ring_furor,
+  "companion-furor-ring",
 );
 const speedCompanion = {
   ...companionGame.companions[0],
   equipment: {
     ...companionGame.companions[0].equipment,
-    weapon: "shortsword",
+    ring: "ring_haste",
+    ring2: "ring_furor",
   },
   equipmentInstances: {
     ...companionGame.companions[0].equipmentInstances,
-    weapon: companionSpeedInstance,
+    ring: companionHasteRing,
+    ring2: companionFurorRing,
   },
 };
 assert.ok(
   getCompanionMoveSpeed(speedCompanion) > 1 &&
     getCompanionAttackSpeed(speedCompanion) > 1,
-  "companion move and attack speed must include equipment enchantments",
+  "companion move and attack speed must preserve intrinsic equipment effects",
 );
 assert.ok(
   getCompanionMoveSpeed({
@@ -10235,6 +10389,7 @@ enchantAlchemyGame.objects = [{
 const alchemyWeapon = enchantAlchemyGame.player.inventoryInstances.find(
   (instance) => instance.defId === "shortsword",
 )!;
+alchemyWeapon.traits = [{ id: "keen", grade: alchemyWeapon.grade ?? "C" }];
 const enchantedByAlchemy = performAlchemy(enchantAlchemyGame, [
   alchemyWeapon.id,
   "stone_enchantment",
@@ -10250,7 +10405,7 @@ assert.ok(
 for (const definition of Object.values(ITEM_DEFS).filter(
   (item) =>
     (item.category === "potion" || item.category === "scroll") &&
-    item.id !== "scroll_upgrade",
+    !["scroll_upgrade", "scroll_identify"].includes(item.id),
 )) {
   const itemGame = createNewGame(0x17e000 + definition.sprite);
   itemGame.enemies = [];

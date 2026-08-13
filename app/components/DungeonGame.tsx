@@ -38,6 +38,7 @@ import {
 import {
   acceptQuest,
   acceptEquipmentOffer,
+  applyEquipmentConsumable,
   activateCompanionSkill,
   advanceManualPartyRound,
   assignCompanionItem,
@@ -84,7 +85,6 @@ import {
   throwItem,
   unassignCompanionItem,
   unassignPlayerItem,
-  upgradeItemWithScroll,
   useItem as consumeItemAction,
   activateCompanionQuickslot,
   waitTurn,
@@ -147,6 +147,7 @@ import {
   ExpeditionStats,
   WarehouseState,
   applyLoadoutToPlayer,
+  applyWarehouseEquipmentConsumable,
   bossDungeonClearsAfterOutcome,
   cloneWarehouse,
   companionToPlayer,
@@ -239,9 +240,13 @@ import {
   SIMPLE_ALCHEMY_RECIPES,
 } from "../game/alchemy";
 import {
+  EQUIPMENT_TRAITS,
+  canApplyEquipmentConsumable,
   equipmentStatProfile,
   equipmentTraitSummary,
+  isEquipmentConsumableId,
   isUpgradeableEquipment,
+  type EquipmentConsumableId,
 } from "../game/equipment";
 import {
   STATUS_DESCRIPTIONS,
@@ -467,6 +472,7 @@ type ItemSlotAddress =
   | { zone: "shopSellTarget" }
   | { zone: "shopWarehouseTarget" }
   | { zone: "shopStock"; listingId: string }
+  | { zone: "shopBuyback"; listingId: string }
   | { zone: "smithyTarget" }
   | { zone: "preparationInventory"; index: number }
   | {
@@ -521,6 +527,11 @@ const upgradeTargetVisualKey = (target: UpgradeTarget) => {
     return `${target.companionId}:${target.slot}`;
   }
   return `${target.companionId}:flex:${target.index}`;
+};
+
+type PendingEquipmentConsumable = {
+  itemRef: string;
+  itemId: EquipmentConsumableId;
 };
 
 const randomDungeonSeed = () => {
@@ -740,7 +751,9 @@ const localizedItemName = (
 ) =>
   language === "ko"
     ? ITEM_DEFS[itemId]?.name ?? itemId
-    : humanizeId(itemId);
+    : itemId === "scroll_identify"
+      ? "Scroll of Enchantment"
+      : humanizeId(itemId);
 
 const localizedItemDescription = (
   itemId: string,
@@ -751,6 +764,9 @@ const localizedItemDescription = (
     return WAND_CODEX[itemId] ?? definition?.description ?? itemId;
   }
   if (!definition) return humanizeId(itemId);
+  if (itemId === "scroll_identify") {
+    return "Adds one new enchantment to equipment with no more than two enchantments.";
+  }
   const category = ITEM_CATEGORY_NAMES_EN[definition.category].toLowerCase();
   return `A ${category} from the dungeon. Its exact effects and equipment statistics are shown in this detail panel.`;
 };
@@ -1909,6 +1925,7 @@ function CompanionPanel({
   playerSelection,
   pendingItemRef,
   upgradeMode,
+  canTargetEquipment,
   onSelectSlot,
   onSelectPlayerSlot,
   onAssignPendingCompanion,
@@ -1932,6 +1949,7 @@ function CompanionPanel({
   playerSelection: PlayerLoadoutSelection | null;
   pendingItemRef: string | null;
   upgradeMode: boolean;
+  canTargetEquipment: (itemId: string, instance: InventoryInstance) => boolean;
   onSelectSlot: (selection: CompanionLoadoutSelection) => void;
   onSelectPlayerSlot: (selection: PlayerLoadoutSelection) => void;
   onAssignPendingCompanion: (selection: CompanionLoadoutSelection) => void;
@@ -2156,7 +2174,7 @@ function CompanionPanel({
                 ? canAssignPlayerItem(game, pendingItemRef, target)
                 : false;
               const canUpgrade = Boolean(
-                itemId && entry.instance && isUpgradeableEquipment(ITEM_DEFS[itemId]),
+                itemId && entry.instance && canTargetEquipment(itemId, entry.instance),
               );
               const key = target.kind === "equipment" ? target.slot : `flex-${target.index}`;
               const address: ItemSlotAddress = {
@@ -2312,7 +2330,7 @@ function CompanionPanel({
                     ? canAssignCompanionItem(game, pendingItemRef, target)
                     : false;
                   const canUpgrade = Boolean(
-                    itemId && entry.instance && isUpgradeableEquipment(ITEM_DEFS[itemId]),
+                    itemId && entry.instance && canTargetEquipment(itemId, entry.instance),
                   );
                   const key = target.kind === "equipment" ? target.slot : `flex-${target.index}`;
                   const address: ItemSlotAddress = {
@@ -3604,6 +3622,7 @@ function PersistentInventory({
   onFastEquip,
   pendingLoadoutItemRef,
   upgradeMode,
+  canTargetEquipment,
   onUpgradeItem,
   companionTarget,
   playerTarget,
@@ -3619,6 +3638,7 @@ function PersistentInventory({
   onFastEquip: (itemRef: string) => void;
   pendingLoadoutItemRef: string | null;
   upgradeMode: boolean;
+  canTargetEquipment: (itemId: string, instance: InventoryInstance) => boolean;
   onUpgradeItem: (itemRef: string) => void;
   companionTarget: CompanionLoadoutSelection | null;
   playerTarget: PlayerLoadoutSelection | null;
@@ -3764,7 +3784,7 @@ function PersistentInventory({
         <div>
           <strong>
             {upgradeMode
-              ? text("강화할 장비 선택", "Choose Equipment to Upgrade")
+              ? text("주문서를 적용할 장비 선택", "Choose Equipment for the Scroll")
               : pendingLoadoutItemRef
                 ? text("장착할 6칸 장비 위치 선택", "Choose a Six-slot Loadout Position")
               : companionTarget
@@ -3840,7 +3860,7 @@ function PersistentInventory({
             maxCharges,
           } = entry;
           const canUpgrade = Boolean(
-            instance && isUpgradeableEquipment(definition),
+            instance && canTargetEquipment(itemId, instance),
           );
           const canCompanionEquip =
             companionTarget !== null &&
@@ -3956,8 +3976,8 @@ function PersistentInventory({
       <footer>
         {upgradeMode
           ? text(
-              "강조된 장비를 기존 장비창이나 인벤토리에서 선택합니다.",
-              "Choose a highlighted item in the existing loadout or inventory.",
+              "주문서를 적용할 수 있는 강조된 장비를 선택합니다.",
+              "Choose highlighted equipment that can receive this scroll.",
             )
           : pendingLoadoutItemRef
             ? text(
@@ -5798,21 +5818,32 @@ function HubScreen({
   );
 }
 
+type CommerceView = "warehouse" | "shop";
+
 function CommerceModal({
   campaign,
+  view,
   notice,
   onSell,
   onBuy,
+  onUseConsumable,
   onClose,
 }: {
   campaign: CampaignSave;
+  view: CommerceView;
   notice: string | null;
   onSell: (slotIndex: number) => boolean;
   onBuy: (source: ShopListingSource, listingId: string) => boolean;
+  onUseConsumable: (
+    consumableId: EquipmentConsumableId,
+    targetInstanceId: string,
+  ) => boolean;
   onClose: () => void;
 }) {
   const slotDrag = useActiveItemSlotDrag();
   const [selectedWarehouseIndex, setSelectedWarehouseIndex] = useState<number | null>(null);
+  const [pendingConsumableId, setPendingConsumableId] =
+    useState<EquipmentConsumableId | null>(null);
   const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
   const warehouse = campaign.warehouse;
   const stackEntries = Object.entries(warehouse.stacks)
@@ -5825,26 +5856,35 @@ function CommerceModal({
   const selectedEntry = selectedRef
     ? resolveWarehouseItemRef(warehouse, selectedRef)
     : null;
-  const listingSections = [{
-    source: "stock" as const,
-    eyebrow: "MARKET STOCK",
-    title: "판매 상품",
-    listings: campaign.shop.stock,
-    empty: "현재 판매 중인 상품이 없습니다.",
-  }];
+  const listingSections = [
+    {
+      source: "stock" as const,
+      eyebrow: "MARKET STOCK",
+      title: "판매 상품",
+      listings: campaign.shop.stock,
+      empty: "현재 판매 중인 상품이 없습니다.",
+    },
+    {
+      source: "buyback" as const,
+      eyebrow: "BUYBACK",
+      title: "되사기",
+      listings: campaign.shop.buyback,
+      empty: "되살 수 있는 판매품이 없습니다.",
+    },
+  ];
   return (
     <div className="modal-backdrop warehouse-backdrop commerce-backdrop">
       <section className="warehouse-modal commerce-modal" role="dialog" aria-modal="true" aria-labelledby="commerce-title">
         <header>
           <div>
-            <p className="eyebrow">GUILD COMMERCE</p>
-            <h2 id="commerce-title">창고 · 원정대 상점</h2>
+            <p className="eyebrow">{view === "warehouse" ? "WAREHOUSE" : "GUILD COMMERCE"}</p>
+            <h2 id="commerce-title">{view === "warehouse" ? "원정대 창고" : "창고 · 원정대 상점"}</h2>
           </div>
           <div className="commerce-wallet"><small>보유 골드</small><b>{formatGold(campaign.gold)} G</b></div>
-          <button type="button" onClick={onClose} aria-label="상점과 창고 닫기">×</button>
+          <button type="button" onClick={onClose} aria-label={view === "warehouse" ? "창고 닫기" : "상점과 창고 닫기"}>×</button>
         </header>
         {notice && <p className="commerce-notice" role="status">{notice}</p>}
-        <div className="commerce-split-layout">
+        <div className={`commerce-split-layout ${view === "warehouse" ? "is-warehouse-view" : ""}`}>
           <section
             className="commerce-warehouse-panel commerce-column"
             aria-labelledby="commerce-warehouse-title"
@@ -5857,29 +5897,87 @@ function CommerceModal({
             <div className="warehouse-summary">
               <span>총 보관 수량 <b>{warehouseItemCount(warehouse)}</b></span>
               <span>종류 <b>{stackEntries.length + warehouse.instances.length}</b></span>
-              <em>상점 상품을 이 영역으로 옮기거나 구매 버튼을 누르세요.</em>
+              <em>
+                {pendingConsumableId
+                  ? "강조된 장비를 선택하세요."
+                  : view === "warehouse"
+                    ? "주문서를 선택해 창고 장비에 바로 사용할 수 있습니다."
+                    : "상점 상품을 이 영역으로 옮기거나 구매 버튼을 누르세요."}
+              </em>
             </div>
             <CampaignWarehouseInventory
               warehouse={warehouse}
               className="warehouse-fixed-grid"
               selectedIndex={selectedWarehouseIndex}
-              contextLabel="상점 왼쪽 창고"
-              onItemSelect={(_entry, index) => setSelectedWarehouseIndex(index)}
+              contextLabel={view === "warehouse" ? "원정대 창고" : "상점 왼쪽 창고"}
+              isItemHighlighted={(entry) => Boolean(
+                pendingConsumableId &&
+                entry.instance &&
+                canApplyEquipmentConsumable(
+                  pendingConsumableId,
+                  ITEM_DEFS[entry.itemId],
+                  entry.instance,
+                )
+              )}
+              isItemSelectable={(entry) => pendingConsumableId
+                ? Boolean(
+                    entry.instance &&
+                    canApplyEquipmentConsumable(
+                      pendingConsumableId,
+                      ITEM_DEFS[entry.itemId],
+                      entry.instance,
+                    )
+                  )
+                : true}
+              onItemSelect={(entry, index) => {
+                if (pendingConsumableId && entry.instance) {
+                  if (onUseConsumable(pendingConsumableId, entry.instance.id)) {
+                    setPendingConsumableId(null);
+                    setSelectedWarehouseIndex(null);
+                  }
+                  return;
+                }
+                setSelectedWarehouseIndex(index);
+              }}
             />
+            {pendingConsumableId && (
+              <aside className="commerce-selection-bar">
+                <div>
+                  <small>장비 대상 주문서</small>
+                  <strong>{ITEM_DEFS[pendingConsumableId].name}</strong>
+                </div>
+                <span>사용할 장비를 선택하세요.</span>
+                <button type="button" onClick={() => setPendingConsumableId(null)}>취소</button>
+              </aside>
+            )}
             {selectedEntry && selectedWarehouseIndex !== null && (
               <aside className="commerce-selection-bar">
                 <div>
                   <small>{selectedEntry.instance ? "고유 장비 1개" : "스택 1개"}</small>
                   <strong>{ITEM_DEFS[selectedEntry.itemId]?.name}</strong>
                 </div>
-                <b>{formatGold(shopSalePrice(ITEM_DEFS[selectedEntry.itemId], selectedEntry.instance))} G</b>
-                <button type="button" onClick={() => onSell(selectedWarehouseIndex)}>
-                  {selectedEntry.instance ? "장비 판매" : "1개 판매"}
-                </button>
+                {view === "shop" && (
+                  <b>{formatGold(shopSalePrice(ITEM_DEFS[selectedEntry.itemId], selectedEntry.instance))} G</b>
+                )}
+                {view === "warehouse" && isEquipmentConsumableId(selectedEntry.itemId) ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingConsumableId(selectedEntry.itemId as EquipmentConsumableId);
+                      setSelectedWarehouseIndex(null);
+                    }}
+                  >
+                    장비에 사용
+                  </button>
+                ) : view === "shop" ? (
+                  <button type="button" onClick={() => onSell(selectedWarehouseIndex)}>
+                    {selectedEntry.instance ? "장비 판매" : "1개 판매"}
+                  </button>
+                ) : null}
               </aside>
             )}
           </section>
-          <section
+          {view === "shop" && <section
             className="commerce-shop-panel commerce-column"
             aria-labelledby="commerce-shop-title"
             {...(slotDrag?.addressAttributes({ zone: "shopSellTarget" }, null) ?? {})}
@@ -5899,7 +5997,7 @@ function CommerceModal({
                   <div className="shop-listing-grid">
                     {section.listings.map((listing) => {
                       const address: ItemSlotAddress = {
-                        zone: "shopStock",
+                        zone: section.source === "stock" ? "shopStock" : "shopBuyback",
                         listingId: listing.id,
                       };
                       const affordable = campaign.gold >= listing.unitPrice;
@@ -5951,7 +6049,7 @@ function CommerceModal({
                 </section>
               ))}
             </div>
-          </section>
+          </section>}
         </div>
         <footer><button type="button" onClick={onClose}>닫기</button></footer>
       </section>
@@ -6950,8 +7048,8 @@ function DungeonRun({
   const [autoDescendAfterExplore] = useState(false);
   const [selectedInventoryItem, setSelectedInventoryItem] =
     useState<InventorySelection | null>(null);
-  const [pendingUpgradeScrollRef, setPendingUpgradeScrollRef] =
-    useState<string | null>(null);
+  const [pendingEquipmentConsumable, setPendingEquipmentConsumable] =
+    useState<PendingEquipmentConsumable | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [compendiumOpen, setCompendiumOpen] = useState(false);
@@ -8669,7 +8767,7 @@ function DungeonRun({
       setInspectedEntity(null);
       setSelectedInventoryItem(null);
       setPendingLoadoutItemRef(null);
-      setPendingUpgradeScrollRef(null);
+      setPendingEquipmentConsumable(null);
       hoverRef.current = null;
       pathRef.current = [];
       autoTravelRef.current = false;
@@ -8730,6 +8828,17 @@ function DungeonRun({
       const definition = itemId ? ITEM_DEFS[itemId] : null;
       if (!itemRef || !itemId || !definition) return;
 
+      if (ownerId === PLAYER_ID && isEquipmentConsumableId(itemId)) {
+        setPendingQuickslotAim(null);
+        setPendingCompanionSkill(null);
+        setThrowingItemId(null);
+        setCastingItemId(null);
+        setSelectedInventoryItem(null);
+        setPendingLoadoutItemRef(null);
+        setPendingEquipmentConsumable({ itemRef, itemId });
+        return;
+      }
+
       const action: PendingQuickslotAim["action"] =
         definition.category === "wand"
           ? "wand"
@@ -8780,7 +8889,7 @@ function DungeonRun({
       setInspectedEntity(null);
       setSelectedInventoryItem(null);
       setPendingLoadoutItemRef(null);
-      setPendingUpgradeScrollRef(null);
+      setPendingEquipmentConsumable(null);
       hoverRef.current = null;
       pathRef.current = [];
       autoTravelRef.current = false;
@@ -8800,10 +8909,10 @@ function DungeonRun({
         gameRef.current.player.inventoryInstances.find(
           (instance) => instance.id === itemRef,
         )?.defId ?? itemRef;
-      if (itemId === "scroll_upgrade") {
+      if (isEquipmentConsumableId(itemId)) {
         setThrowingItemId(null);
         setCastingItemId(null);
-        setPendingUpgradeScrollRef(itemRef);
+        setPendingEquipmentConsumable({ itemRef, itemId });
         pathRef.current = [];
         return;
       }
@@ -8825,20 +8934,20 @@ function DungeonRun({
     [resolvePartyAction, runExclusive],
   );
 
-  const applyUpgradeScroll = useCallback(
+  const applyPendingEquipmentConsumable = useCallback(
     (target: UpgradeTarget) => {
-      const scrollItemRef = pendingUpgradeScrollRef;
-      if (!scrollItemRef) return;
+      const pending = pendingEquipmentConsumable;
+      if (!pending) return;
       void performDuringAutoExplore(() =>
         runExclusive(async (token) => {
-          const result = upgradeItemWithScroll(
+          const result = applyEquipmentConsumable(
             gameRef.current,
-            scrollItemRef,
+            pending.itemRef,
             target,
           );
           if (result.consumedTurn) {
             flashUpgradeTarget(target);
-            setPendingUpgradeScrollRef(null);
+            setPendingEquipmentConsumable(null);
           }
           const actorId = target.kind === "companionEquipment" ||
               target.kind === "companionFlex"
@@ -8849,7 +8958,7 @@ function DungeonRun({
       );
     },
     [
-      pendingUpgradeScrollRef,
+      pendingEquipmentConsumable,
       performDuringAutoExplore,
       resolvePartyAction,
       runExclusive,
@@ -8857,22 +8966,22 @@ function DungeonRun({
     ],
   );
 
-  const upgradePlayerLoadout = useCallback(
+  const applyConsumableToPlayerLoadout = useCallback(
     (selection: PlayerLoadoutSelection) => {
       const target: UpgradeTarget = selection.kind === "equipment"
         ? { kind: "equipment", slot: selection.slot }
         : gameRef.current.player.equipment[FLEX_RING_KEYS[selection.index]]
           ? { kind: "equipment", slot: "ring", ringIndex: selection.index }
           : { kind: "playerAuto", index: selection.index };
-      applyUpgradeScroll(target);
+      applyPendingEquipmentConsumable(target);
     },
-    [applyUpgradeScroll],
+    [applyPendingEquipmentConsumable],
   );
 
-  const upgradeCompanionLoadout = useCallback(
+  const applyConsumableToCompanionLoadout = useCallback(
     (selection: CompanionLoadoutSelection) => {
       setActiveLoadoutOwnerId(selection.companionId);
-      applyUpgradeScroll(
+      applyPendingEquipmentConsumable(
         selection.target.kind === "equipment"
           ? {
               kind: "companionEquipment",
@@ -8886,12 +8995,12 @@ function DungeonRun({
             },
       );
     },
-    [applyUpgradeScroll],
+    [applyPendingEquipmentConsumable],
   );
 
   const beginLoadoutAssignment = useCallback((itemRef: string) => {
     setSelectedInventoryItem(null);
-    setPendingUpgradeScrollRef(null);
+    setPendingEquipmentConsumable(null);
     setCompanionLoadoutSelection(null);
     setPlayerLoadoutSelection(null);
     setPendingLoadoutItemRef(itemRef);
@@ -9349,7 +9458,7 @@ function DungeonRun({
 
   const beginThrowItem = useCallback((itemId: string) => {
     setSelectedInventoryItem(null);
-    setPendingUpgradeScrollRef(null);
+    setPendingEquipmentConsumable(null);
     setInspectMode(false);
     setInspectedEntity(null);
     setCastingItemId(null);
@@ -9432,7 +9541,7 @@ function DungeonRun({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSelectedInventoryItem(null);
-        setPendingUpgradeScrollRef(null);
+        setPendingEquipmentConsumable(null);
         setPendingLoadoutItemRef(null);
         setCompanionLoadoutSelection(null);
         setPlayerLoadoutSelection(null);
@@ -9459,7 +9568,7 @@ function DungeonRun({
           setPendingQuickslotAim(null);
           setPendingLoadoutItemRef(null);
           setSelectedInventoryItem(null);
-          setPendingUpgradeScrollRef(null);
+          setPendingEquipmentConsumable(null);
           document
             .getElementById("persistent-inventory")
             ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -9473,7 +9582,7 @@ function DungeonRun({
       }
       if (
         selectedInventoryItem ||
-        pendingUpgradeScrollRef ||
+        pendingEquipmentConsumable ||
         pendingLoadoutItemRef ||
         helpOpen ||
         settingsOpen ||
@@ -9527,7 +9636,7 @@ function DungeonRun({
     manualPartyMode,
     move,
     pendingLoadoutItemRef,
-    pendingUpgradeScrollRef,
+    pendingEquipmentConsumable,
     selectedInventoryItem,
     settingsOpen,
     throwingItemId,
@@ -11464,13 +11573,21 @@ function DungeonRun({
               selection={companionLoadoutSelection}
               playerSelection={playerLoadoutSelection}
               pendingItemRef={pendingLoadoutItemRef}
-              upgradeMode={Boolean(pendingUpgradeScrollRef)}
+              upgradeMode={Boolean(pendingEquipmentConsumable)}
+              canTargetEquipment={(itemId, instance) => Boolean(
+                pendingEquipmentConsumable &&
+                canApplyEquipmentConsumable(
+                  pendingEquipmentConsumable.itemId,
+                  ITEM_DEFS[itemId],
+                  instance,
+                )
+              )}
               onSelectSlot={selectCompanionLoadoutSlot}
               onSelectPlayerSlot={selectPlayerLoadoutSlot}
               onAssignPendingCompanion={assignPendingCompanionItem}
               onAssignPendingPlayer={assignPendingPlayerItem}
-              onUpgradeCompanion={upgradeCompanionLoadout}
-              onUpgradePlayer={upgradePlayerLoadout}
+              onUpgradeCompanion={applyConsumableToCompanionLoadout}
+              onUpgradePlayer={applyConsumableToPlayerLoadout}
               onOpenSlotItem={openCompanionLoadoutItem}
               onOpenPlayerSlotItem={openPlayerLoadoutItem}
               onUnassign={unassignSelectedCompanionItem}
@@ -11490,9 +11607,17 @@ function DungeonRun({
               onFastUse={handleUseOwnedItem}
               onFastEquip={fastEquipOwnedItem}
               pendingLoadoutItemRef={pendingLoadoutItemRef}
-              upgradeMode={Boolean(pendingUpgradeScrollRef)}
+              upgradeMode={Boolean(pendingEquipmentConsumable)}
+              canTargetEquipment={(itemId, instance) => Boolean(
+                pendingEquipmentConsumable &&
+                canApplyEquipmentConsumable(
+                  pendingEquipmentConsumable.itemId,
+                  ITEM_DEFS[itemId],
+                  instance,
+                )
+              )}
               onUpgradeItem={(itemRef) =>
-                applyUpgradeScroll({ kind: "inventory", itemRef })
+                applyPendingEquipmentConsumable({ kind: "inventory", itemRef })
               }
               companionTarget={companionLoadoutSelection}
               playerTarget={playerLoadoutSelection}
@@ -11500,7 +11625,7 @@ function DungeonRun({
               onPlayerItem={assignSelectedPlayerItem}
               onCancelPicker={() => {
                 setPendingLoadoutItemRef(null);
-                setPendingUpgradeScrollRef(null);
+                setPendingEquipmentConsumable(null);
                 setCompanionLoadoutSelection(null);
                 setPlayerLoadoutSelection(null);
               }}
@@ -11619,6 +11744,7 @@ export default function DungeonGame() {
   const [campaignHydrated, setCampaignHydrated] = useState(false);
   const [screen, setScreen] = useState<CampaignScreen>("hub");
   const [commerceOpen, setCommerceOpen] = useState(false);
+  const [commerceView, setCommerceView] = useState<CommerceView>("warehouse");
   const [blacksmithOpen, setBlacksmithOpen] = useState(false);
   const [trainingGroundOpen, setTrainingGroundOpen] = useState(false);
   const [blacksmithTarget, setBlacksmithTarget] = useState<SmithyTarget | null>(null);
@@ -11830,6 +11956,40 @@ export default function DungeonGame() {
     return false;
   }, [campaign]);
 
+  const handleWarehouseEquipmentConsumable = useCallback((
+    consumableId: EquipmentConsumableId,
+    targetInstanceId: string,
+  ) => {
+    const result = applyWarehouseEquipmentConsumable(
+      campaign,
+      consumableId,
+      targetInstanceId,
+    );
+    if (result.changed) {
+      setCampaign(result.campaign);
+      const itemName = result.itemId
+        ? ITEM_DEFS[result.itemId]?.name ?? result.itemId
+        : "장비";
+      const enchantment = result.traitId
+        ? ` 새로운 ${EQUIPMENT_TRAITS[result.traitId].name} 인챈트가 깃들었습니다.`
+        : "";
+      setFacilityNotice(
+        consumableId === "scroll_upgrade"
+          ? `${itemName}이(가) +${result.upgradeLevel ?? 0} 장비로 강화되었습니다.${enchantment}`
+          : `${itemName}에${enchantment}`,
+      );
+      return true;
+    }
+    setFacilityNotice(
+      result.reason === "maximum-enchantments"
+        ? "이 장비에는 더 이상 인챈트를 추가할 수 없습니다."
+        : result.reason === "missing-scroll"
+          ? "창고에 사용할 주문서가 없습니다."
+          : "주문서를 적용할 수 있는 장비를 선택해야 합니다.",
+    );
+    return false;
+  }, [campaign]);
+
   const handleBlacksmithUpgrade = useCallback((target: SmithyTarget) => {
     const result = upgradeCampaignEquipmentGrade(campaign, target);
     if (result.changed) {
@@ -11865,16 +12025,23 @@ export default function DungeonGame() {
       }
       if (
         source.zone === "warehouse" &&
-        (target.zone === "shopSellTarget" || target.zone === "shopStock")
+        (
+          target.zone === "shopSellTarget" ||
+          target.zone === "shopStock" ||
+          target.zone === "shopBuyback"
+        )
       ) {
         handleShopSell(source.index);
         return;
       }
       if (
-        source.zone === "shopStock" &&
+        (source.zone === "shopStock" || source.zone === "shopBuyback") &&
         (target.zone === "shopWarehouseTarget" || target.zone === "warehouse")
       ) {
-        handleShopBuy("stock", source.listingId);
+        handleShopBuy(
+          source.zone === "shopStock" ? "stock" : "buyback",
+          source.listingId,
+        );
         return;
       }
       if (
@@ -12001,9 +12168,11 @@ export default function DungeonGame() {
           {commerceOpen && (
             <CommerceModal
               campaign={campaign}
+              view={commerceView}
               notice={facilityNotice}
               onSell={handleShopSell}
               onBuy={handleShopBuy}
+              onUseConsumable={handleWarehouseEquipmentConsumable}
               onClose={() => {
                 setCommerceOpen(false);
                 setFacilityNotice(null);
@@ -12281,12 +12450,14 @@ export default function DungeonGame() {
       developerMode={developerMode}
       onSelectDungeon={openPreparation}
       onOpenWarehouse={() => {
+        setCommerceView("warehouse");
         setCommerceOpen(true);
         setBlacksmithOpen(false);
         setTrainingGroundOpen(false);
         setFacilityNotice(null);
       }}
       onOpenShop={() => {
+        setCommerceView("shop");
         setCommerceOpen(true);
         setBlacksmithOpen(false);
         setTrainingGroundOpen(false);

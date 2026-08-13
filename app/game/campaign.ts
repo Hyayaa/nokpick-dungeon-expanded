@@ -11,6 +11,8 @@ import {
   normalizeCompanionProgression,
 } from "./companions";
 import {
+  applyEquipmentConsumableToInstance,
+  type EquipmentConsumableId,
   createEquipmentInstance,
   createPlainEquipmentInstance,
   isUpgradeableEquipment,
@@ -35,6 +37,7 @@ import {
   DungeonLootPlanEntry,
   DungeonObjectKind,
   DungeonSpecialRoomPlanEntry,
+  EquipmentTraitId,
   InventoryInstance,
   ItemCategory,
   ItemPickup,
@@ -1770,6 +1773,120 @@ export const warehouseItemCount = (warehouse: WarehouseState) =>
         : total + quantity,
     warehouse.instances.length,
   );
+
+export type WarehouseEquipmentConsumableResult = {
+  campaign: CampaignSave;
+  changed: boolean;
+  reason:
+    | "ok"
+    | "missing-scroll"
+    | "missing-target"
+    | "invalid-target"
+    | "maximum-enchantments";
+  itemId: string | null;
+  traitId: EquipmentTraitId | null;
+  upgradeLevel: number | null;
+};
+
+const campaignEquipmentActionSeed = (
+  campaign: CampaignSave,
+  consumableId: EquipmentConsumableId,
+  instance: InventoryInstance,
+) => {
+  const source = [
+    campaign.offerSeed >>> 0,
+    consumableId,
+    instance.id,
+    instance.defId,
+    instance.upgradeLevel ?? 0,
+    instance.traits?.length ?? 0,
+    campaign.warehouse.stacks[consumableId] ?? 0,
+  ].join(":");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+};
+
+export function applyWarehouseEquipmentConsumable(
+  campaign: CampaignSave,
+  consumableId: EquipmentConsumableId,
+  targetInstanceId: string,
+): WarehouseEquipmentConsumableResult {
+  if ((campaign.warehouse.stacks[consumableId] ?? 0) <= 0) {
+    return {
+      campaign,
+      changed: false,
+      reason: "missing-scroll",
+      itemId: null,
+      traitId: null,
+      upgradeLevel: null,
+    };
+  }
+  const sourceInstance = campaign.warehouse.instances.find(
+    (instance) => instance.id === targetInstanceId,
+  );
+  if (!sourceInstance) {
+    return {
+      campaign,
+      changed: false,
+      reason: "missing-target",
+      itemId: null,
+      traitId: null,
+      upgradeLevel: null,
+    };
+  }
+  const definition = ITEM_DEFS[sourceInstance.defId];
+  if (!isUpgradeableEquipment(definition)) {
+    return {
+      campaign,
+      changed: false,
+      reason: "invalid-target",
+      itemId: sourceInstance.defId,
+      traitId: null,
+      upgradeLevel: sourceInstance.upgradeLevel ?? 0,
+    };
+  }
+
+  const warehouse = cloneWarehouse(campaign.warehouse);
+  const target = warehouse.instances.find(
+    (instance) => instance.id === targetInstanceId,
+  )!;
+  const random = seededRandom(
+    campaignEquipmentActionSeed(campaign, consumableId, target) || 0x9e3779b9,
+  );
+  const application = applyEquipmentConsumableToInstance(
+    target,
+    definition,
+    consumableId,
+    random,
+  );
+  if (!application.changed) {
+    return {
+      campaign,
+      changed: false,
+      reason: application.reason,
+      itemId: target.defId,
+      traitId: null,
+      upgradeLevel: target.upgradeLevel ?? 0,
+    };
+  }
+
+  const remaining = (warehouse.stacks[consumableId] ?? 0) - 1;
+  if (remaining > 0) warehouse.stacks[consumableId] = remaining;
+  else delete warehouse.stacks[consumableId];
+  warehouse.slots = normalizeStorageSlots(warehouse, WAREHOUSE_SLOT_COUNT);
+  return {
+    campaign: { ...campaign, warehouse },
+    changed: true,
+    reason: "ok",
+    itemId: target.defId,
+    traitId: application.traitId,
+    upgradeLevel: target.upgradeLevel ?? 0,
+  };
+}
 
 export const takeLoadoutFromWarehouse = (
   warehouse: WarehouseState,
