@@ -215,6 +215,7 @@ import {
 import {
   COMPANION_IDLE_FRAMES,
   COMPANION_PRESENTATIONS,
+  characterPresentation,
   companionArmorTier,
   companionFrameIndex,
 } from "../presentation/companion-visuals";
@@ -1873,7 +1874,7 @@ function CampaignCompanionEquipmentRoster({
         }`}
       >
         {companions.map((companion) => {
-          const definition = COMPANION_PRESENTATIONS[companion.classId];
+          const definition = characterPresentation(companion);
           const profession = COMPANION_PROFESSIONS[companion.professionId];
           const selected = selectedCompanionIds.includes(companion.id);
           const isControlled = controlledCompanionId === companion.id;
@@ -2266,7 +2267,7 @@ function CompanionPanel({
     },
     [clearPendingSlotActivation],
   );
-  const controlledDefinition = COMPANION_PRESENTATIONS[game.player.classId];
+  const controlledDefinition = characterPresentation(game.player);
   const controlledProfession =
     COMPANION_PROFESSIONS[game.player.professionId];
   const targets = PARTY_LOADOUT_TARGETS;
@@ -2515,7 +2516,7 @@ function CompanionPanel({
         </article>
 
         {companions.map((companion) => {
-          const classDefinition = COMPANION_PRESENTATIONS[companion.classId];
+          const classDefinition = characterPresentation(companion);
           const profession = COMPANION_PROFESSIONS[companion.professionId];
           const displayName = language === "en" && companion.name === classDefinition.defaultNameKo
             ? classDefinition.defaultNameEn
@@ -2976,7 +2977,7 @@ function PlayerInspector({
     uiText(language, korean, english);
   const player = game.player;
   const combatStats = effectiveCombatStats(player);
-  const definition = COMPANION_PRESENTATIONS[player.classId];
+  const definition = characterPresentation(player);
   const profession = COMPANION_PROFESSIONS[player.professionId];
   const equipment = PARTY_LOADOUT_TARGETS.map((target) => [
     target.kind === "equipment"
@@ -3099,7 +3100,7 @@ function CompanionInspector({
   const language = useUiLanguage();
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
-  const definition = COMPANION_PRESENTATIONS[companion.classId];
+  const definition = characterPresentation(companion);
   const combatStats = effectiveCombatStats(companion);
   const profession = COMPANION_PROFESSIONS[companion.professionId];
   const displayName =
@@ -5860,7 +5861,7 @@ function HubScreen({
   const [itemPreview, setItemPreview] = useState<ItemDetailPreview | null>(null);
   const rosterLeader = campaign.companions[0];
   const rosterLeaderDefinition = rosterLeader
-    ? COMPANION_PRESENTATIONS[rosterLeader.classId]
+    ? characterPresentation(rosterLeader)
     : null;
   const rosterLeaderProfession = rosterLeader
     ? COMPANION_PROFESSIONS[rosterLeader.professionId]
@@ -6642,6 +6643,9 @@ function TrainingGroundModal({
   const profession = companion
     ? COMPANION_PROFESSIONS[companion.professionId]
     : null;
+  const companionDefinition = companion
+    ? characterPresentation(companion)
+    : null;
   const learnedSkills = new Set(companion?.learnedSkills ?? companion?.skills ?? []);
   const selectedSkill = selectedSkillId ? COMPANION_SKILLS[selectedSkillId] : null;
   const selectedLearned = selectedSkillId ? learnedSkills.has(selectedSkillId) : false;
@@ -6799,11 +6803,11 @@ function TrainingGroundModal({
                 <>
                   <div className="training-target-profile">
                     <PixelSpriteFrame
-                      file={COMPANION_PRESENTATIONS[companion.classId].sprite}
-                      sheetWidth={COMPANION_PRESENTATIONS[companion.classId].sheetWidth}
-                      frameWidth={COMPANION_PRESENTATIONS[companion.classId].frameWidth}
-                      frameHeight={COMPANION_PRESENTATIONS[companion.classId].frameHeight}
-                      frame={COMPANION_PRESENTATIONS[companion.classId].animationSet === "companion"
+                      file={companionDefinition!.sprite}
+                      sheetWidth={companionDefinition!.sheetWidth}
+                      frameWidth={companionDefinition!.frameWidth}
+                      frameHeight={companionDefinition!.frameHeight}
+                      frame={companionDefinition!.animationSet === "companion"
                         ? companionFrameIndex(companionArmorTier(companion), COMPANION_IDLE_FRAMES[0])
                         : PLAYER_IDLE_FRAMES[0]}
                       size={56}
@@ -7750,16 +7754,18 @@ function DungeonRun({
       setAssetLoadError(null);
       try {
         const enemyKinds = Object.keys(ENEMY_SPRITES) as EnemyKind[];
+        const characterSources = [...new Set(
+          COMPANION_CLASS_IDS.map(
+            (classId) => COMPANION_PRESENTATIONS[classId].sprite,
+          ),
+        )];
         const sources = [
           "/assets/environment/tiles_sewers.png",
           "/assets/environment/water0.png",
           "/assets/environment/terrain_features.png",
           "/assets/sprites/items.png",
-          "/assets/sprites/player.png",
           ...enemyKinds.map((kind) => ENEMY_SPRITES[kind].file),
-          ...COMPANION_CLASS_IDS.map(
-            (classId) => COMPANION_PRESENTATIONS[classId].sprite,
-          ),
+          ...characterSources,
         ];
         const uniqueSources = [...new Set(sources)];
         const loadedImages = await Promise.all(
@@ -7777,8 +7783,7 @@ function DungeonRun({
           "/assets/environment/terrain_features.png",
         );
         const items = imagesBySource.get("/assets/sprites/items.png");
-        const player = imagesBySource.get("/assets/sprites/player.png");
-        if (!tiles || !water || !terrainFeatures || !items || !player) {
+        if (!tiles || !water || !terrainFeatures || !items) {
           throw new Error("Essential map images are missing");
         }
         const enemies = enemyKinds.reduce(
@@ -7790,25 +7795,22 @@ function DungeonRun({
           },
           {} as Record<EnemyKind, HTMLImageElement>,
         );
-        const companions = COMPANION_CLASS_IDS.reduce(
-          (record, classId) => {
-            const image = imagesBySource.get(
-              COMPANION_PRESENTATIONS[classId].sprite,
-            );
-            if (!image) throw new Error(`Missing companion image: ${classId}`);
-            record[classId] = image;
+        const characters = characterSources.reduce(
+          (record, source) => {
+            const image = imagesBySource.get(source);
+            if (!image) throw new Error(`Missing character image: ${source}`);
+            record[source] = image;
             return record;
           },
-          {} as Record<CompanionClassId, HTMLImageElement>,
+          {} as Record<string, HTMLImageElement>,
         );
         assetsRef.current = {
           tiles,
           water,
           terrainFeatures,
           items,
-          player,
           enemies,
-          companions,
+          characters,
         };
         setAssetsReady(true);
       } catch (error) {
@@ -10006,7 +10008,7 @@ function DungeonRun({
       ) {
         continue;
       }
-      const definition = COMPANION_PRESENTATIONS[companion.classId];
+      const definition = characterPresentation(companion);
       const bounds = companionScreenBounds(
         companion,
         definition,
@@ -11061,7 +11063,7 @@ function DungeonRun({
   const text = (korean: string, english: string) =>
     uiText(language, korean, english);
   const controlledCharacterDefinition =
-    COMPANION_PRESENTATIONS[controlledCharacter.classId];
+    characterPresentation(controlledCharacter);
   const controlledHasActed = manualActedIds.has(controlledActorId);
   const controlledActionDisabled =
     busy || game.gameOver || (manualPartyMode && controlledHasActed);

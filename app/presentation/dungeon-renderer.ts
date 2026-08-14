@@ -4,7 +4,6 @@ import { pointEquals } from "../game/spatial";
 import type {
   CombatEffect,
   Companion,
-  CompanionClassId,
   Enemy,
   EnemyKind,
   GameState,
@@ -23,6 +22,7 @@ import {
   COMPANION_INTERACT_FRAMES,
   COMPANION_MOVE_FRAMES,
   COMPANION_PRESENTATIONS,
+  characterPresentation,
   companionArmorTier,
   companionFrameIndex,
 } from "./companion-visuals";
@@ -129,9 +129,8 @@ export type GameAssets = {
   water: HTMLImageElement;
   terrainFeatures: HTMLImageElement;
   items: HTMLImageElement;
-  player: HTMLImageElement;
   enemies: Record<EnemyKind, HTMLImageElement>;
-  companions: Record<CompanionClassId, HTMLImageElement>;
+  characters: Record<string, HTMLImageElement>;
 };
 
 export type CameraDrag = {
@@ -736,9 +735,8 @@ export function startDungeonRenderer({
           !tileVisibleInRenderCache(renderCache, npc.x, npc.y)
         ) return;
         const definition = COMPANION_PRESENTATIONS[npc.classId];
-        const frameWithinTier =
-          COMPANION_IDLE_FRAMES[Math.floor(now / 210) % COMPANION_IDLE_FRAMES.length];
-        const frame = companionFrameIndex(0, frameWithinTier);
+        const frame =
+          PLAYER_IDLE_FRAMES[Math.floor(now / 210) % PLAYER_IDLE_FRAMES.length];
         const width = definition.frameWidth * spritePixelSize;
         const height = definition.frameHeight * spritePixelSize;
         const centerX = screenX(npc.x * TILE_SIZE + TILE_SIZE / 2);
@@ -746,7 +744,7 @@ export function startDungeonRenderer({
         drawEntityShadow(centerX, bottom, width, 0.34);
         drawSheetFrame(
           context,
-          assets.companions[npc.classId],
+          assets.characters[definition.sprite],
           frame,
           definition.frameWidth,
           definition.frameHeight,
@@ -1158,7 +1156,7 @@ export function startDungeonRenderer({
           return;
         }
         const visual = interpolate(companion.id, companion, now);
-        const definition = COMPANION_PRESENTATIONS[companion.classId];
+        const definition = characterPresentation(companion);
         const usesAdventurerFrames = definition.animationSet === "adventurer";
         let frames: readonly number[] = usesAdventurerFrames
           ? PLAYER_IDLE_FRAMES
@@ -1240,7 +1238,7 @@ export function startDungeonRenderer({
             context.scale(-1, 1);
             drawSheetFrame(
               context,
-              assets.companions[companion.classId],
+              assets.characters[definition.sprite],
               sourceFrame,
               definition.frameWidth,
               definition.frameHeight,
@@ -1252,7 +1250,7 @@ export function startDungeonRenderer({
           } else {
             drawSheetFrame(
               context,
-              assets.companions[companion.classId],
+              assets.characters[definition.sprite],
               sourceFrame,
               definition.frameWidth,
               definition.frameHeight,
@@ -1312,7 +1310,7 @@ export function startDungeonRenderer({
 
       const playerMotion = playerVisual.motion;
       const playerProgress = playerVisual.progress;
-      const playerDefinition = COMPANION_PRESENTATIONS[state.player.classId];
+      const playerDefinition = characterPresentation(state.player);
       const usesAdventurerFrames =
         playerDefinition.animationSet === "adventurer";
       let playerAction = playerActionRef.current;
@@ -1400,7 +1398,7 @@ export function startDungeonRenderer({
           context.scale(-1, 1);
           drawSheetFrame(
             context,
-            assets.companions[state.player.classId],
+            assets.characters[playerDefinition.sprite],
             playerFrame,
             playerDefinition.frameWidth,
             playerDefinition.frameHeight,
@@ -1412,7 +1410,7 @@ export function startDungeonRenderer({
         } else {
           drawSheetFrame(
             context,
-            assets.companions[state.player.classId],
+            assets.characters[playerDefinition.sprite],
             playerFrame,
             playerDefinition.frameWidth,
             playerDefinition.frameHeight,
@@ -1536,7 +1534,7 @@ export function startDungeonRenderer({
             companionDrag.cursor.x - companionDrag.grabOffset.x;
           const ghostBottom =
             companionDrag.cursor.y - companionDrag.grabOffset.y;
-          const definition = COMPANION_PRESENTATIONS[companion.classId];
+          const definition = characterPresentation(companion);
           const usesAdventurerFrames =
             definition.animationSet === "adventurer";
           const idleFrames = usesAdventurerFrames
@@ -1590,7 +1588,7 @@ export function startDungeonRenderer({
             context.scale(-1, 1);
             drawSheetFrame(
               context,
-              assets.companions[companion.classId],
+              assets.characters[definition.sprite],
               sourceFrame,
               definition.frameWidth,
               definition.frameHeight,
@@ -1602,7 +1600,7 @@ export function startDungeonRenderer({
           } else {
             drawSheetFrame(
               context,
-              assets.companions[companion.classId],
+              assets.characters[definition.sprite],
               sourceFrame,
               definition.frameWidth,
               definition.frameHeight,

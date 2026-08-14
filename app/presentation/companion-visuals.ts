@@ -1,9 +1,21 @@
 import { ITEM_DEFS } from "../game/data";
 import { COMPANION_CLASSES } from "../game/companions";
-import { Companion, CompanionClassId } from "../game/types";
+import { normalizeCompanionProfession } from "../game/companion-skills";
+import {
+  Companion,
+  CompanionClassId,
+  CompanionProfessionId,
+} from "../game/types";
 
-export const COMPANION_FRAME_WIDTH = 12;
-export const COMPANION_FRAME_HEIGHT = 15;
+export const CHARACTER_FRAME_WIDTH = 24;
+export const CHARACTER_FRAME_HEIGHT = 24;
+export const CHARACTER_SHEET_WIDTH = 192;
+export const CHARACTER_SHEET_HEIGHT = 72;
+
+// Compatibility names for presentation callers that still describe party
+// members as companions. Every playable character now uses the player layout.
+export const COMPANION_FRAME_WIDTH = CHARACTER_FRAME_WIDTH;
+export const COMPANION_FRAME_HEIGHT = CHARACTER_FRAME_HEIGHT;
 
 export const COMPANION_IDLE_FRAMES = [0, 0, 0, 1, 0, 0, 1, 1] as const;
 export const COMPANION_MOVE_FRAMES = [2, 3, 4, 5, 6, 7] as const;
@@ -24,32 +36,33 @@ const companionSprite = (
   sprite: string,
 ): CompanionVisualDefinition => ({
   sprite,
-  sheetWidth: 256,
-  sheetHeight: 128,
-  frameWidth: COMPANION_FRAME_WIDTH,
-  frameHeight: COMPANION_FRAME_HEIGHT,
-  animationSet: "companion",
+  sheetWidth: CHARACTER_SHEET_WIDTH,
+  sheetHeight: CHARACTER_SHEET_HEIGHT,
+  frameWidth: CHARACTER_FRAME_WIDTH,
+  frameHeight: CHARACTER_FRAME_HEIGHT,
+  animationSet: "adventurer",
 });
+
+export const CHARACTER_VISUALS_BY_PROFESSION: Readonly<
+  Record<CompanionProfessionId, CompanionVisualDefinition>
+> = {
+  cleric: companionSprite("/assets/sprites/characters/cleric.png"),
+  rogue: companionSprite("/assets/sprites/characters/rogue.png"),
+  mage: companionSprite("/assets/sprites/characters/mage.png"),
+  warrior: companionSprite("/assets/sprites/characters/warrior.png"),
+};
 
 export const COMPANION_VISUALS: Record<
   CompanionClassId,
   CompanionVisualDefinition
-> = {
-  adventurer: {
-    sprite: "/assets/sprites/player.png",
-    sheetWidth: 128,
-    sheetHeight: 72,
-    frameWidth: 16,
-    frameHeight: 24,
-    animationSet: "adventurer",
-  },
-  warrior: companionSprite("/assets/sprites/companions/warrior.png"),
-  huntress: companionSprite("/assets/sprites/companions/huntress.png"),
-  mage: companionSprite("/assets/sprites/companions/mage.png"),
-  rogue: companionSprite("/assets/sprites/companions/rogue.png"),
-  duelist: companionSprite("/assets/sprites/companions/duelist.png"),
-  cleric: companionSprite("/assets/sprites/companions/cleric.png"),
-};
+> = Object.fromEntries(
+  (Object.keys(COMPANION_CLASSES) as CompanionClassId[]).map((classId) => [
+    classId,
+    CHARACTER_VISUALS_BY_PROFESSION[
+      normalizeCompanionProfession(classId, undefined)
+    ],
+  ]),
+) as Record<CompanionClassId, CompanionVisualDefinition>;
 
 export const COMPANION_PRESENTATIONS = Object.fromEntries(
   (Object.keys(COMPANION_CLASSES) as CompanionClassId[]).map((classId) => [
@@ -64,6 +77,13 @@ export const COMPANION_PRESENTATIONS = Object.fromEntries(
     (typeof COMPANION_CLASSES)[ClassId] & CompanionVisualDefinition;
 };
 
+export const characterPresentation = (
+  character: Pick<Companion, "classId" | "professionId">,
+) => ({
+  ...COMPANION_PRESENTATIONS[character.classId],
+  ...CHARACTER_VISUALS_BY_PROFESSION[character.professionId],
+});
+
 export const companionArmorTier = (
   companion: Pick<Companion, "equipment">,
 ) => {
@@ -76,9 +96,6 @@ export const companionArmorTier = (
 };
 
 export const companionFrameIndex = (
-  armorTier: number,
+  _armorTier: number,
   frameWithinTier: number,
-) => {
-  const framesPerRow = Math.floor(256 / COMPANION_FRAME_WIDTH);
-  return Math.max(0, armorTier) * framesPerRow + frameWithinTier;
-};
+) => Math.max(0, Math.min(23, frameWithinTier));

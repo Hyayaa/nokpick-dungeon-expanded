@@ -326,13 +326,13 @@ button:not(:disabled):active {
 
 .player-portrait {
   position: absolute;
-  left: 11px;
+  left: 3px;
   bottom: 4px;
-  width: 32px;
+  width: 48px;
   height: 48px;
-  background-image: url("/assets/sprites/player.png");
+  background-image: url("/assets/sprites/characters/warrior.png");
   background-position: 0 0;
-  background-size: 256px 144px;
+  background-size: 384px 144px;
   image-rendering: pixelated;
 }
 
@@ -2392,13 +2392,13 @@ kbd {
 
 .player-loadout-portrait {
   display: block;
-  width: 32px;
+  width: 48px;
   height: 48px;
   flex: 0 0 auto;
-  background-image: url("/assets/sprites/player.png");
+  background-image: url("/assets/sprites/characters/warrior.png");
   background-position: 0 0;
   background-repeat: no-repeat;
-  background-size: 256px 144px;
+  background-size: 384px 144px;
   image-rendering: pixelated;
 }
 

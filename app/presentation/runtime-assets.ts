@@ -14,10 +14,6 @@ const items = new URL(
   "../../public/assets/sprites/items.png?inline",
   import.meta.url,
 ).href;
-const player = new URL(
-  "../../public/assets/sprites/player.png?inline",
-  import.meta.url,
-).href;
 const rat = new URL(
   "../../public/assets/sprites/rat.png?inline",
   import.meta.url,
@@ -42,28 +38,20 @@ const skeleton = new URL(
   "../../public/assets/sprites/skeleton.png?inline",
   import.meta.url,
 ).href;
-const warrior = new URL(
-  "../../public/assets/sprites/companions/warrior.png?inline",
+const characterWarrior = new URL(
+  "../../public/assets/sprites/characters/warrior.png?inline",
   import.meta.url,
 ).href;
-const huntress = new URL(
-  "../../public/assets/sprites/companions/huntress.png?inline",
+const characterMage = new URL(
+  "../../public/assets/sprites/characters/mage.png?inline",
   import.meta.url,
 ).href;
-const mage = new URL(
-  "../../public/assets/sprites/companions/mage.png?inline",
+const characterRogue = new URL(
+  "../../public/assets/sprites/characters/rogue.png?inline",
   import.meta.url,
 ).href;
-const rogue = new URL(
-  "../../public/assets/sprites/companions/rogue.png?inline",
-  import.meta.url,
-).href;
-const duelist = new URL(
-  "../../public/assets/sprites/companions/duelist.png?inline",
-  import.meta.url,
-).href;
-const cleric = new URL(
-  "../../public/assets/sprites/companions/cleric.png?inline",
+const characterCleric = new URL(
+  "../../public/assets/sprites/characters/cleric.png?inline",
   import.meta.url,
 ).href;
 
@@ -72,19 +60,16 @@ const RUNTIME_IMAGE_SOURCES: Readonly<Record<string, string>> = {
   "/assets/environment/water0.png": water,
   "/assets/environment/terrain_features.png": terrainFeatures,
   "/assets/sprites/items.png": items,
-  "/assets/sprites/player.png": player,
   "/assets/sprites/rat.png": rat,
   "/assets/sprites/gnoll.png": gnoll,
   "/assets/sprites/snake.png": snake,
   "/assets/sprites/slime.png": slime,
   "/assets/sprites/crab.png": crab,
   "/assets/sprites/skeleton.png": skeleton,
-  "/assets/sprites/companions/warrior.png": warrior,
-  "/assets/sprites/companions/huntress.png": huntress,
-  "/assets/sprites/companions/mage.png": mage,
-  "/assets/sprites/companions/rogue.png": rogue,
-  "/assets/sprites/companions/duelist.png": duelist,
-  "/assets/sprites/companions/cleric.png": cleric,
+  "/assets/sprites/characters/warrior.png": characterWarrior,
+  "/assets/sprites/characters/mage.png": characterMage,
+  "/assets/sprites/characters/rogue.png": characterRogue,
+  "/assets/sprites/characters/cleric.png": characterCleric,
 };
 
 export const runtimeImageSource = (publicPath: string) => {

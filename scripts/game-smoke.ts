@@ -116,11 +116,11 @@ import {
   reduceCharacterDamage,
 } from "../app/game/companions";
 import {
-  COMPANION_ATTACK_FRAMES,
+  CHARACTER_FRAME_HEIGHT,
+  CHARACTER_FRAME_WIDTH,
+  CHARACTER_VISUALS_BY_PROFESSION,
   COMPANION_FRAME_HEIGHT,
   COMPANION_FRAME_WIDTH,
-  COMPANION_INTERACT_FRAMES,
-  COMPANION_MOVE_FRAMES,
   COMPANION_VISUALS,
 } from "../app/presentation/companion-visuals";
 import {
@@ -7671,28 +7671,27 @@ assert.equal(
 
 assert.equal(
   COMPANION_FRAME_WIDTH,
-  12,
-  "original companion hero sheets must use 12px-wide frames",
+  CHARACTER_FRAME_WIDTH,
+  "player and companion presentations must share one frame width",
 );
 assert.equal(
   COMPANION_FRAME_HEIGHT,
-  15,
-  "original companion hero sheets must use 15px-high frames",
+  CHARACTER_FRAME_HEIGHT,
+  "player and companion presentations must share one frame height",
 );
 assert.deepEqual(
-  [...COMPANION_MOVE_FRAMES],
-  [2, 3, 4, 5, 6, 7],
-  "companions must use Shattered's complete six-frame run strip",
-);
-assert.deepEqual(
-  [...COMPANION_ATTACK_FRAMES],
-  [13, 14, 15, 0],
-  "companions must use Shattered's attack strip",
-);
-assert.deepEqual(
-  [...COMPANION_INTERACT_FRAMES],
-  [16, 17, 16, 17],
-  "companions must use Shattered's operate strip",
+  Object.fromEntries(
+    Object.entries(CHARACTER_VISUALS_BY_PROFESSION).map(
+      ([professionId, definition]) => [professionId, definition.sprite],
+    ),
+  ),
+  {
+    cleric: "/assets/sprites/characters/cleric.png",
+    rogue: "/assets/sprites/characters/rogue.png",
+    mage: "/assets/sprites/characters/mage.png",
+    warrior: "/assets/sprites/characters/warrior.png",
+  },
+  "the four professions must map to their dedicated 24x24 sheets",
 );
 for (const classId of COMPANION_CLASS_IDS) {
   const definition = COMPANION_VISUALS[classId];
@@ -7708,14 +7707,15 @@ for (const classId of COMPANION_CLASS_IDS) {
     definition.sheetHeight,
     `${classId} must retain its declared sprite-sheet height`,
   );
+  assert.equal(definition.animationSet, "adventurer");
 }
 assert.deepEqual(
   {
     frameWidth: COMPANION_VISUALS.adventurer.frameWidth,
     frameHeight: COMPANION_VISUALS.adventurer.frameHeight,
   },
-  { frameWidth: 16, frameHeight: 24 },
-  "the former player sheet must remain a differently sized companion sprite",
+  { frameWidth: 24, frameHeight: 24 },
+  "every playable character must use 24x24 frames",
 );
 assert.equal(
   COMPANION_TRAIT_IDS.length,

@@ -12,7 +12,10 @@ cp -R "${project_root}/public/assets/." "${output_dir}/assets/"
 cp "${project_root}/public/favicon.svg" "${output_dir}/favicon.svg"
 
 test -f "${output_dir}/index.html"
-test -f "${output_dir}/assets/sprites/player.png"
+test -f "${output_dir}/assets/sprites/characters/cleric.png"
+test -f "${output_dir}/assets/sprites/characters/rogue.png"
+test -f "${output_dir}/assets/sprites/characters/mage.png"
+test -f "${output_dir}/assets/sprites/characters/warrior.png"
 
 echo "Built dependency-free local bundle:"
 du -sh "${output_dir}"
