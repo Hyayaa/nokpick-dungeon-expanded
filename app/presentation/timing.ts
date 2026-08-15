@@ -6,11 +6,26 @@ import type {
 
 export const MIN_ACTION_DURATION = 112;
 // 160ms / 1.3: faster presentation only; the movement-speed stat is unchanged.
-const NORMAL_CHARACTER_MOVE_DURATION = 123;
-// Temporary visual-only slowdown for formation debugging.
-export const CHARACTER_MOVE_DEBUG_SLOWDOWN = 4;
-export const PLAYER_MOVE_DURATION =
-  NORMAL_CHARACTER_MOVE_DURATION * CHARACTER_MOVE_DEBUG_SLOWDOWN;
+export const NORMAL_CHARACTER_MOVE_DURATION = 123;
+export const DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED = 1;
+export const MIN_CHARACTER_MOVE_ANIMATION_SPEED = 0.25;
+export const MAX_CHARACTER_MOVE_ANIMATION_SPEED = 1;
+
+export const normalizeCharacterMoveAnimationSpeed = (value: unknown) =>
+  typeof value === "number" &&
+  Number.isFinite(value) &&
+  value >= MIN_CHARACTER_MOVE_ANIMATION_SPEED &&
+  value <= MAX_CHARACTER_MOVE_ANIMATION_SPEED
+    ? value
+    : DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED;
+
+export const characterMoveDuration = (
+  animationSpeed = DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED,
+) =>
+  NORMAL_CHARACTER_MOVE_DURATION /
+  normalizeCharacterMoveAnimationSpeed(animationSpeed);
+
+export const PLAYER_MOVE_DURATION = characterMoveDuration();
 export const ENEMY_MOVE_DURATION = 100;
 export const PLAYER_ATTACK_DURATION = 60;
 export const ENEMY_ATTACK_DURATION = 160;
@@ -46,7 +61,10 @@ export type TurnMotionTimeline = {
   totalDuration: number;
 };
 
-export const durationForMotion = (motion: Motion) => {
+export const durationForMotion = (
+  motion: Motion,
+  characterMoveAnimationSpeed = DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED,
+) => {
   if (motion.kind === "attack") {
     if (motion.id.startsWith("companion-")) {
       return COMPANION_ATTACK_DURATION;
@@ -60,10 +78,10 @@ export const durationForMotion = (motion: Motion) => {
     if (motion.travelStyle === "teleport") return SKILL_TELEPORT_DURATION;
     if (motion.travelStyle === "charge") return SKILL_CHARGE_DURATION;
     if (motion.id.startsWith("companion-")) {
-      return COMPANION_MOVE_DURATION;
+      return characterMoveDuration(characterMoveAnimationSpeed);
     }
     return motion.id === "player"
-      ? PLAYER_MOVE_DURATION
+      ? characterMoveDuration(characterMoveAnimationSpeed)
       : ENEMY_MOVE_DURATION;
   }
   if (motion.kind === "interact") {
@@ -72,8 +90,11 @@ export const durationForMotion = (motion: Motion) => {
   return MIN_ACTION_DURATION;
 };
 
-export const impactDelayForMotion = (motion: Motion) => {
-  const duration = durationForMotion(motion);
+export const impactDelayForMotion = (
+  motion: Motion,
+  characterMoveAnimationSpeed = DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED,
+) => {
+  const duration = durationForMotion(motion, characterMoveAnimationSpeed);
   if (motion.kind !== "move") return duration * 0.52;
   if (motion.travelStyle === "teleport") return duration * 0.62;
   if (
@@ -114,12 +135,16 @@ export const worldRevealOffsetForDefeat = (effect: CombatEffect) =>
 export function createTurnMotionTimeline(
   motions: Motion[],
   initialPhaseEnd = 0,
+  characterMoveAnimationSpeed = DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED,
 ): TurnMotionTimeline {
   const movement = motions.filter((motion) => motion.kind !== "attack");
   const attacks = motions.filter((motion) => motion.kind === "attack");
   const movementEndsByActor = new Map<string, number>();
   const scheduled: ScheduledMotion[] = movement.map((motion) => {
-    const duration = durationForMotion(motion);
+    const duration = durationForMotion(
+      motion,
+      characterMoveAnimationSpeed,
+    );
     const delay = movementEndsByActor.get(motion.id) ?? 0;
     movementEndsByActor.set(motion.id, delay + duration);
     return { motion, delay, duration };
@@ -130,7 +155,10 @@ export function createTurnMotionTimeline(
   if (attacks.length) cursor += ATTACK_START_DELAY;
 
   attacks.forEach((motion, index) => {
-    const duration = durationForMotion(motion);
+    const duration = durationForMotion(
+      motion,
+      characterMoveAnimationSpeed,
+    );
     scheduled.push({ motion, delay: cursor, duration });
     cursor += duration;
     if (index < attacks.length - 1) cursor += ATTACK_SEQUENCE_GAP;

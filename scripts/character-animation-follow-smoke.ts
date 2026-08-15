@@ -20,12 +20,17 @@ import {
   resolveCharacterAnimationFrame,
 } from "../app/presentation/player-animation";
 import {
-  CHARACTER_MOVE_DEBUG_SLOWDOWN,
+  characterMoveDuration,
   COMPANION_ATTACK_DURATION,
   COMPANION_MOVE_DURATION,
+  DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED,
   ENEMY_MOVE_DURATION,
+  MAX_CHARACTER_MOVE_ANIMATION_SPEED,
+  MIN_CHARACTER_MOVE_ANIMATION_SPEED,
+  normalizeCharacterMoveAnimationSpeed,
   PLAYER_ATTACK_DURATION,
   PLAYER_MOVE_DURATION,
+  durationForMotion,
   createTurnMotionTimeline,
 } from "../app/presentation/timing";
 
@@ -135,10 +140,46 @@ assert.equal(resolveCharacterAnimationFrame({ kind: "idle", now: 0 }), PLAYER_ID
 assert.equal(resolveCharacterAnimationFrame({ kind: "attack", now: 0, progress: 0 }), PLAYER_ATTACK_FRAMES[0]);
 assert.equal(resolveCharacterAnimationFrame({ kind: "interact", now: 0, progress: 0 }), PLAYER_INTERACT_FRAMES[0]);
 assert.equal(COMPANION_ATTACK_DURATION, PLAYER_ATTACK_DURATION);
-assert.equal(CHARACTER_MOVE_DEBUG_SLOWDOWN, 4);
-assert.equal(PLAYER_MOVE_DURATION, 492);
+assert.equal(DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED, 1);
+assert.equal(MIN_CHARACTER_MOVE_ANIMATION_SPEED, 0.25);
+assert.equal(MAX_CHARACTER_MOVE_ANIMATION_SPEED, 1);
+assert.equal(PLAYER_MOVE_DURATION, 123);
 assert.equal(COMPANION_MOVE_DURATION, PLAYER_MOVE_DURATION);
 assert.equal(ENEMY_MOVE_DURATION, 100);
+assert.equal(characterMoveDuration(0.5), 246);
+assert.equal(characterMoveDuration(0.25), 492);
+assert.equal(normalizeCharacterMoveAnimationSpeed(Number.NaN), 1);
+assert.equal(normalizeCharacterMoveAnimationSpeed(0.2), 1);
+assert.equal(normalizeCharacterMoveAnimationSpeed(1.1), 1);
+
+const playerWalkMotion = {
+  id: "player",
+  kind: "move" as const,
+  from: { x: 0, y: 0 },
+  to: { x: 1, y: 0 },
+};
+const companionWalkMotion = {
+  ...playerWalkMotion,
+  id: "companion-speed-check",
+};
+const enemyWalkMotion = {
+  ...playerWalkMotion,
+  id: "enemy-speed-check",
+};
+assert.equal(durationForMotion(playerWalkMotion, 0.25), 492);
+assert.equal(durationForMotion(companionWalkMotion, 0.25), 492);
+assert.equal(durationForMotion(enemyWalkMotion, 0.25), ENEMY_MOVE_DURATION);
+assert.equal(
+  durationForMotion({ ...playerWalkMotion, kind: "attack" }, 0.25),
+  PLAYER_ATTACK_DURATION,
+);
+for (const travelStyle of ["leap", "teleport", "charge"] as const) {
+  assert.equal(
+    durationForMotion({ ...playerWalkMotion, travelStyle }, 0.25),
+    durationForMotion({ ...playerWalkMotion, travelStyle }, 1),
+    `${travelStyle} duration must ignore the character walk setting`,
+  );
+}
 
 const prepareFollowGame = (seed: number): GameState => {
   const state = createNewGame(seed);
@@ -520,5 +561,32 @@ const rendererSource = readFileSync("app/presentation/dungeon-renderer.ts", "utf
 assert.match(rendererSource, /TILE_SIZE\s*-\s*3\s*-\s*visual\.spriteLift/);
 assert.match(rendererSource, /TILE_SIZE\s*-\s*2\s*-\s*playerVisual\.spriteLift/);
 assert.match(rendererSource, /playerCenterX - playerWidth \/ 2/);
+
+const dungeonUiSource = readFileSync("app/components/DungeonGame.tsx", "utf8");
+assert.match(
+  dungeonUiSource,
+  /shattered-web-character-move-animation-speed/,
+  "the movement animation setting must use its own persistent key",
+);
+assert.match(
+  dungeonUiSource,
+  /type="range"[\s\S]*min=\{MIN_CHARACTER_MOVE_ANIMATION_SPEED\}[\s\S]*max=\{MAX_CHARACTER_MOVE_ANIMATION_SPEED\}[\s\S]*step=\{0\.05\}/,
+  "settings must expose the requested 0.25x-to-1x range slider",
+);
+assert.match(
+  dungeonUiSource,
+  /setCharacterMoveAnimationSpeed\([\s\S]*normalizeCharacterMoveAnimationSpeed\([\s\S]*savedCharacterMoveAnimationSpeed/,
+  "invalid persisted movement speeds must normalize to the 1x default",
+);
+assert.ok(
+  (dungeonUiSource.match(/characterMoveAnimationSpeed=\{characterMoveAnimationSpeed\}/g) ?? [])
+    .length >= 3,
+  "hub settings, dungeon settings, and DungeonRun must share one top-level speed value",
+);
+assert.match(
+  dungeonUiSource,
+  /createTurnMotionTimeline\([\s\S]*characterMoveAnimationSpeedRef\.current/,
+  "motion scheduling must read the latest runtime setting",
+);
 
 console.log("character animation and companion follow smoke checks passed");

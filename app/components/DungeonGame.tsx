@@ -301,12 +301,16 @@ import {
 } from "../presentation/player-animation";
 import {
   createTurnMotionTimeline,
+  DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED,
   DEATH_EVENT_DELAY,
   durationForInteraction,
   durationForMotion,
   impactDelayForMotion,
   impactTimeForSource,
+  MAX_CHARACTER_MOVE_ANIMATION_SPEED,
   MIN_ACTION_DURATION,
+  MIN_CHARACTER_MOVE_ANIMATION_SPEED,
+  normalizeCharacterMoveAnimationSpeed,
   PLAYER_INTERACTION_DURATION,
   presentationOffsetForCombatEffect,
   worldRevealOffsetForDefeat,
@@ -612,9 +616,10 @@ const UI_SCALE_STORAGE_KEY = "shattered-web-ui-scale";
 const UI_SCALE_OPTIONS = [0.8, 0.9, 1, 1.1, 1.2] as const;
 const FONT_SCALE_STORAGE_KEY = "shattered-web-font-scale";
 const LANGUAGE_STORAGE_KEY = "shattered-web-language";
+const CHARACTER_MOVE_ANIMATION_SPEED_STORAGE_KEY =
+  "shattered-web-character-move-animation-speed";
 const CAMPAIGN_STORAGE_KEY = "shattered-web-campaign-v1";
 const ACTIVE_EXPEDITION_STORAGE_KEY = "shattered-web-active-expedition-v1";
-const AUTO_EXPLORATION_ENABLED = false;
 const DEVELOPER_TEST_DUNGEON: DungeonDefinition = {
   id: DEVELOPER_TEST_MAP_ID,
   themeId: "developer-showcase",
@@ -4707,11 +4712,13 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 function SettingsModal({
   uiScale,
   fontScale,
+  characterMoveAnimationSpeed,
   language,
   soundEnabled,
   developerMode,
   onScaleChange,
   onFontScaleChange,
+  onCharacterMoveAnimationSpeedChange,
   onLanguageChange,
   onSoundEnabledChange,
   onDeveloperModeChange,
@@ -4721,11 +4728,13 @@ function SettingsModal({
 }: {
   uiScale: number;
   fontScale: number;
+  characterMoveAnimationSpeed: number;
   language: UiLanguage;
   soundEnabled: boolean;
   developerMode: boolean;
   onScaleChange: (scale: number) => void;
   onFontScaleChange: (scale: number) => void;
+  onCharacterMoveAnimationSpeedChange: (speed: number) => void;
   onLanguageChange: (language: UiLanguage) => void;
   onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
@@ -4795,6 +4804,42 @@ function SettingsModal({
                 </small>
               </button>
             ))}
+          </div>
+          <div className="settings-copy movement-speed-setting">
+            <div>
+              <span>{text("이동 모션 속도", "Movement animation speed")}</span>
+              <strong>
+                {characterMoveAnimationSpeed.toFixed(2)}×
+                {characterMoveAnimationSpeed ===
+                  DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED
+                  ? ` · ${text("기본", "Default")}`
+                  : ""}
+              </strong>
+            </div>
+            <p>
+              {text(
+                "게임 규칙은 유지하고 플레이어와 동료가 타일 사이를 이동하는 화면 속도만 조절합니다.",
+                "Changes only the on-screen tile movement speed for the player and companions.",
+              )}
+            </p>
+            <input
+              type="range"
+              min={MIN_CHARACTER_MOVE_ANIMATION_SPEED}
+              max={MAX_CHARACTER_MOVE_ANIMATION_SPEED}
+              step={0.05}
+              value={characterMoveAnimationSpeed}
+              onChange={(event) =>
+                onCharacterMoveAnimationSpeedChange(
+                  Number(event.currentTarget.value),
+                )
+              }
+              aria-label={text("이동 모션 속도", "Movement animation speed")}
+              aria-valuetext={`${characterMoveAnimationSpeed.toFixed(2)}×`}
+            />
+            <div className="movement-speed-labels" aria-hidden="true">
+              <small>{text("느리게", "Slow")}</small>
+              <small>{text("기본", "Default")}</small>
+            </div>
           </div>
           <div className="settings-copy">
             <div>
@@ -7344,11 +7389,13 @@ type DungeonRunProps = {
   audioRuntimeRef: MutableRefObject<GameAudioRuntime | null>;
   uiScale: number;
   fontScale: number;
+  characterMoveAnimationSpeed: number;
   language: UiLanguage;
   soundEnabled: boolean;
   developerMode: boolean;
   onScaleChange: (scale: number) => void;
   onFontScaleChange: (scale: number) => void;
+  onCharacterMoveAnimationSpeedChange: (speed: number) => void;
   onLanguageChange: (language: UiLanguage) => void;
   onSoundEnabledChange: (enabled: boolean) => void;
   onDeveloperModeChange: (enabled: boolean) => void;
@@ -7366,11 +7413,13 @@ function DungeonRun({
   audioRuntimeRef,
   uiScale,
   fontScale,
+  characterMoveAnimationSpeed,
   language,
   soundEnabled,
   developerMode,
   onScaleChange,
   onFontScaleChange,
+  onCharacterMoveAnimationSpeedChange,
   onLanguageChange,
   onSoundEnabledChange,
   onDeveloperModeChange,
@@ -7475,6 +7524,9 @@ function DungeonRun({
   const lastWheelAtRef = useRef(0);
   const soundEnabledRef = useRef(true);
   const developerModeRef = useRef(false);
+  const characterMoveAnimationSpeedRef = useRef(
+    characterMoveAnimationSpeed,
+  );
   const manualPartyModeRef = useRef(false);
   const controlledActorIdRef = useRef(PLAYER_ID);
   const manualActedIdsRef = useRef(new Set<string>());
@@ -7601,6 +7653,11 @@ function DungeonRun({
   useEffect(() => {
     developerModeRef.current = developerMode;
   }, [developerMode]);
+
+  useEffect(() => {
+    characterMoveAnimationSpeedRef.current =
+      normalizeCharacterMoveAnimationSpeed(characterMoveAnimationSpeed);
+  }, [characterMoveAnimationSpeed]);
 
   useEffect(() => {
     manualPartyModeRef.current = manualPartyMode;
@@ -7840,7 +7897,11 @@ function DungeonRun({
       const now = performance.now();
       motions.forEach((motion) => {
         const motionDuration =
-          duration ?? durationForMotion(motion);
+          duration ??
+          durationForMotion(
+            motion,
+            characterMoveAnimationSpeedRef.current,
+          );
         const isWalkingMotion =
           motion.kind === "move" &&
           (motion.travelStyle === undefined || motion.travelStyle === "walk");
@@ -8215,6 +8276,7 @@ function DungeonRun({
         const timeline = createTurnMotionTimeline(
           result.motions,
           actionLeadEnd,
+          characterMoveAnimationSpeedRef.current,
         );
         timeline.motions.forEach(({ motion, duration, delay }) => {
           addVisuals([motion], [], duration, delay);
@@ -8367,6 +8429,7 @@ function DungeonRun({
       const timeline = createTurnMotionTimeline(
         allMotions,
         initialThrowHasAttackMotion ? interactionEnd : actionLeadEnd,
+        characterMoveAnimationSpeedRef.current,
       );
       timeline.motions.forEach(({ motion, duration, delay }) => {
         addVisuals([motion], [], duration, delay);
@@ -12002,11 +12065,15 @@ function DungeonRun({
         <SettingsModal
           uiScale={uiScale}
           fontScale={fontScale}
+          characterMoveAnimationSpeed={characterMoveAnimationSpeed}
           language={language}
           soundEnabled={soundEnabled}
           developerMode={developerMode}
           onScaleChange={onScaleChange}
           onFontScaleChange={onFontScaleChange}
+          onCharacterMoveAnimationSpeedChange={
+            onCharacterMoveAnimationSpeedChange
+          }
           onLanguageChange={onLanguageChange}
           onSoundEnabledChange={onSoundEnabledChange}
           onDeveloperModeChange={onDeveloperModeChange}
@@ -12069,6 +12136,8 @@ export default function DungeonGame() {
   const [hubCompendiumOpen, setHubCompendiumOpen] = useState(false);
   const [uiScale, setUiScale] = useState(1);
   const [fontScale, setFontScale] = useState(1);
+  const [characterMoveAnimationSpeed, setCharacterMoveAnimationSpeed] =
+    useState(DEFAULT_CHARACTER_MOVE_ANIMATION_SPEED);
   const [language, setLanguage] = useState<UiLanguage>("ko");
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [developerMode, setDeveloperMode] = useState(false);
@@ -12145,6 +12214,11 @@ export default function DungeonGame() {
       const savedLanguage = window.localStorage.getItem(
         LANGUAGE_STORAGE_KEY,
       );
+      const savedCharacterMoveAnimationSpeed = Number(
+        window.localStorage.getItem(
+          CHARACTER_MOVE_ANIMATION_SPEED_STORAGE_KEY,
+        ),
+      );
       if (UI_SCALE_OPTIONS.some((scale) => scale === savedScale)) {
         setUiScale(savedScale);
       }
@@ -12154,6 +12228,11 @@ export default function DungeonGame() {
       if (savedLanguage === "ko" || savedLanguage === "en") {
         setLanguage(savedLanguage);
       }
+      setCharacterMoveAnimationSpeed(
+        normalizeCharacterMoveAnimationSpeed(
+          savedCharacterMoveAnimationSpeed,
+        ),
+      );
       setCampaignHydrated(true);
     });
     return () => window.cancelAnimationFrame(frame);
@@ -12213,6 +12292,15 @@ export default function DungeonGame() {
   const changeFontScale = useCallback((scale: number) => {
     setFontScale(scale);
     window.localStorage.setItem(FONT_SCALE_STORAGE_KEY, String(scale));
+  }, []);
+
+  const changeCharacterMoveAnimationSpeed = useCallback((speed: number) => {
+    const normalizedSpeed = normalizeCharacterMoveAnimationSpeed(speed);
+    setCharacterMoveAnimationSpeed(normalizedSpeed);
+    window.localStorage.setItem(
+      CHARACTER_MOVE_ANIMATION_SPEED_STORAGE_KEY,
+      String(normalizedSpeed),
+    );
   }, []);
 
   const changeLanguage = useCallback((nextLanguage: UiLanguage) => {
@@ -12553,11 +12641,15 @@ export default function DungeonGame() {
             <SettingsModal
               uiScale={uiScale}
               fontScale={fontScale}
+              characterMoveAnimationSpeed={characterMoveAnimationSpeed}
               language={language}
               soundEnabled={soundEnabled}
               developerMode={developerMode}
               onScaleChange={changeUiScale}
               onFontScaleChange={changeFontScale}
+              onCharacterMoveAnimationSpeedChange={
+                changeCharacterMoveAnimationSpeed
+              }
               onLanguageChange={changeLanguage}
               onSoundEnabledChange={setSoundEnabled}
               onDeveloperModeChange={setDeveloperMode}
@@ -12752,11 +12844,15 @@ export default function DungeonGame() {
         audioRuntimeRef={uiAudioRuntimeRef}
         uiScale={uiScale}
         fontScale={fontScale}
+        characterMoveAnimationSpeed={characterMoveAnimationSpeed}
         language={language}
         soundEnabled={soundEnabled}
         developerMode={developerMode}
         onScaleChange={changeUiScale}
         onFontScaleChange={changeFontScale}
+        onCharacterMoveAnimationSpeedChange={
+          changeCharacterMoveAnimationSpeed
+        }
         onLanguageChange={changeLanguage}
         onSoundEnabledChange={setSoundEnabled}
         onDeveloperModeChange={setDeveloperMode}

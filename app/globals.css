@@ -4140,6 +4140,20 @@ kbd {
   line-height: 1.6;
 }
 
+.movement-speed-setting input[type="range"] {
+  width: 100%;
+  margin: 2px 0 0;
+  accent-color: var(--gold-bright);
+  cursor: pointer;
+}
+
+.movement-speed-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: calc(9px * var(--font-scale, 1));
+}
+
 .scale-options {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
