@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   createNewGame,
   getPlayerMoveSpeed,
+  isFormationAligned,
   playerStep,
   runEnemyTurn,
 } from "../app/game/engine";
@@ -19,7 +20,10 @@ import {
   resolveCharacterAnimationFrame,
 } from "../app/presentation/player-animation";
 import {
+  CHARACTER_MOVE_DEBUG_SLOWDOWN,
   COMPANION_ATTACK_DURATION,
+  COMPANION_MOVE_DURATION,
+  ENEMY_MOVE_DURATION,
   PLAYER_ATTACK_DURATION,
   PLAYER_MOVE_DURATION,
   createTurnMotionTimeline,
@@ -131,6 +135,10 @@ assert.equal(resolveCharacterAnimationFrame({ kind: "idle", now: 0 }), PLAYER_ID
 assert.equal(resolveCharacterAnimationFrame({ kind: "attack", now: 0, progress: 0 }), PLAYER_ATTACK_FRAMES[0]);
 assert.equal(resolveCharacterAnimationFrame({ kind: "interact", now: 0, progress: 0 }), PLAYER_INTERACT_FRAMES[0]);
 assert.equal(COMPANION_ATTACK_DURATION, PLAYER_ATTACK_DURATION);
+assert.equal(CHARACTER_MOVE_DEBUG_SLOWDOWN, 4);
+assert.equal(PLAYER_MOVE_DURATION, 492);
+assert.equal(COMPANION_MOVE_DURATION, PLAYER_MOVE_DURATION);
+assert.equal(ENEMY_MOVE_DURATION, 100);
 
 const prepareFollowGame = (seed: number): GameState => {
   const state = createNewGame(seed);
@@ -230,17 +238,16 @@ followSteps(prepareFollowGame(0xf0110b), [
 ]);
 
 let backtrackingGame = prepareFollowGame(0xf0110e);
-for (const direction of [
-  { x: 1, y: 0 },
-  { x: 1, y: 0 },
-  { x: -1, y: 0 },
-  { x: -1, y: 0 },
-]) {
-  backtrackingGame = playerStep(
-    backtrackingGame,
-    direction.x,
-    direction.y,
-  ).state;
+const originalFollowerIds = backtrackingGame.companions.map(({ id }) => id);
+for (let step = 0; step < 3; step += 1) {
+  const reversalTurn = playerStep(backtrackingGame, -1, 0);
+  assert.ok(
+    reversalTurn.motions.some(
+      (motion) => motion.id !== "player" && motion.kind === "move",
+    ),
+    "each reversal step must swap the player through the physical chain",
+  );
+  backtrackingGame = reversalTurn.state;
   assert.equal(
     new Set([
       `${backtrackingGame.player.x},${backtrackingGame.player.y}`,
@@ -250,11 +257,51 @@ for (const direction of [
     "backtracking must preserve party occupancy",
   );
 }
+assert.equal(
+  isFormationAligned(backtrackingGame),
+  true,
+  "the chain must be aligned after the player passes all three followers",
+);
+assert.deepEqual(
+  [...backtrackingGame.companions]
+    .sort((left, right) => left.x - right.x)
+    .map(({ id }) => id),
+  [...originalFollowerIds].reverse(),
+  "a 180-degree reversal may adopt the reversed physical follower order",
+);
+for (let step = 0; step < 7; step += 1) {
+  backtrackingGame = playerStep(backtrackingGame, -1, 0).state;
+  assert.equal(
+    isFormationAligned(backtrackingGame),
+    true,
+    "the reversed chain must remain aligned while moving away",
+  );
+}
 assert.ok(
-  backtrackingGame.companionTrail.filter(({ x, y }) => x === 11 && y === 10)
+  backtrackingGame.companionTrail.filter(({ x, y }) => x === 9 && y === 10)
     .length >= 2,
   "breadcrumbs must preserve repeated coordinates while backtracking",
 );
+
+let corridorReversal = prepareFollowGame(0xf01112);
+corridorReversal.tiles.forEach((row) =>
+  row.forEach((tile) => {
+    tile.terrain = "wall";
+  }),
+);
+for (let x = 3; x <= 15; x += 1) {
+  corridorReversal.tiles[10][x].terrain = "floor";
+}
+for (let step = 0; step < 8; step += 1) {
+  corridorReversal = playerStep(corridorReversal, -1, 0).state;
+  if (step >= 2) {
+    assert.equal(
+      isFormationAligned(corridorReversal),
+      true,
+      "a one-tile corridor reversal must recover into one contiguous line",
+    );
+  }
+}
 
 const corridorGame = prepareFollowGame(0xf0110f);
 corridorGame.tiles.forEach((row) =>
@@ -329,8 +376,17 @@ assert.equal(
   5_000,
   "catch-up motion segments must preserve one continuous animation cycle",
 );
+let recoveredFormation = catchUpTurn.state;
+for (let step = 0; step < 8 && !isFormationAligned(recoveredFormation); step += 1) {
+  recoveredFormation = playerStep(recoveredFormation, 1, 0).state;
+}
+assert.equal(
+  isFormationAligned(recoveredFormation),
+  true,
+  "a broken formation must converge to one contiguous chain",
+);
 
-const waitingCatchUpGame = structuredClone(catchUpGame);
+let waitingCatchUpGame = structuredClone(catchUpGame);
 const waitingCatchUp = runEnemyTurn(waitingCatchUpGame);
 assert.equal(
   waitingCatchUp.motions.filter(
@@ -338,6 +394,15 @@ assert.equal(
   ).length,
   2,
   "waiting must give lagging followers a bounded catch-up update",
+);
+waitingCatchUpGame = waitingCatchUp.state;
+for (let turn = 0; turn < 8 && !isFormationAligned(waitingCatchUpGame); turn += 1) {
+  waitingCatchUpGame = runEnemyTurn(waitingCatchUpGame).state;
+}
+assert.equal(
+  isFormationAligned(waitingCatchUpGame),
+  true,
+  "waiting recovery must finish with no gaps in the chain",
 );
 
 for (const statusId of ["rooted", "frozen", "paralyzed"] as const) {
@@ -367,12 +432,14 @@ doorGame.companions[0].x = 9;
 doorGame.companions[1].x = 8;
 doorGame.companions[2].x = 7;
 doorGame.companionTrail = [
+  { x: 12, y: 10 },
+  { x: 11, y: 10 },
   { x: 10, y: 10 },
   { x: 9, y: 10 },
   { x: 8, y: 10 },
 ];
 const doorFollow = runEnemyTurn(doorGame);
-assert.equal(doorFollow.state.companions[0].x, 10);
+assert.equal(doorFollow.state.companions[0].x, 11);
 assert.equal(doorFollow.state.tiles[10][10].terrain, "openDoor");
 assert.equal(
   new Set(doorFollow.state.companions.map(({ x, y }) => `${x},${y}`)).size,
@@ -426,6 +493,11 @@ assert.equal(
   ).length,
   2,
   "formation catch-up must resume after combat ends",
+);
+assert.equal(
+  isFormationAligned(postCombatCatchUp.state),
+  true,
+  "post-combat recovery must restore a contiguous chain",
 );
 
 const retreatGame = prepareFollowGame(0xf0110d);

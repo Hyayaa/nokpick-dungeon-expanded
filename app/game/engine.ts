@@ -2956,7 +2956,8 @@ export function playerStep(
     swappingCompanion.x = from.x;
     swappingCompanion.y = from.y;
     swappingCompanion.facing = companionDirection(companionFrom, from);
-    swappingCompanion.actionCooldown = 1;
+    swappingCompanion.actionCooldown =
+      automaticFormation && isFormationFollowMode(next) ? 0 : 1;
     motions.push({
       id: swappingCompanion.id,
       from: companionFrom,
@@ -3007,7 +3008,7 @@ export function playerStep(
     completedWalk &&
     !swappingCompanion &&
     isFormationFollowMode(next)
-      ? runFormationFollow(next, motions, { playerAdvanced: true })
+      ? runFormationFollow(next, motions, {})
       : false;
   updatePlayerFieldOfView(next);
 
@@ -6420,13 +6421,100 @@ const isFormationFollowMode = (state: GameState) => {
 
 export const FORMATION_CATCH_UP_MAX_STEPS = 2;
 
-const formationSlotForCompanion = (
-  state: GameState,
-  companion: Companion,
-  followerIndex: number,
-) =>
-  state.companionTrail?.[followerIndex] ??
-  followerTarget(state, companion, followerIndex);
+const formationPathBehindPlayer = (state: GameState): Point[] => {
+  const path: Point[] = [];
+  const used = new Set([mapPointKey(state.player)]);
+  let cursor: Point = state.player;
+  for (const point of state.companionTrail ?? []) {
+    const key = mapPointKey(point);
+    const terrain = state.tiles[point.y]?.[point.x]?.terrain;
+    if (
+      used.has(key) ||
+      distance(cursor, point) !== 1 ||
+      !terrain ||
+      !isWalkable(
+        terrain,
+        (state.player.inventory.iron_key ?? 0) > 0,
+      )
+    ) {
+      continue;
+    }
+    path.push(point);
+    used.add(key);
+    cursor = point;
+  }
+
+  const livingCount = (state.companions ?? []).filter(
+    (companion) => companion.hp > 0,
+  ).length;
+  if (path.length >= livingCount) return path;
+
+  const facingOffset: Record<Direction, Point> = {
+    up: { x: 0, y: 1 },
+    down: { x: 0, y: -1 },
+    left: { x: 1, y: 0 },
+    right: { x: -1, y: 0 },
+  };
+  const offset = facingOffset[state.player.facing];
+  for (let index = path.length; index < livingCount; index += 1) {
+    const fallback = {
+      x: state.player.x + offset.x * (index + 1),
+      y: state.player.y + offset.y * (index + 1),
+    };
+    const key = mapPointKey(fallback);
+    const terrain = state.tiles[fallback.y]?.[fallback.x]?.terrain;
+    if (
+      used.has(key) ||
+      !terrain ||
+      !isWalkable(
+        terrain,
+        (state.player.inventory.iron_key ?? 0) > 0,
+      )
+    ) {
+      break;
+    }
+    path.push(fallback);
+    used.add(key);
+  }
+  return path;
+};
+
+const dynamicFormationOrder = (
+  followers: readonly Companion[],
+  formationPath: readonly Point[],
+) => {
+  const pathIndex = (companion: Companion) =>
+    formationPath.findIndex((point) => pointEquals(point, companion));
+  return followers
+    .map((companion, stableIndex) => ({
+      companion,
+      pathIndex: pathIndex(companion),
+      stableIndex,
+    }))
+    .sort((left, right) => {
+      if (left.pathIndex >= 0 && right.pathIndex >= 0) {
+        return left.pathIndex - right.pathIndex;
+      }
+      if (left.pathIndex >= 0) return -1;
+      if (right.pathIndex >= 0) return 1;
+      return left.stableIndex - right.stableIndex;
+    })
+    .map(({ companion }) => companion);
+};
+
+export const isFormationAligned = (state: GameState) => {
+  const followers = (state.companions ?? []).filter(
+    (companion) => companion.hp > 0,
+  );
+  const slots = formationPathBehindPlayer(state).slice(0, followers.length);
+  if (slots.length !== followers.length) return false;
+  const occupied = new Set(followers.map(mapPointKey));
+  return (
+    occupied.size === followers.length &&
+    !occupied.has(mapPointKey(state.player)) &&
+    slots.every((slot) => occupied.has(mapPointKey(slot)))
+  );
+};
 
 const formationMovementBlocked = (companion: Companion) =>
   companion.hp <= 0 ||
@@ -6435,47 +6523,22 @@ const formationMovementBlocked = (companion: Companion) =>
   hasStatus(companion, "frozen") ||
   hasStatus(companion, "paralyzed");
 
-const breadcrumbIndexForCompanion = (
-  trail: readonly Point[],
-  companion: Companion,
-  followerIndex: number,
-  playerAdvanced: boolean,
-) => {
-  const slot = trail[followerIndex];
-  if (!playerAdvanced && slot && pointEquals(companion, slot)) {
-    return followerIndex;
-  }
-  const firstPossibleIndex = Math.min(
-    trail.length,
-    followerIndex + (playerAdvanced ? 1 : 0),
-  );
-  let matchedIndex = -1;
-  for (let index = firstPossibleIndex; index < trail.length; index += 1) {
-    if (pointEquals(companion, trail[index])) matchedIndex = index;
-  }
-  return matchedIndex;
-};
-
 const nextBreadcrumbFollowStep = (
   state: GameState,
   companion: Companion,
-  followerIndex: number,
-  playerAdvanced: boolean,
+  formationSlotIndex: number,
+  formationPath: readonly Point[],
   reservedDestinations: ReadonlySet<string>,
   vacatingPartyTiles: ReadonlySet<string>,
 ) => {
-  const trail = state.companionTrail ?? [];
-  const slot = formationSlotForCompanion(state, companion, followerIndex);
+  const slot = formationPath[formationSlotIndex];
   if (!slot || pointEquals(companion, slot)) return null;
 
-  const breadcrumbIndex = breadcrumbIndexForCompanion(
-    trail,
-    companion,
-    followerIndex,
-    playerAdvanced,
+  const breadcrumbIndex = formationPath.findIndex((point) =>
+    pointEquals(point, companion),
   );
-  if (breadcrumbIndex > followerIndex) {
-    return trail[breadcrumbIndex - 1] ?? null;
+  if (breadcrumbIndex > formationSlotIndex) {
+    return formationPath[breadcrumbIndex - 1] ?? null;
   }
 
   return nextCompanionStepToward(
@@ -6493,18 +6556,18 @@ const runFormationFollow = (
   state: GameState,
   motions: Motion[],
   {
-    playerAdvanced,
     blockedActorIds = new Set<string>(),
   }: {
-    playerAdvanced: boolean;
     blockedActorIds?: ReadonlySet<string>;
   },
 ) => {
   let openedDoor = false;
   for (let step = 0; step < FORMATION_CATCH_UP_MAX_STEPS; step += 1) {
-    const followers = (state.companions ?? []).filter(
+    const livingFollowers = (state.companions ?? []).filter(
       (companion) => companion.hp > 0,
     );
+    const formationPath = formationPathBehindPlayer(state);
+    const followers = dynamicFormationOrder(livingFollowers, formationPath);
     const plans: CompanionMovePlan[] = [];
     const reservedDestinations = new Set<string>();
     const vacatingPartyTiles = new Set<string>();
@@ -6519,7 +6582,7 @@ const runFormationFollow = (
         state,
         companion,
         followerIndex,
-        playerAdvanced && step === 0,
+        formationPath,
         reservedDestinations,
         vacatingPartyTiles,
       );
@@ -6802,7 +6865,6 @@ const runCompanionActions = (
   }
   if (formationMode) {
     return runFormationFollow(state, motions, {
-      playerAdvanced: false,
       blockedActorIds: formationBlockedActorIds,
     });
   }

@@ -6,7 +6,11 @@ import type {
 
 export const MIN_ACTION_DURATION = 112;
 // 160ms / 1.3: faster presentation only; the movement-speed stat is unchanged.
-export const PLAYER_MOVE_DURATION = 123;
+const NORMAL_CHARACTER_MOVE_DURATION = 123;
+// Temporary visual-only slowdown for formation debugging.
+export const CHARACTER_MOVE_DEBUG_SLOWDOWN = 4;
+export const PLAYER_MOVE_DURATION =
+  NORMAL_CHARACTER_MOVE_DURATION * CHARACTER_MOVE_DEBUG_SLOWDOWN;
 export const ENEMY_MOVE_DURATION = 100;
 export const PLAYER_ATTACK_DURATION = 60;
 export const ENEMY_ATTACK_DURATION = 160;
