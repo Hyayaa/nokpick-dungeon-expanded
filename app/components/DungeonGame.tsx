@@ -158,6 +158,7 @@ import {
   formatGold,
   generateDungeonOffers,
   INITIAL_DUNGEON_OFFER_SEED,
+  isAutoExploreUnlockedForDungeon,
   mergeReturningCompanions,
   normalizeBossDungeonClears,
   normalizeCompanionForHub,
@@ -4618,10 +4619,11 @@ function HelpModal({ onClose }: { onClose: () => void }) {
                   원정 종료 화면에서 함께 정산됩니다.
                 </p>
                 <p>
-                  현재 자동탐사는 일시적으로 완전히 꺼져 있습니다. 각 동료는 20종 중
-                  무작위로 정해진 수동 스킬 2개를 지니며, 스킬 버튼을 누른 뒤 지도에서
-                  목표를 선택합니다. 스킬은 한 턴을 소비하고 동료별 재사용 대기시간을
-                  가집니다.
+                  자동탐사는 클리어한 보스 던전보다 낮은 등급의 던전에서 사용할 수
+                  있습니다. 개발자 모드에서는 던전 등급과 관계없이 사용할 수 있습니다.
+                  각 동료는 20종 중 무작위로 정해진 수동 스킬 2개를 지니며, 스킬
+                  버튼을 누른 뒤 지도에서 목표를 선택합니다. 스킬은 한 턴을 소비하고
+                  동료별 재사용 대기시간을 가집니다.
                 </p>
                 <p>
                   밝은 칸은 현재 시야, 어두운 칸은 이전에 본 장소이며 검은 영역은
@@ -4654,10 +4656,12 @@ function HelpModal({ onClose }: { onClose: () => void }) {
                   Level-ups no longer interrupt exploration.
                 </p>
                 <p>
-                  Auto-explore is temporarily disabled in full. Every companion
-                  has two randomly assigned manual skills from a pool of twenty.
-                  Select a skill button, then choose its target on the map. Skills
-                  consume one turn and have per-companion cooldowns.
+                  Auto-explore is available in dungeons below your highest
+                  cleared boss tier. Developer mode enables it at every dungeon
+                  tier. Every companion has two randomly assigned manual skills
+                  from a pool of twenty. Select a skill button, then choose its
+                  target on the map. Skills consume one turn and have
+                  per-companion cooldowns.
                 </p>
                 <p>
                   Bright tiles are visible now, dim tiles are remembered, and
@@ -7393,6 +7397,7 @@ type DungeonRunProps = {
   language: UiLanguage;
   soundEnabled: boolean;
   developerMode: boolean;
+  autoExploreAllowed: boolean;
   onScaleChange: (scale: number) => void;
   onFontScaleChange: (scale: number) => void;
   onCharacterMoveAnimationSpeedChange: (speed: number) => void;
@@ -7417,6 +7422,7 @@ function DungeonRun({
   language,
   soundEnabled,
   developerMode,
+  autoExploreAllowed,
   onScaleChange,
   onFontScaleChange,
   onCharacterMoveAnimationSpeedChange,
@@ -10218,8 +10224,21 @@ function DungeonRun({
     [autoPickupIfSafe, resolveAction, runExclusive],
   );
 
+  const cancelAutoExploreRuntime = useCallback(() => {
+    autoExploreRef.current = false;
+    resumeAutoExploreAfterAugmentRef.current = false;
+    resumeAutoExploreAfterUiActionRef.current = false;
+    pendingTravelAfterAutoExploreRef.current = null;
+    pendingAutoExploreUiActionRef.current = null;
+  }, []);
+
+  const stopAutoExplore = useCallback(() => {
+    cancelAutoExploreRuntime();
+    setAutoExploring(false);
+  }, [cancelAutoExploreRuntime]);
+
   const startAutoExplore = useCallback(() => {
-    if (!AUTO_EXPLORATION_ENABLED) return;
+    if (!autoExploreAllowed) return;
     if (
       busyRef.current ||
       autoExploreRef.current ||
@@ -10369,6 +10388,7 @@ function DungeonRun({
       }
     });
   }, [
+    autoExploreAllowed,
     autoDescendAfterExplore,
     commitGame,
     playSound,
@@ -10381,6 +10401,13 @@ function DungeonRun({
   useEffect(() => {
     startAutoExploreRef.current = startAutoExplore;
   }, [startAutoExplore]);
+
+  useEffect(() => {
+    if (autoExploreAllowed) return;
+    cancelAutoExploreRuntime();
+    const timeout = window.setTimeout(() => setAutoExploring(false), 0);
+    return () => window.clearTimeout(timeout);
+  }, [autoExploreAllowed, cancelAutoExploreRuntime]);
 
   const onCanvasMove = useCallback(
     (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -11486,13 +11513,34 @@ function DungeonRun({
                 )}
               </div>
             )}
-            <div className="auto-explore-disabled" role="status">
-              <i aria-hidden="true">×</i>
-              <span>
-                <strong>{text("자동탐사 일시 중지", "Auto-explore Paused")}</strong>
-                <small>{text("동료는 플레이어를 자동으로 동행합니다", "Companions automatically follow the player")}</small>
-              </span>
-            </div>
+            {autoExploreAllowed ? (
+              <div className="auto-explore-tools">
+                <button
+                  type="button"
+                  className={`auto-explore-primary ${autoExploring ? "is-active" : ""}`}
+                  disabled={busy && !autoExploring}
+                  onClick={autoExploring ? stopAutoExplore : startAutoExplore}
+                  aria-pressed={autoExploring}
+                >
+                  {autoExploring
+                    ? text("자동탐사 중지", "Stop Auto-explore")
+                    : text("자동탐사", "Auto-explore")}
+                </button>
+              </div>
+            ) : (
+              <div className="auto-explore-disabled" role="status">
+                <i aria-hidden="true">×</i>
+                <span>
+                  <strong>{text("자동탐사 잠김", "Auto-explore Locked")}</strong>
+                  <small>
+                    {text(
+                      "클리어한 보스보다 낮은 등급의 던전에서 사용할 수 있습니다",
+                      "Available in dungeons below your highest cleared boss tier",
+                    )}
+                  </small>
+                </span>
+              </div>
+            )}
             <canvas
               ref={canvasRef}
               width={VIEW_WIDTH}
@@ -12848,6 +12896,13 @@ export default function DungeonGame() {
         language={language}
         soundEnabled={soundEnabled}
         developerMode={developerMode}
+        autoExploreAllowed={
+          developerMode ||
+          isAutoExploreUnlockedForDungeon(
+            activeExpedition.dungeon,
+            campaign.bossDungeonClears,
+          )
+        }
         onScaleChange={changeUiScale}
         onFontScaleChange={changeFontScale}
         onCharacterMoveAnimationSpeedChange={

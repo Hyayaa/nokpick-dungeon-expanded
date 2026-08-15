@@ -1034,6 +1034,17 @@ export const maximumRecommendedDifficulty = (
   bossDungeonClears: unknown,
 ): DungeonDifficulty => bossDifficultyForClears(bossDungeonClears);
 
+export const autoExploreDifficultyLimit = (bossDungeonClears: unknown) =>
+  Math.min(normalizeBossDungeonClears(bossDungeonClears), 6);
+
+export const isAutoExploreUnlockedForDungeon = (
+  dungeon: Pick<DungeonDefinition, "difficulty">,
+  bossDungeonClears: unknown,
+) => {
+  const difficultyLimit = autoExploreDifficultyLimit(bossDungeonClears);
+  return difficultyLimit >= 1 && dungeon.difficulty <= difficultyLimit;
+};
+
 const selectOfferMainDrops = ({
   theme,
   rules,

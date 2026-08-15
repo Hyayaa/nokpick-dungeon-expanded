@@ -22,6 +22,7 @@
     "test:blacksmith-enchant-reroll": "node --import tsx scripts/blacksmith-enchant-reroll-smoke.ts",
     "test:character-sprites": "node --import tsx scripts/character-sprite-smoke.ts",
     "test:character-animation-follow": "node --import tsx scripts/character-animation-follow-smoke.ts",
+    "test:exploration-controls": "node --import tsx scripts/exploration-controls-smoke.ts",
     "test:rooms": "node --import tsx scripts/room-presets-smoke.ts",
     "test:special-rooms": "node --import tsx scripts/special-rooms-smoke.ts",
     "test:quests": "node --import tsx scripts/quest-smoke.ts",

@@ -1830,23 +1830,13 @@ assert.match(
 );
 assert.match(
   dungeonUiSource,
-  /const AUTO_EXPLORATION_ENABLED = false;/,
-  "auto-explore must be disabled behind an explicit temporary feature flag",
-);
-assert.doesNotMatch(
-  dungeonUiSource,
-  /className="auto-explore-tools"/,
-  "disabled auto-explore controls must not remain interactive in the dungeon UI",
+  /autoExploreAllowed \? \([\s\S]*className="auto-explore-tools"[\s\S]*자동탐사 중지[\s\S]*className="auto-explore-disabled"[\s\S]*자동탐사 잠김/,
+  "the dungeon UI must switch between functional controls and progression guidance",
 );
 assert.match(
   dungeonUiSource,
-  /className="auto-explore-disabled"[\s\S]*자동탐사 일시 중지/,
-  "the dungeon UI must clearly show that auto-explore is temporarily paused",
-);
-assert.match(
-  dungeonUiSource,
-  /const startAutoExplore = useCallback\(\(\) => \{\s*if \(!AUTO_EXPLORATION_ENABLED\) return;/,
-  "the preserved auto-explore loop must have no callable entry while the feature is paused",
+  /const startAutoExplore = useCallback\(\(\) => \{\s*if \(!autoExploreAllowed\) return;/,
+  "the preserved auto-explore loop must reject locked dungeon entry",
 );
 assert.doesNotMatch(
   dungeonUiSource,
