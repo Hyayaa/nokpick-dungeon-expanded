@@ -2537,6 +2537,7 @@ export function playerStep(
   dx: number,
   dy: number,
   autoEquipBetter = false,
+  automaticFormation = true,
 ): ActionResult {
   if (state.gameOver) {
     return { state, motions: [], effects: [], consumedTurn: false };
@@ -2940,12 +2941,13 @@ export function playerStep(
   next.player.x = target.x;
   next.player.y = target.y;
   triggerTrapAt(next, target, effects);
-  next.companionTrail = [
-    from,
-    ...(next.companionTrail ?? []).filter(
-      (point) => mapPointKey(point) !== mapPointKey(from),
-    ),
-  ].slice(0, Math.max(12, next.companions.length * 4));
+  const completedWalk = pointEquals(next.player, target);
+  next.companionTrail = completedWalk
+    ? [from, ...(next.companionTrail ?? [])].slice(
+        0,
+        Math.max(32, next.companions.length * 12),
+      )
+    : [];
   if (swappingCompanion) {
     const companionFrom = {
       x: swappingCompanion.x,
@@ -3000,6 +3002,13 @@ export function playerStep(
     1 / getPlayerMoveSpeed(next.player),
   );
   motions.push({ id: PLAYER_ID, from, to: target, kind: "move" });
+  const companionOpenedDoor =
+    automaticFormation &&
+    completedWalk &&
+    !swappingCompanion &&
+    isFormationFollowMode(next)
+      ? runFormationFollow(next, motions, { playerAdvanced: true })
+      : false;
   updatePlayerFieldOfView(next);
 
   return {
@@ -3011,7 +3020,9 @@ export function playerStep(
     interacted: false,
     reachedExit: next.tiles[target.y][target.x].terrain === "exit",
     soundCues: [
-      ...(terrain === "door" ? [{ id: "doorOpen" as const }] : []),
+      ...(terrain === "door" || companionOpenedDoor
+        ? [{ id: "doorOpen" as const }]
+        : []),
       ...(trampledGrass ? [{ id: "trample" as const }] : []),
       ...(next.tiles[target.y][target.x].terrain === "exit"
         ? [{ id: "descend" as const }]
@@ -5644,7 +5655,7 @@ const followerTarget = (
   followerIndex: number,
 ) => {
   const trail = state.companionTrail ?? [];
-  const trailTarget = trail[Math.min(followerIndex, trail.length - 1)];
+  const trailTarget = trail[followerIndex];
   if (
     trailTarget &&
     state.tiles[trailTarget.y]?.[trailTarget.x] &&
@@ -6307,12 +6318,14 @@ const nextCompanionStepToward = (
   reservedDestinations: ReadonlySet<string>,
   canUnlock: boolean,
   allowOccupiedTarget = false,
+  vacatingPartyTiles: ReadonlySet<string> = new Set(),
 ) => {
   const blocked = companionMovementBlockedSet(
     state,
     companion.id,
     reservedDestinations,
   );
+  vacatingPartyTiles.forEach((key) => blocked.delete(key));
   const targetKey = mapPointKey(target);
   if (allowOccupiedTarget) blocked.delete(targetKey);
   const targetTerrain = state.tiles[target.y]?.[target.x]?.terrain;
@@ -6376,6 +6389,152 @@ const enemyEngagedWithParty = (state: GameState, enemy: Enemy) => {
         hasLineOfSight(state.tiles, enemy, actor),
     );
   });
+};
+
+const isCompanionCombatTarget = (
+  state: GameState,
+  companion: Companion,
+  enemy: Enemy,
+) =>
+  enemy.hp > 0 &&
+  (!enemy.questId || isQuestActive(state, enemy.questId)) &&
+  !hasStatus(enemy, "corrupted") &&
+  ((distance(enemy, companion) <= getCompanionViewDistance(companion) &&
+    hasLineOfSight(state.tiles, companion, enemy)) ||
+    enemyEngagedWithParty(state, enemy));
+
+const isFormationFollowMode = (state: GameState) => {
+  const followers = (state.companions ?? []).filter(
+    (companion) => companion.hp > 0,
+  );
+  if (!followers.length) return false;
+  if (followers.some((companion) => Boolean(companion.priorityTarget))) {
+    return false;
+  }
+  return !followers.some((companion) =>
+    state.enemies.some((enemy) =>
+      isCompanionCombatTarget(state, companion, enemy),
+    ),
+  );
+};
+
+export const FORMATION_CATCH_UP_MAX_STEPS = 2;
+
+const formationSlotForCompanion = (
+  state: GameState,
+  companion: Companion,
+  followerIndex: number,
+) =>
+  state.companionTrail?.[followerIndex] ??
+  followerTarget(state, companion, followerIndex);
+
+const formationMovementBlocked = (companion: Companion) =>
+  companion.hp <= 0 ||
+  (companion.actionCooldown ?? 0) > 0 ||
+  hasStatus(companion, "rooted") ||
+  hasStatus(companion, "frozen") ||
+  hasStatus(companion, "paralyzed");
+
+const breadcrumbIndexForCompanion = (
+  trail: readonly Point[],
+  companion: Companion,
+  followerIndex: number,
+  playerAdvanced: boolean,
+) => {
+  const slot = trail[followerIndex];
+  if (!playerAdvanced && slot && pointEquals(companion, slot)) {
+    return followerIndex;
+  }
+  const firstPossibleIndex = Math.min(
+    trail.length,
+    followerIndex + (playerAdvanced ? 1 : 0),
+  );
+  let matchedIndex = -1;
+  for (let index = firstPossibleIndex; index < trail.length; index += 1) {
+    if (pointEquals(companion, trail[index])) matchedIndex = index;
+  }
+  return matchedIndex;
+};
+
+const nextBreadcrumbFollowStep = (
+  state: GameState,
+  companion: Companion,
+  followerIndex: number,
+  playerAdvanced: boolean,
+  reservedDestinations: ReadonlySet<string>,
+  vacatingPartyTiles: ReadonlySet<string>,
+) => {
+  const trail = state.companionTrail ?? [];
+  const slot = formationSlotForCompanion(state, companion, followerIndex);
+  if (!slot || pointEquals(companion, slot)) return null;
+
+  const breadcrumbIndex = breadcrumbIndexForCompanion(
+    trail,
+    companion,
+    followerIndex,
+    playerAdvanced,
+  );
+  if (breadcrumbIndex > followerIndex) {
+    return trail[breadcrumbIndex - 1] ?? null;
+  }
+
+  return nextCompanionStepToward(
+    state,
+    companion,
+    slot,
+    reservedDestinations,
+    (state.player.inventory.iron_key ?? 0) > 0,
+    true,
+    vacatingPartyTiles,
+  );
+};
+
+const runFormationFollow = (
+  state: GameState,
+  motions: Motion[],
+  {
+    playerAdvanced,
+    blockedActorIds = new Set<string>(),
+  }: {
+    playerAdvanced: boolean;
+    blockedActorIds?: ReadonlySet<string>;
+  },
+) => {
+  let openedDoor = false;
+  for (let step = 0; step < FORMATION_CATCH_UP_MAX_STEPS; step += 1) {
+    const followers = (state.companions ?? []).filter(
+      (companion) => companion.hp > 0,
+    );
+    const plans: CompanionMovePlan[] = [];
+    const reservedDestinations = new Set<string>();
+    const vacatingPartyTiles = new Set<string>();
+    followers.forEach((companion, followerIndex) => {
+      if (
+        blockedActorIds.has(companion.id) ||
+        formationMovementBlocked(companion)
+      ) {
+        return;
+      }
+      const destination = nextBreadcrumbFollowStep(
+        state,
+        companion,
+        followerIndex,
+        playerAdvanced && step === 0,
+        reservedDestinations,
+        vacatingPartyTiles,
+      );
+      if (!destination) return;
+      const destinationKey = mapPointKey(destination);
+      if (reservedDestinations.has(destinationKey)) return;
+      plans.push({ companion, destination });
+      reservedDestinations.add(destinationKey);
+      vacatingPartyTiles.add(mapPointKey(companion));
+    });
+    if (!plans.length) break;
+    openedDoor =
+      resolveCompanionMovePlans(state, plans, motions) || openedDoor;
+  }
+  return openedDoor;
 };
 
 const companionMeleeAttack = (
@@ -6482,6 +6641,8 @@ const runCompanionActions = (
   const followers = (state.companions ?? []).filter(
     (companion) => companion.hp > 0,
   );
+  const formationMode = isFormationFollowMode(state);
+  const formationBlockedActorIds = new Set<string>();
   const movePlans: CompanionMovePlan[] = [];
   const reservedDestinations = new Set<string>();
   const queueMove = (companion: Companion, destination: Point | null) => {
@@ -6517,21 +6678,18 @@ const runCompanionActions = (
       }
       continue;
     }
-    if (incapacitated) continue;
-    if ((companion.actionCooldown ?? 0) > 0) {
-      companion.actionCooldown -= 1;
+    if (incapacitated) {
+      formationBlockedActorIds.add(companion.id);
       continue;
     }
+    if ((companion.actionCooldown ?? 0) > 0) {
+      companion.actionCooldown -= 1;
+      formationBlockedActorIds.add(companion.id);
+      continue;
+    }
+    if (formationMode) continue;
     const targetCandidates = state.enemies
-      .filter(
-        (enemy) =>
-          enemy.hp > 0 &&
-          (!enemy.questId || isQuestActive(state, enemy.questId)) &&
-          !hasStatus(enemy, "corrupted") &&
-          ((distance(enemy, companion) <= getCompanionViewDistance(companion) &&
-            hasLineOfSight(state.tiles, companion, enemy)) ||
-            enemyEngagedWithParty(state, enemy)),
-      )
+      .filter((enemy) => isCompanionCombatTarget(state, companion, enemy))
       .sort(
         (a, b) => {
           const visibleA =
@@ -6641,6 +6799,12 @@ const runCompanionActions = (
       true,
     );
     queueMove(companion, destination);
+  }
+  if (formationMode) {
+    return runFormationFollow(state, motions, {
+      playerAdvanced: false,
+      blockedActorIds: formationBlockedActorIds,
+    });
   }
   return resolveCompanionMovePlans(state, movePlans, motions);
 };

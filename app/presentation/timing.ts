@@ -113,15 +113,14 @@ export function createTurnMotionTimeline(
 ): TurnMotionTimeline {
   const movement = motions.filter((motion) => motion.kind !== "attack");
   const attacks = motions.filter((motion) => motion.kind === "attack");
-  const scheduled: ScheduledMotion[] = movement.map((motion) => ({
-    motion,
-    delay: 0,
-    duration: durationForMotion(motion),
-  }));
-  const movementEnd = movement.reduce(
-    (latest, motion) => Math.max(latest, durationForMotion(motion)),
-    0,
-  );
+  const movementEndsByActor = new Map<string, number>();
+  const scheduled: ScheduledMotion[] = movement.map((motion) => {
+    const duration = durationForMotion(motion);
+    const delay = movementEndsByActor.get(motion.id) ?? 0;
+    movementEndsByActor.set(motion.id, delay + duration);
+    return { motion, delay, duration };
+  });
+  const movementEnd = Math.max(0, ...movementEndsByActor.values());
 
   let cursor = Math.max(initialPhaseEnd, movementEnd);
   if (attacks.length) cursor += ATTACK_START_DELAY;

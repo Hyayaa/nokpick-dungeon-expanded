@@ -46,9 +46,9 @@ export const registerCharacterMotionCycle = ({
 
   const previous = runtime.get(actorId);
   const continuesPreviousMove =
-    delay === 0 &&
     previous !== undefined &&
-    now <= previous.endsAt + CHARACTER_MOVE_CONTINUITY_GRACE;
+    motionStartedAt >= previous.endsAt - CHARACTER_MOVE_CONTINUITY_GRACE &&
+    motionStartedAt <= previous.endsAt + CHARACTER_MOVE_CONTINUITY_GRACE;
   if (continuesPreviousMove) {
     // Keep both interpolation and animation anchored to the prior tile's end.
     motionStartedAt = previous.endsAt;

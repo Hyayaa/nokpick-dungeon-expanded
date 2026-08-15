@@ -332,6 +332,7 @@ import {
   type StatusSignalVisual,
   type ThrowVisual,
   type VisualMotion,
+  type VisualMotionRuntime,
 } from "../presentation/dungeon-renderer";
 import {
   DescriptionWindow,
@@ -7449,7 +7450,7 @@ function DungeonRun({
     renderCacheRef.current = createDungeonRenderCache();
   }
   const assetsRef = useRef<GameAssets | null>(null);
-  const motionRef = useRef(new Map<string, VisualMotion>());
+  const motionRef = useRef<VisualMotionRuntime>(new Map());
   const characterMoveCyclesRef = useRef<CharacterMoveCycleRuntime>(new Map());
   const effectsRef = useRef<FloatingEffect[]>([]);
   const pickupRef = useRef<PickupVisual[]>([]);
@@ -7858,11 +7859,15 @@ function DungeonRun({
               walking: isWalkingMotion,
             })
           : now + delay;
-        motionRef.current.set(motion.id, {
+        const visualMotion: VisualMotion = {
           ...motion,
           startedAt: motionStartedAt,
           duration: motionDuration,
-        });
+        };
+        const queuedMotions = motionRef.current.get(motion.id) ?? [];
+        queuedMotions.push(visualMotion);
+        queuedMotions.sort((left, right) => left.startedAt - right.startedAt);
+        motionRef.current.set(motion.id, queuedMotions);
         const movingPlayer =
           motion.id === PLAYER_ID && isWalkingMotion;
         const movingCompanion =
@@ -9002,7 +9007,13 @@ function DungeonRun({
           ? controlledActorIdRef.current
           : PLAYER_ID;
         const result = actorId === PLAYER_ID
-          ? playerStep(gameRef.current, dx, dy)
+          ? playerStep(
+              gameRef.current,
+              dx,
+              dy,
+              false,
+              !manualPartyModeRef.current,
+            )
           : manualCompanionStep(gameRef.current, actorId, dx, dy);
         await resolvePartyAction(result, token, actorId);
         if (!manualPartyModeRef.current) await autoPickupIfSafe(token);
@@ -10783,7 +10794,7 @@ function DungeonRun({
             const dy = step.y - actor.y;
             void runExclusive(async (token) => {
               const result = actorId === PLAYER_ID
-                ? playerStep(gameRef.current, dx, dy)
+                ? playerStep(gameRef.current, dx, dy, false, false)
                 : manualCompanionStep(gameRef.current, actorId, dx, dy);
               await resolvePartyAction(result, token, actorId);
             });

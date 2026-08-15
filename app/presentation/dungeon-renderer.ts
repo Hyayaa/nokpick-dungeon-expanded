@@ -82,6 +82,8 @@ export type VisualMotion = Motion & {
   duration: number;
 };
 
+export type VisualMotionRuntime = Map<string, VisualMotion[]>;
+
 export type FloatingEffect = CombatEffect & EffectTrajectory & {
   id: string;
   startedAt: number;
@@ -153,7 +155,7 @@ export type DungeonRendererOptions = {
   renderCacheRef: RefLike<DungeonRenderCache | null>;
   assetsRef: RefLike<GameAssets | null>;
   gameRef: RefLike<GameState>;
-  motionRef: RefLike<Map<string, VisualMotion>>;
+  motionRef: RefLike<VisualMotionRuntime>;
   characterMoveCyclesRef: RefLike<CharacterMoveCycleRuntime>;
   effectsRef: RefLike<FloatingEffect[]>;
   pickupRef: RefLike<PickupVisual[]>;
@@ -275,8 +277,27 @@ export function startDungeonRenderer({
       spriteLift: number;
       opacity: number;
     } => {
-      const motion = motionRef.current.get(id);
+      const motionQueue = motionRef.current.get(id);
+      let motion = motionQueue?.[0];
+      if (!motion || !motionQueue) {
+        return {
+          point: fallback,
+          motion: null,
+          progress: 1,
+          spriteLift: 0,
+          opacity: 1,
+        };
+      }
+      while (
+        motion &&
+        now >= motion.startedAt + motion.duration &&
+        motionQueue.length > 1
+      ) {
+        motionQueue.shift();
+        motion = motionQueue[0];
+      }
       if (!motion) {
+        motionRef.current.delete(id);
         return {
           point: fallback,
           motion: null,

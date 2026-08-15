@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   createNewGame,
+  getPlayerMoveSpeed,
   playerStep,
   runEnemyTurn,
 } from "../app/game/engine";
+import { getCompanionMoveSpeed } from "../app/game/companions";
 import type { GameState } from "../app/game/types";
 import {
   type CharacterMoveCycleRuntime,
@@ -20,6 +22,7 @@ import {
   COMPANION_ATTACK_DURATION,
   PLAYER_ATTACK_DURATION,
   PLAYER_MOVE_DURATION,
+  createTurnMotionTimeline,
 } from "../app/presentation/timing";
 
 const registerWalk = (
@@ -175,42 +178,41 @@ const followSteps = (
     const playerTurn = playerStep(state, direction.x, direction.y);
     assert.equal(playerTurn.consumedTurn, true);
     playerHistory.unshift({ x: state.player.x, y: state.player.y });
-    const followTurn = runEnemyTurn(playerTurn.state);
     assert.equal(
       new Set(
-        followTurn.state.companions.map(({ x, y }) => `${x},${y}`),
+        playerTurn.state.companions.map(({ x, y }) => `${x},${y}`),
       ).size,
-      followTurn.state.companions.length,
+      playerTurn.state.companions.length,
       "followers must reserve distinct destinations",
     );
-    followTurn.state.companions.forEach((companion, index) => {
+    playerTurn.state.companions.forEach((companion, index) => {
       assert.deepEqual(
         { x: companion.x, y: companion.y },
         playerHistory[index],
         "followers must preserve order along the player's trail",
       );
       assert.ok(
-        followTurn.motions.some(
+        playerTurn.motions.some(
           (motion) => motion.id === companion.id && motion.kind === "move",
         ),
-        "each follower must continue moving",
+        "each follower must move at the player's tile cadence",
       );
     });
-    state = followTurn.state;
+    state = playerTurn.state;
   }
   return state;
 };
 
 const straightFollow = followSteps(
   prepareFollowGame(0xf0110a),
-  Array.from({ length: 5 }, () => ({ x: 1, y: 0 })),
+  Array.from({ length: 20 }, () => ({ x: 1, y: 0 })),
 );
 assert.deepEqual(
   straightFollow.companions.map(({ x, y }) => ({ x, y })),
   [
-    { x: 14, y: 10 },
-    { x: 13, y: 10 },
-    { x: 12, y: 10 },
+    { x: 29, y: 10 },
+    { x: 28, y: 10 },
+    { x: 27, y: 10 },
   ],
 );
 
@@ -218,10 +220,143 @@ followSteps(prepareFollowGame(0xf0110b), [
   { x: 1, y: 0 },
   { x: 1, y: 0 },
   { x: 1, y: 0 },
+  { x: 1, y: 0 },
+  { x: 0, y: 1 },
   { x: 0, y: 1 },
   { x: 0, y: 1 },
   { x: -1, y: 0 },
+  { x: -1, y: 0 },
+  { x: 0, y: -1 },
 ]);
+
+let backtrackingGame = prepareFollowGame(0xf0110e);
+for (const direction of [
+  { x: 1, y: 0 },
+  { x: 1, y: 0 },
+  { x: -1, y: 0 },
+  { x: -1, y: 0 },
+]) {
+  backtrackingGame = playerStep(
+    backtrackingGame,
+    direction.x,
+    direction.y,
+  ).state;
+  assert.equal(
+    new Set([
+      `${backtrackingGame.player.x},${backtrackingGame.player.y}`,
+      ...backtrackingGame.companions.map(({ x, y }) => `${x},${y}`),
+    ]).size,
+    backtrackingGame.companions.length + 1,
+    "backtracking must preserve party occupancy",
+  );
+}
+assert.ok(
+  backtrackingGame.companionTrail.filter(({ x, y }) => x === 11 && y === 10)
+    .length >= 2,
+  "breadcrumbs must preserve repeated coordinates while backtracking",
+);
+
+const corridorGame = prepareFollowGame(0xf0110f);
+corridorGame.tiles.forEach((row) =>
+  row.forEach((tile) => {
+    tile.terrain = "wall";
+  }),
+);
+for (let x = 7; x <= 35; x += 1) corridorGame.tiles[10][x].terrain = "floor";
+followSteps(
+  corridorGame,
+  Array.from({ length: 20 }, () => ({ x: 1, y: 0 })),
+);
+
+const fasterPlayerGame = prepareFollowGame(0xf01110);
+fasterPlayerGame.player.statuses.push(
+  { id: "haste", turns: 30, power: 1 },
+  { id: "stamina", turns: 30, power: 1 },
+);
+fasterPlayerGame.companions.forEach((companion) => {
+  companion.statuses.push({ id: "crippled", turns: 30, power: 1 });
+});
+assert.ok(getPlayerMoveSpeed(fasterPlayerGame.player) > 1.5);
+assert.equal(getCompanionMoveSpeed(fasterPlayerGame.companions[0]), 0.5);
+followSteps(
+  fasterPlayerGame,
+  Array.from({ length: 12 }, () => ({ x: 1, y: 0 })),
+);
+
+const catchUpGame = prepareFollowGame(0xf01111);
+catchUpGame.companionTrail = Array.from({ length: 9 }, (_, index) => ({
+  x: 9 - index,
+  y: 10,
+}));
+catchUpGame.companions.forEach((companion, index) => {
+  companion.x = 5 - index;
+  companion.y = 10;
+});
+const catchUpTurn = playerStep(catchUpGame, 1, 0);
+const leadCatchUpMotions = catchUpTurn.motions.filter(
+  (motion) => motion.id === catchUpGame.companions[0].id,
+);
+assert.deepEqual(
+  leadCatchUpMotions.map(({ from, to }) => ({ from, to })),
+  [
+    { from: { x: 5, y: 10 }, to: { x: 6, y: 10 } },
+    { from: { x: 6, y: 10 }, to: { x: 7, y: 10 } },
+  ],
+  "catch-up must use two sequential breadcrumb steps without teleporting",
+);
+const catchUpTimeline = createTurnMotionTimeline(catchUpTurn.motions);
+const scheduledLeadCatchUp = catchUpTimeline.motions.filter(
+  ({ motion }) => motion.id === catchUpGame.companions[0].id,
+);
+assert.deepEqual(
+  scheduledLeadCatchUp.map(({ delay }) => delay),
+  [0, PLAYER_MOVE_DURATION],
+  "same-actor catch-up motions must play sequentially",
+);
+const queuedCycleRuntime: CharacterMoveCycleRuntime = new Map();
+scheduledLeadCatchUp.forEach(({ motion, delay, duration }) => {
+  registerCharacterMotionCycle({
+    runtime: queuedCycleRuntime,
+    actorId: motion.id,
+    now: 5_000,
+    delay,
+    duration,
+    walking: true,
+  });
+});
+assert.equal(
+  queuedCycleRuntime.get(catchUpGame.companions[0].id)?.startedAt,
+  5_000,
+  "catch-up motion segments must preserve one continuous animation cycle",
+);
+
+const waitingCatchUpGame = structuredClone(catchUpGame);
+const waitingCatchUp = runEnemyTurn(waitingCatchUpGame);
+assert.equal(
+  waitingCatchUp.motions.filter(
+    (motion) => motion.id === waitingCatchUpGame.companions[0].id,
+  ).length,
+  2,
+  "waiting must give lagging followers a bounded catch-up update",
+);
+
+for (const statusId of ["rooted", "frozen", "paralyzed"] as const) {
+  const blockedGame = prepareFollowGame(0xf01120);
+  blockedGame.companions[0].statuses.push({
+    id: statusId,
+    turns: 2,
+    power: 1,
+  });
+  const blockedTurn = playerStep(blockedGame, 1, 0);
+  assert.deepEqual(
+    {
+      x: blockedTurn.state.companions[0].x,
+      y: blockedTurn.state.companions[0].y,
+    },
+    { x: 9, y: 10 },
+    `${statusId} must block forced formation movement`,
+  );
+}
 
 const doorGame = prepareFollowGame(0xf0110c);
 doorGame.tiles.forEach((row) => row.forEach((tile) => { tile.terrain = "wall"; }));
@@ -272,6 +407,25 @@ assert.ok(
     (motion) => motion.id === lead.id && motion.kind === "attack",
   ),
   "a follower must retain combat targeting after trail movement",
+);
+const movementDuringCombat = playerStep(combatGame, 0, -1);
+assert.equal(
+  movementDuringCombat.motions.some(
+    (motion) => motion.id !== "player" && motion.kind === "move",
+  ),
+  false,
+  "formation enforcement must stop immediately during combat",
+);
+movementDuringCombat.state.enemies = [];
+const postCombatCatchUp = playerStep(movementDuringCombat.state, 0, -1);
+assert.equal(
+  postCombatCatchUp.motions.filter(
+    (motion) =>
+      motion.id === movementDuringCombat.state.companions[0].id &&
+      motion.kind === "move",
+  ).length,
+  2,
+  "formation catch-up must resume after combat ends",
 );
 
 const retreatGame = prepareFollowGame(0xf0110d);
