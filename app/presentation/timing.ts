@@ -13,7 +13,8 @@ export const ENEMY_ATTACK_DURATION = 160;
 // Allies share the player's travel cadence so a 180ms follower animation does
 // not leave the player standing still for 57ms at the end of every tile.
 export const COMPANION_MOVE_DURATION = PLAYER_MOVE_DURATION;
-export const COMPANION_ATTACK_DURATION = 240;
+// Playable companions use the same four-frame character attack cycle.
+export const COMPANION_ATTACK_DURATION = PLAYER_ATTACK_DURATION;
 export const SKILL_LEAP_DURATION = 260;
 export const SKILL_TELEPORT_DURATION = 220;
 export const SKILL_CHARGE_DURATION = 160;

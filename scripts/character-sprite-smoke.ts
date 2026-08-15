@@ -100,13 +100,14 @@ const presentationSource = readFileSync(
 
 assert.match(
   rendererSource,
-  /const definition = characterPresentation\(companion\)[\s\S]*PLAYER_MOVE_FRAMES[\s\S]*PLAYER_ATTACK_FRAMES/,
+  /const definition = characterPresentation\(companion\)[\s\S]*resolveCharacterAnimationFrame/,
 );
 assert.match(
   rendererSource,
   /const playerDefinition = characterPresentation\(state\.player\)[\s\S]*playerDefinition\.frameWidth[\s\S]*playerCenterX - playerWidth \/ 2/,
 );
 assert.match(rendererSource, /imageSmoothingEnabled = false/);
+assert.doesNotMatch(rendererSource, /COMPANION_(?:IDLE|MOVE|ATTACK|INTERACT|DEFEAT)_FRAMES/);
 assert.match(uiSource, /characterPresentation\(controlledCharacter\)/);
 assert.match(uiSource, /characterPresentation\(game\.player\)/);
 assert.doesNotMatch(

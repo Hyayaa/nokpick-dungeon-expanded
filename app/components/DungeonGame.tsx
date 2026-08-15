@@ -294,7 +294,11 @@ import {
   VIEW_WIDTH,
   waterSurfaceMaskRows,
 } from "../presentation/render";
-import { PLAYER_IDLE_FRAMES } from "../presentation/player-animation";
+import {
+  type CharacterMoveCycleRuntime,
+  PLAYER_IDLE_FRAMES,
+  registerCharacterMotionCycle,
+} from "../presentation/player-animation";
 import {
   createTurnMotionTimeline,
   DEATH_EVENT_DELAY,
@@ -585,7 +589,6 @@ const randomDungeonSeed = () => {
     (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
   return seed || INITIAL_DUNGEON_OFFER_SEED;
 };
-const PLAYER_MOVE_CONTINUITY_GRACE = 48;
 const THROW_DURATION = 300;
 const throwVisualDuration = (itemThrow: ItemThrow) => {
   void itemThrow;
@@ -7447,8 +7450,7 @@ function DungeonRun({
   }
   const assetsRef = useRef<GameAssets | null>(null);
   const motionRef = useRef(new Map<string, VisualMotion>());
-  const playerMoveCycleStartedAtRef = useRef<number | null>(null);
-  const playerMoveCycleEndsAtRef = useRef(0);
+  const characterMoveCyclesRef = useRef<CharacterMoveCycleRuntime>(new Map());
   const effectsRef = useRef<FloatingEffect[]>([]);
   const pickupRef = useRef<PickupVisual[]>([]);
   const throwRef = useRef<ThrowVisual[]>([]);
@@ -7841,36 +7843,21 @@ function DungeonRun({
         const isWalkingMotion =
           motion.kind === "move" &&
           (motion.travelStyle === undefined || motion.travelStyle === "walk");
-        let motionStartedAt = now + delay;
-        if (motion.id === PLAYER_ID) {
-          if (isWalkingMotion) {
-            const previousMoveEnd = playerMoveCycleEndsAtRef.current;
-            const continuesPreviousMove =
-              delay === 0 &&
-              playerMoveCycleStartedAtRef.current !== null &&
-              previousMoveEnd > 0 &&
-              now <= previousMoveEnd + PLAYER_MOVE_CONTINUITY_GRACE;
-            if (continuesPreviousMove) {
-              // Anchor the next segment to the prior segment's exact end. A
-              // slightly late timer therefore advances the interpolation
-              // instead of inserting an idle frame between adjacent tiles.
-              motionStartedAt = previousMoveEnd;
-            }
-            if (
-              playerMoveCycleStartedAtRef.current === null ||
-              now >
-                playerMoveCycleEndsAtRef.current +
-                  PLAYER_MOVE_CONTINUITY_GRACE
-            ) {
-              playerMoveCycleStartedAtRef.current = motionStartedAt;
-            }
-            playerMoveCycleEndsAtRef.current =
-              motionStartedAt + motionDuration;
-          } else {
-            playerMoveCycleStartedAtRef.current = null;
-            playerMoveCycleEndsAtRef.current = 0;
-          }
-        }
+        const isPlayableCharacter =
+          motion.id === PLAYER_ID ||
+          (gameRef.current.companions ?? []).some(
+            (companion) => companion.id === motion.id,
+          );
+        const motionStartedAt = isPlayableCharacter
+          ? registerCharacterMotionCycle({
+              runtime: characterMoveCyclesRef.current,
+              actorId: motion.id,
+              now,
+              delay,
+              duration: motionDuration,
+              walking: isWalkingMotion,
+            })
+          : now + delay;
         motionRef.current.set(motion.id, {
           ...motion,
           startedAt: motionStartedAt,
@@ -8282,8 +8269,7 @@ function DungeonRun({
         }
         const nextFloor = floorAdvance.state;
         motionRef.current.clear();
-        playerMoveCycleStartedAtRef.current = null;
-        playerMoveCycleEndsAtRef.current = 0;
+        characterMoveCyclesRef.current.clear();
         playerActionRef.current = null;
         effectsRef.current = [];
         pickupRef.current = [];
@@ -10925,7 +10911,7 @@ function DungeonRun({
         assetsRef,
         gameRef,
         motionRef,
-        playerMoveCycleStartedAtRef,
+        characterMoveCyclesRef,
         effectsRef,
         pickupRef,
         throwRef,

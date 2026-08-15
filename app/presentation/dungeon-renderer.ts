@@ -16,15 +16,8 @@ import type {
   StatusSignal,
 } from "../game/types";
 import {
-  COMPANION_ATTACK_FRAMES,
-  COMPANION_DEFEAT_FRAMES,
-  COMPANION_IDLE_FRAMES,
-  COMPANION_INTERACT_FRAMES,
-  COMPANION_MOVE_FRAMES,
   COMPANION_PRESENTATIONS,
   characterPresentation,
-  companionArmorTier,
-  companionFrameIndex,
 } from "./companion-visuals";
 import {
   CRITICAL_DAMAGE_TEXT_DURATION_MS,
@@ -55,10 +48,9 @@ import {
 } from "./pixel-effects";
 import { motionUsesRunFrames, sampleTravelMotion } from "./skill-motion";
 import {
-  PLAYER_ATTACK_FRAMES,
-  PLAYER_IDLE_FRAMES,
-  PLAYER_INTERACT_FRAMES,
-  PLAYER_MOVE_FRAMES,
+  type CharacterAnimationKind,
+  type CharacterMoveCycleRuntime,
+  resolveCharacterAnimationFrame,
 } from "./player-animation";
 import {
   type DungeonRenderCache,
@@ -82,7 +74,6 @@ import {
   drawTargetingOverlay,
   type TargetingOverlay,
 } from "./targeting-overlay";
-import { PLAYER_MOVE_DURATION } from "./timing";
 import { ENTITY_SPRITE_SCALE, clampCamera } from "./viewport";
 import { retainInPlace } from "./animation-runtime";
 
@@ -163,7 +154,7 @@ export type DungeonRendererOptions = {
   assetsRef: RefLike<GameAssets | null>;
   gameRef: RefLike<GameState>;
   motionRef: RefLike<Map<string, VisualMotion>>;
-  playerMoveCycleStartedAtRef: RefLike<number | null>;
+  characterMoveCyclesRef: RefLike<CharacterMoveCycleRuntime>;
   effectsRef: RefLike<FloatingEffect[]>;
   pickupRef: RefLike<PickupVisual[]>;
   throwRef: RefLike<ThrowVisual[]>;
@@ -193,8 +184,6 @@ export type DungeonRendererOptions = {
 };
 
 const PLAYER_ID = PLAYER_ACTOR_ID;
-const PLAYER_IDLE_FRAME_DURATION = 150;
-const PLAYER_MOVE_FRAME_DURATION = 64;
 const PICKUP_DURATION = 620;
 
 const drawLogicalGridPixels = (
@@ -228,7 +217,7 @@ export function startDungeonRenderer({
   assetsRef,
   gameRef,
   motionRef,
-  playerMoveCycleStartedAtRef,
+  characterMoveCyclesRef,
   effectsRef,
   pickupRef,
   throwRef,
@@ -1157,45 +1146,23 @@ export function startDungeonRenderer({
         }
         const visual = interpolate(companion.id, companion, now);
         const definition = characterPresentation(companion);
-        const usesAdventurerFrames = definition.animationSet === "adventurer";
-        let frames: readonly number[] = usesAdventurerFrames
-          ? PLAYER_IDLE_FRAMES
-          : COMPANION_IDLE_FRAMES;
-        if (companion.hp <= 0) {
-          frames = usesAdventurerFrames
-            ? [PLAYER_IDLE_FRAMES[0]]
-            : COMPANION_DEFEAT_FRAMES;
-        } else if (motionUsesRunFrames(visual.motion)) {
-          frames = usesAdventurerFrames
-            ? PLAYER_MOVE_FRAMES
-            : COMPANION_MOVE_FRAMES;
-        } else if (visual.motion?.kind === "attack") {
-          frames = usesAdventurerFrames
-            ? PLAYER_ATTACK_FRAMES
-            : COMPANION_ATTACK_FRAMES;
-        } else if (visual.motion?.kind === "interact") {
-          frames = usesAdventurerFrames
-            ? PLAYER_INTERACT_FRAMES
-            : COMPANION_INTERACT_FRAMES;
-        }
-        const frameProgress = visual.motion
-          ? visual.progress * frames.length
-          : companion.hp <= 0
-            ? frames.length - 1
-            : now / 180;
-        const frameWithinTier =
-          frames[
-            Math.min(
-              frames.length - 1,
-              Math.floor(frameProgress) % frames.length,
-            )
-          ] ?? frames[0];
-        const sourceFrame = usesAdventurerFrames
-          ? frameWithinTier
-          : companionFrameIndex(
-              companionArmorTier(companion),
-              frameWithinTier,
-            );
+        const animationKind: CharacterAnimationKind =
+          companion.hp <= 0
+            ? "defeat"
+            : motionUsesRunFrames(visual.motion)
+              ? "move"
+              : visual.motion?.kind === "attack"
+                ? "attack"
+                : visual.motion?.kind === "interact"
+                  ? "interact"
+                  : "idle";
+        const sourceFrame = resolveCharacterAnimationFrame({
+          kind: animationKind,
+          now,
+          progress: visual.progress,
+          moveCycleStartedAt:
+            characterMoveCyclesRef.current.get(companion.id)?.startedAt,
+        });
         const width = definition.frameWidth * spritePixelSize;
         const height = definition.frameHeight * spritePixelSize;
         const centerX = screenX(
@@ -1311,8 +1278,6 @@ export function startDungeonRenderer({
       const playerMotion = playerVisual.motion;
       const playerProgress = playerVisual.progress;
       const playerDefinition = characterPresentation(state.player);
-      const usesAdventurerFrames =
-        playerDefinition.animationSet === "adventurer";
       let playerAction = playerActionRef.current;
       let playerActionProgress = -1;
       if (playerAction) {
@@ -1324,52 +1289,31 @@ export function startDungeonRenderer({
         }
       }
 
-      let playerFrames: readonly number[] = usesAdventurerFrames
-        ? PLAYER_IDLE_FRAMES
-        : COMPANION_IDLE_FRAMES;
-      let playerFrameProgress =
-        (now / PLAYER_IDLE_FRAME_DURATION) % playerFrames.length;
+      let playerAnimationKind: CharacterAnimationKind = "idle";
+      let playerAnimationProgress = playerProgress;
       if (playerMotion?.kind === "attack") {
-        playerFrames = usesAdventurerFrames
-          ? PLAYER_ATTACK_FRAMES
-          : COMPANION_ATTACK_FRAMES;
-        playerFrameProgress = playerProgress * playerFrames.length;
+        playerAnimationKind = "attack";
       } else if (
         playerAction?.kind === "interact" &&
         playerActionProgress >= 0
       ) {
-        playerFrames = usesAdventurerFrames
-          ? PLAYER_INTERACT_FRAMES
-          : COMPANION_INTERACT_FRAMES;
-        playerFrameProgress = playerActionProgress * playerFrames.length;
+        playerAnimationKind = "interact";
+        playerAnimationProgress = playerActionProgress;
       } else if (
         motionUsesRunFrames(playerMotion) ||
         (autoTravelRef.current &&
           pathRef.current.length > 0 &&
-          playerMoveCycleStartedAtRef.current !== null)
+          characterMoveCyclesRef.current.has(PLAYER_ID))
       ) {
-        playerFrames = usesAdventurerFrames
-          ? PLAYER_MOVE_FRAMES
-          : COMPANION_MOVE_FRAMES;
-        const cycleStartedAt =
-          playerMoveCycleStartedAtRef.current ??
-          now - playerProgress * PLAYER_MOVE_DURATION;
-        playerFrameProgress =
-          Math.max(0, now - cycleStartedAt) / PLAYER_MOVE_FRAME_DURATION;
+        playerAnimationKind = "move";
       }
-      const playerFrameWithinTier =
-        playerFrames[
-          Math.min(
-            playerFrames.length - 1,
-            Math.floor(playerFrameProgress) % playerFrames.length,
-          )
-        ];
-      const playerFrame = usesAdventurerFrames
-        ? playerFrameWithinTier
-        : companionFrameIndex(
-            companionArmorTier(state.player),
-            playerFrameWithinTier,
-          );
+      const playerFrame = resolveCharacterAnimationFrame({
+        kind: playerAnimationKind,
+        now,
+        progress: playerAnimationProgress,
+        moveCycleStartedAt:
+          characterMoveCyclesRef.current.get(PLAYER_ID)?.startedAt,
+      });
       const playerWidth = playerDefinition.frameWidth * spritePixelSize;
       const playerHeight = playerDefinition.frameHeight * spritePixelSize;
       const playerCenterX = screenX(
@@ -1535,20 +1479,10 @@ export function startDungeonRenderer({
           const ghostBottom =
             companionDrag.cursor.y - companionDrag.grabOffset.y;
           const definition = characterPresentation(companion);
-          const usesAdventurerFrames =
-            definition.animationSet === "adventurer";
-          const idleFrames = usesAdventurerFrames
-            ? PLAYER_IDLE_FRAMES
-            : COMPANION_IDLE_FRAMES;
-          const idleFrame =
-            idleFrames[Math.floor(now / 180) % idleFrames.length] ??
-            idleFrames[0];
-          const sourceFrame = usesAdventurerFrames
-            ? idleFrame
-            : companionFrameIndex(
-                companionArmorTier(companion),
-                idleFrame,
-              );
+          const sourceFrame = resolveCharacterAnimationFrame({
+            kind: "idle",
+            now,
+          });
           const ghostWidth = definition.frameWidth * spritePixelSize;
           const ghostHeight = definition.frameHeight * spritePixelSize;
           const pulse = 0.72 + Math.sin(now / 105) * 0.2;
